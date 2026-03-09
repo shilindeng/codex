@@ -38,6 +38,8 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 - Codex / ClaudeCode / OpenClaw：默认由宿主 agent 直接生成 research、标题、大纲、正文，不要求用户额外填写文本模型配置
 - 只提供主题也能跑通：`hosted-run` 会优先使用现成 `article.md` / `--article-file`，缺失时再从当前 provider 能力自动补全正文
 - 图片生成：提供 Gemini API Key 或 Gemini Web Cookie，或显式改用 OpenAI 图片接口
+- 统一图片风格：可选 `--image-preset`，当前内置 `cute / fresh / warm / bold / minimal / retro / pop / notion / chalkboard`
+- 章节级配图控制：支持在正文中写 `<!-- image:force -->`、`<!-- image:skip -->`、`<!-- image:type=流程图 -->`、`<!-- image:count=2 -->`
 - 微信发布：提供 `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET`
 - 只有脱离宿主、单独运行 CLI 的场景，才推荐配置 `OPENAI_API_KEY` 和 `ARTICLE_STUDIO_TEXT_MODEL`
 

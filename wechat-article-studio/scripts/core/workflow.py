@@ -293,6 +293,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     if not article_path.exists():
         raise SystemExit(f"找不到待评审文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
+    body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     result = provider.review_article(
         {
@@ -397,6 +398,7 @@ def cmd_revise(args: argparse.Namespace) -> int:
     if not article_path.exists():
         raise SystemExit(f"找不到待改写文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
+    body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     report = read_json(workspace / "score-report.json", default={}) or {}
     if not report:
@@ -497,6 +499,12 @@ def _effective_image_provider(args: argparse.Namespace) -> str | None:
     if getattr(args, "dry_run_images", False):
         return "openai-image"
     return None
+
+
+def _sync_image_controls(workspace: Path, args: argparse.Namespace) -> None:
+    manifest = load_manifest(workspace)
+    manifest["image_controls"] = legacy.resolve_image_controls(manifest.get("image_controls"), args)
+    save_manifest(workspace, manifest)
 
 
 def _write_hosted_research(workspace: Path, manifest: dict[str, Any], topic: str, angle: str, audience: str, source_urls: list[str]) -> None:
@@ -731,6 +739,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     if not article_path.exists():
         raise SystemExit(f"找不到待评分文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
+    body = legacy.strip_image_directives(body)
     title = legacy.infer_title(manifest, meta, body)
     threshold = args.threshold or manifest.get("score_threshold") or legacy.DEFAULT_THRESHOLD
     report = legacy.build_score_report(title, body, manifest, threshold)
@@ -803,6 +812,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         manifest["score_passed"] = score_report.get("passed")
         manifest["stage"] = "score"
         save_manifest(workspace, manifest)
+    _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)
     legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
     manifest = load_manifest(workspace)
@@ -863,6 +873,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
         manifest = load_manifest(workspace)
     _finalize_after_score(workspace, manifest, title, score_report)
 
+    _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)
     legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
     manifest = load_manifest(workspace)
@@ -913,6 +924,12 @@ def cmd_all(args: argparse.Namespace) -> int:
             title=None,
             title_count=3,
             image_provider=args.provider,
+            image_preset=args.image_preset,
+            image_theme=args.image_theme,
+            image_style=args.image_style,
+            image_type=args.image_type,
+            image_mood=args.image_mood,
+            custom_visual_brief=args.custom_visual_brief,
             inline_count=args.inline_count,
             dry_run_images=args.dry_run_images,
             dry_run_publish=args.dry_run_publish,
@@ -973,6 +990,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--title-count", type=int, default=3)
     run.add_argument("--to", choices=["render", "publish"], default="render")
     run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    run.add_argument("--image-theme")
+    run.add_argument("--image-style")
+    run.add_argument("--image-type")
+    run.add_argument("--image-mood")
+    run.add_argument("--custom-visual-brief")
     run.add_argument("--inline-count", type=int, default=0)
     run.add_argument("--dry-run-images", action="store_true")
     run.add_argument("--dry-run-publish", action="store_true")
@@ -994,6 +1017,12 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--summary")
     hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
     hosted_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    hosted_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    hosted_run.add_argument("--image-theme")
+    hosted_run.add_argument("--image-style")
+    hosted_run.add_argument("--image-type")
+    hosted_run.add_argument("--image-mood")
+    hosted_run.add_argument("--custom-visual-brief")
     hosted_run.add_argument("--inline-count", type=int, default=0)
     hosted_run.add_argument("--dry-run-images", action="store_true")
     hosted_run.add_argument("--dry-run-publish", action="store_true")
@@ -1014,6 +1043,7 @@ def build_parser() -> argparse.ArgumentParser:
     ideate.add_argument("--title", action="append", default=[])
     ideate.add_argument("--selected-title")
     ideate.add_argument("--outline-file")
+    ideate.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     ideate.add_argument("--image-theme")
     ideate.add_argument("--image-style")
     ideate.add_argument("--image-type")
@@ -1042,6 +1072,12 @@ def build_parser() -> argparse.ArgumentParser:
     plan_images = subparsers.add_parser("plan-images", help="按章节权重生成 image-plan.json")
     plan_images.add_argument("--workspace", required=True)
     plan_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    plan_images.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    plan_images.add_argument("--image-theme")
+    plan_images.add_argument("--image-style")
+    plan_images.add_argument("--image-type")
+    plan_images.add_argument("--image-mood")
+    plan_images.add_argument("--custom-visual-brief")
     plan_images.add_argument("--inline-count", type=int, default=0)
     plan_images.set_defaults(func=legacy_plan_images)
 
@@ -1091,6 +1127,12 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd = subparsers.add_parser("all", help="兼容别名：等价于 run")
     all_cmd.add_argument("--workspace", required=True)
     all_cmd.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    all_cmd.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    all_cmd.add_argument("--image-theme")
+    all_cmd.add_argument("--image-style")
+    all_cmd.add_argument("--image-type")
+    all_cmd.add_argument("--image-mood")
+    all_cmd.add_argument("--custom-visual-brief")
     all_cmd.add_argument("--inline-count", type=int, default=0)
     all_cmd.add_argument("--threshold", type=int)
     all_cmd.add_argument("--dry-run-images", action="store_true")

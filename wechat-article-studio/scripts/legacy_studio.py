@@ -119,6 +119,90 @@ AI_STYLE_PHRASES = [
     "此外",
     "在当今社会",
 ]
+
+IMAGE_STYLE_PRESETS: dict[str, dict[str, str]] = {
+    "cute": {
+        "label": "可爱手账",
+        "theme": "轻松可爱视觉表达",
+        "style": "圆润手绘卡片风",
+        "mood": "亲和活泼",
+        "custom_visual_brief": "use rounded shapes, soft pastel palette, sticker-like accents, and friendly composition",
+    },
+    "fresh": {
+        "label": "清新杂志",
+        "theme": "清新轻盈视觉表达",
+        "style": "留白编辑风",
+        "mood": "清爽克制",
+        "custom_visual_brief": "use airy whitespace, clean composition, light green-blue palette, and breathable editorial rhythm",
+    },
+    "warm": {
+        "label": "温暖生活",
+        "theme": "温暖治愈视觉表达",
+        "style": "柔和生活方式插画",
+        "mood": "松弛温柔",
+        "custom_visual_brief": "use warm beige-orange palette, soft lighting, tactile details, and cozy storytelling mood",
+    },
+    "bold": {
+        "label": "高对比海报",
+        "theme": "强冲击信息表达",
+        "style": "高对比图形海报",
+        "mood": "果断鲜明",
+        "custom_visual_brief": "use bold typography cues, strong contrast, large graphic blocks, and punchy poster composition",
+    },
+    "minimal": {
+        "label": "极简理性",
+        "theme": "极简理性视觉表达",
+        "style": "极简几何编辑风",
+        "mood": "冷静专业",
+        "custom_visual_brief": "use minimal palette, restrained geometry, precise alignment, and remove decorative noise",
+    },
+    "retro": {
+        "label": "复古印刷",
+        "theme": "复古内容表达",
+        "style": "复古印刷拼贴风",
+        "mood": "怀旧沉稳",
+        "custom_visual_brief": "use muted vintage palette, subtle print texture, retro poster balance, and nostalgic graphic treatment",
+    },
+    "pop": {
+        "label": "流行拼贴",
+        "theme": "流行文化视觉表达",
+        "style": "高饱和拼贴风",
+        "mood": "张扬有趣",
+        "custom_visual_brief": "use saturated colors, playful geometry, energetic cutout composition, and expressive pop accents",
+    },
+    "notion": {
+        "label": "知识卡片",
+        "theme": "知识卡片视觉表达",
+        "style": "中性色笔记系统",
+        "mood": "清晰克制",
+        "custom_visual_brief": "use neutral black-gray-beige palette, clean card layout, knowledge-product feel, and crisp modular hierarchy",
+    },
+    "chalkboard": {
+        "label": "黑板讲解",
+        "theme": "讲解板书视觉表达",
+        "style": "黑板粉笔手绘风",
+        "mood": "教学感强",
+        "custom_visual_brief": "use dark chalkboard background, chalk-like strokes, hand-drawn diagram cues, and classroom explanation vibe",
+    },
+}
+IMAGE_STYLE_PRESET_CHOICES = tuple(IMAGE_STYLE_PRESETS.keys())
+IMAGE_DIRECTIVE_RE = re.compile(r"<!--\s*image:(.*?)-->", flags=re.I | re.S)
+IMAGE_TYPE_ALIASES = {
+    "插图": "正文插图",
+    "正文插图": "正文插图",
+    "illustration": "正文插图",
+    "flow": "流程图",
+    "flowchart": "流程图",
+    "流程图": "流程图",
+    "compare": "对比图",
+    "comparison": "对比图",
+    "对比图": "对比图",
+    "infographic": "信息图",
+    "信息图": "信息图",
+    "divider": "分隔图",
+    "separator": "分隔图",
+    "分隔图": "分隔图",
+}
 DEPTH_WORDS = [
     "案例",
     "数据",
@@ -317,6 +401,7 @@ def strip_leading_h1(body: str, title: str) -> str:
 
 
 def extract_summary(text: str, limit: int = 120) -> str:
+    text = IMAGE_DIRECTIVE_RE.sub(" ", text)
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.M)
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", text)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", text)
@@ -523,6 +608,7 @@ def extract_headings(body: str) -> list[dict[str, Any]]:
 
 
 def list_paragraphs(body: str) -> list[str]:
+    body = IMAGE_DIRECTIVE_RE.sub("\n", body)
     blocks = [block.strip() for block in re.split(r"\n\s*\n", body) if block.strip()]
     return [block for block in blocks if not block.startswith("#")]
 
@@ -976,6 +1062,62 @@ def reconstruct_body(intro_blocks: list[str], sections: list[dict[str, Any]]) ->
         parts.append(f"{'#' * section.get('level', 2)} {section.get('heading', '')}".strip())
         parts.extend(block for block in section.get("blocks") or [] if block.strip())
     return "\n\n".join(part.strip() for part in parts if part and part.strip()) + "\n"
+
+
+def normalize_image_type_label(raw: str) -> str:
+    key = (raw or "").strip().lower()
+    return IMAGE_TYPE_ALIASES.get(key, IMAGE_TYPE_ALIASES.get(raw or "", ""))
+
+
+def parse_image_directives(text: str) -> tuple[dict[str, Any], str]:
+    directives: dict[str, Any] = {}
+
+    def replacer(match: re.Match[str]) -> str:
+        content = match.group(1).strip()
+        parts = [part.strip() for part in re.split(r"[\s,;]+", content) if part.strip()]
+        for part in parts:
+            lower = part.lower()
+            if lower in {"force", "required"}:
+                directives["force"] = True
+                continue
+            if lower in {"skip", "none"}:
+                directives["skip"] = True
+                continue
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "type":
+                normalized = normalize_image_type_label(value)
+                if normalized:
+                    directives["type"] = normalized
+            elif key == "count":
+                try:
+                    directives["count"] = max(0, min(4, int(value)))
+                except ValueError:
+                    pass
+        return ""
+
+    cleaned = IMAGE_DIRECTIVE_RE.sub(replacer, text)
+    return directives, cleaned.strip()
+
+
+def merge_image_directives(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    if extra.get("force"):
+        merged["force"] = True
+    if extra.get("skip"):
+        merged["skip"] = True
+    if extra.get("type"):
+        merged["type"] = extra["type"]
+    if "count" in extra:
+        merged["count"] = extra["count"]
+    return merged
+
+
+def strip_image_directives(text: str) -> str:
+    return IMAGE_DIRECTIVE_RE.sub("", text)
 
 
 def strip_reference_section(body: str) -> tuple[str, list[str]]:
@@ -1489,16 +1631,77 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         f"Visual brief: {controls.get('custom_visual_brief', 'highlight the core insight without clutter')}",
         f"Content summary: {summary}",
     ]
+    if controls.get("preset"):
+        instructions.append(f"Unified visual preset: {controls['preset']}")
+        if controls.get("preset_label"):
+            instructions.append(f"Preset label: {controls['preset_label']}")
+        instructions.append("Keep the same visual language across cover, infographic, and inline illustrations for this article.")
     if section:
         instructions.append(f"Section focus: {section}")
+    if item.get("section_excerpt"):
+        instructions.append(f"Target excerpt: {item['section_excerpt']}")
     if item["type"] == "封面图":
         instructions.append("Compose as a high-end WeChat cover, strong focal point, clean whitespace, no realistic faces unless requested.")
     elif item["type"] == "信息图":
         instructions.append("Design as an infographic with clear hierarchy, visual metaphors, and readable structure.")
+    elif item["type"] == "流程图":
+        instructions.append("Design as a process flow diagram with clear steps, direction cues, and easy-to-follow progression.")
+    elif item["type"] == "对比图":
+        instructions.append("Design as a side-by-side comparison graphic with explicit contrast, grouped evidence, and visual balance.")
+    elif item["type"] == "分隔图":
+        instructions.append("Design as a section-divider visual that resets rhythm while staying semantically tied to the section.")
     else:
         instructions.append("Design as an editorial inline illustration that supports the nearby paragraph.")
     instructions.append("Avoid clutter, excessive small text, watermarks, and brand logos unless explicitly requested.")
     return " ".join(instructions)
+
+
+def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[str, Any]:
+    current = dict(existing or {})
+    explicit_preset = getattr(args, "image_preset", None)
+    selected_preset = explicit_preset or current.get("preset") or ""
+    preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
+
+    if selected_preset and current.get("preset") != selected_preset:
+        base = {
+            "preset": selected_preset,
+            "preset_label": preset.get("label", ""),
+            "theme": preset.get("theme", "科技"),
+            "style": preset.get("style", "未来科技"),
+            "type": current.get("type") or "封面图",
+            "mood": preset.get("mood", "专业理性"),
+            "custom_visual_brief": preset.get("custom_visual_brief", ""),
+        }
+    else:
+        base = {
+            "preset": current.get("preset", selected_preset),
+            "preset_label": current.get("preset_label", preset.get("label", "")),
+            "theme": current.get("theme") or preset.get("theme") or "科技",
+            "style": current.get("style") or preset.get("style") or "未来科技",
+            "type": current.get("type") or "封面图",
+            "mood": current.get("mood") or preset.get("mood") or "专业理性",
+            "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
+        }
+
+    theme = getattr(args, "image_theme", None)
+    style = getattr(args, "image_style", None)
+    image_type = getattr(args, "image_type", None)
+    mood = getattr(args, "image_mood", None)
+    brief = getattr(args, "custom_visual_brief", None)
+
+    if theme:
+        base["theme"] = theme
+    if style:
+        base["style"] = style
+    if image_type:
+        base["type"] = image_type
+    if mood:
+        base["mood"] = mood
+    if brief:
+        base["custom_visual_brief"] = brief
+    if base.get("preset"):
+        base["preset_label"] = IMAGE_STYLE_PRESETS.get(base["preset"], {}).get("label", base.get("preset_label", ""))
+    return base
 
 
 def infer_title(manifest: dict[str, Any], meta: dict[str, str], body: str) -> str:
@@ -1517,13 +1720,7 @@ def relative_posix(path: Path, base: Path) -> str:
 def cmd_ideate(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    image_controls = {
-        "theme": args.image_theme or manifest.get("image_controls", {}).get("theme") or "科技",
-        "style": args.image_style or manifest.get("image_controls", {}).get("style") or "未来科技",
-        "type": args.image_type or manifest.get("image_controls", {}).get("type") or "封面图",
-        "mood": args.image_mood or manifest.get("image_controls", {}).get("mood") or "专业理性",
-        "custom_visual_brief": args.custom_visual_brief or manifest.get("image_controls", {}).get("custom_visual_brief") or "",
-    }
+    image_controls = resolve_image_controls(manifest.get("image_controls"), args)
     manifest.update(
         {
             "topic": args.topic or manifest.get("topic"),
@@ -1631,22 +1828,47 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 def normalize_sections_for_images(body: str) -> tuple[list[str], list[dict[str, Any]]]:
     intro_blocks, sections = split_sections(body)
+    normalized_intro: list[str] = []
+    intro_directives: dict[str, Any] = {}
+    for block in intro_blocks:
+        directives, cleaned = parse_image_directives(block)
+        intro_directives = merge_image_directives(intro_directives, directives)
+        if cleaned:
+            normalized_intro.append(cleaned)
+    normalized_sections: list[dict[str, Any]] = []
+    for section in sections:
+        directives: dict[str, Any] = {}
+        cleaned_blocks: list[str] = []
+        for block in section.get("blocks") or []:
+            block_directives, cleaned = parse_image_directives(block)
+            directives = merge_image_directives(directives, block_directives)
+            if cleaned:
+                cleaned_blocks.append(cleaned)
+        normalized_sections.append({**section, "blocks": cleaned_blocks, "image_directives": directives})
     if sections:
-        return intro_blocks, sections
+        return normalized_intro, normalized_sections
     blocks = [block for block in list_paragraphs(body) if block.strip()]
     pseudo_sections: list[dict[str, Any]] = []
     for index in range(0, len(blocks), 2):
         chunk = blocks[index:index + 2]
+        directives: dict[str, Any] = {}
+        cleaned_chunk: list[str] = []
+        for block in chunk:
+            block_directives, cleaned = parse_image_directives(block)
+            directives = merge_image_directives(directives, block_directives)
+            if cleaned:
+                cleaned_chunk.append(cleaned)
         pseudo_sections.append(
             {
                 "level": 2,
                 "heading": f"\u6b63\u6587\u6bb5\u843d {index // 2 + 1}",
-                "body": "\n\n".join(chunk),
-                "blocks": chunk,
+                "body": "\n\n".join(cleaned_chunk),
+                "blocks": cleaned_chunk,
                 "generated_heading": True,
+                "image_directives": directives,
             }
         )
-    return [], pseudo_sections
+    return normalized_intro, pseudo_sections
 
 
 def extract_section_metrics(section: dict[str, Any], section_index: int) -> dict[str, Any]:
@@ -1663,6 +1885,9 @@ def extract_section_metrics(section: dict[str, Any], section_index: int) -> dict
     heading = section.get("heading") or f"\u6b63\u6587\u6bb5\u843d {section_index + 1}"
     heading_bonus = 1.0 if re.search(r"\u7ed3\u8bba|\u4e3a\u4ec0\u4e48|\u65b9\u6cd5|\u5efa\u8bae|\u5224\u65ad|\u98ce\u9669|\u5173\u952e|\u5f71\u54cd|\u5bf9\u6bd4|\u7b56\u7565|\u673a\u4f1a", heading) else 0.0
     weight = round(char_count / 260 + paragraph_count * 0.9 + list_count * 1.6 + quote_count * 1.1 + info_hits * 1.2 + heading_bonus, 2)
+    excerpt_source = "\n\n".join(blocks[:2]) if blocks else heading
+    excerpt = extract_summary(excerpt_source, 220)
+    directives = section.get("image_directives") or {}
     return {
         "section_index": section_index,
         "heading": heading,
@@ -1674,23 +1899,78 @@ def extract_section_metrics(section: dict[str, Any], section_index: int) -> dict
         "quote_count": quote_count,
         "info_hits": info_hits,
         "section_weight": weight,
+        "excerpt": excerpt,
+        "image_directives": directives,
     }
 
 
+def infer_section_image_type(section_metric: dict[str, Any], is_final: bool = False) -> str:
+    directives = section_metric.get("image_directives") or {}
+    if directives.get("type"):
+        return directives["type"]
+    heading = section_metric.get("heading", "")
+    blocks = "\n\n".join(section_metric.get("blocks") or [])
+    combined = f"{heading}\n{blocks}"
+    paragraph_count = section_metric.get("paragraph_count", 0)
+    list_count = section_metric.get("list_count", 0)
+    info_hits = section_metric.get("info_hits", 0)
+    char_count = section_metric.get("char_count", 0)
+
+    if re.search(r"流程|步骤|路径|SOP|怎么做|如何做|执行步骤|落地|分为\d+步|第[一二三四五六七八九十\d]+步", combined):
+        return "流程图"
+    if list_count >= 2 and re.search(r"步骤|清单|执行|流程|先|再|最后|第一|第二|第三", combined):
+        return "流程图"
+    if re.search(r"对比|区别|差异|误区|vs|VS|不是.+而是|A/B|优劣|好处|坏处", combined):
+        return "对比图"
+    if re.search(r"总结|框架|模型|地图|全景|一图|清单|结论|指标|趋势|数据", combined) and (info_hits >= 2 or list_count >= 2):
+        return "信息图"
+    if is_final and (info_hits >= 1 or list_count >= 1 or char_count >= 500):
+        return "信息图"
+    if paragraph_count >= 4 and char_count >= 1200:
+        return "分隔图"
+    return "正文插图"
+
+
 def estimate_inline_image_count(body: str, explicit_count: int) -> int:
-    char_count = cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M))
-    minimum_inline = 3 if char_count > 2000 else 0
+    char_count = cjk_len(re.sub(r"^#{1,6}\s+", "", strip_image_directives(body), flags=re.M))
+    minimum_inline = 4 if char_count > 2000 else 0
     if explicit_count and explicit_count > 0:
         return max(explicit_count, minimum_inline)
     if char_count < 1200:
-        return 2
-    if char_count < 2500:
-        return max(3, minimum_inline)
-    if char_count < 4000:
-        return max(4, minimum_inline)
-    if char_count < 5500:
-        return max(5, minimum_inline)
-    return max(6, minimum_inline)
+        base = 4
+    elif char_count < 2500:
+        base = 5
+    elif char_count < 4000:
+        base = 6
+    elif char_count < 5500:
+        base = 8
+    else:
+        base = 9
+    _, sections = normalize_sections_for_images(body)
+    metrics = [
+        extract_section_metrics(section, index)
+        for index, section in enumerate(sections)
+        if not is_reference_heading(section.get("heading", ""))
+    ]
+    special_count = 0
+    dense_count = 0
+    force_bonus = 0
+    for index, metric in enumerate(metrics):
+        inferred = infer_section_image_type(metric, is_final=index == len(metrics) - 1)
+        if inferred in {"流程图", "对比图", "信息图"}:
+            special_count += 1
+        if metric.get("info_hits", 0) >= 2 or metric.get("list_count", 0) >= 2 or metric.get("char_count", 0) >= 900:
+            dense_count += 1
+        directives = metric.get("image_directives") or {}
+        if directives.get("force"):
+            force_bonus += max(1, directives.get("count", 1))
+        elif directives.get("count", 0) > 1:
+            force_bonus += directives.get("count", 0) - 1
+    type_bonus = min(2, special_count // 2)
+    density_bonus = 1 if dense_count >= 3 else 0
+    section_bonus = 1 if len(metrics) >= 6 else 0
+    forced_bonus = min(2, force_bonus)
+    return max(base + type_bonus + density_bonus + section_bonus + forced_bonus, minimum_inline)
 
 
 def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> int:
@@ -1706,36 +1986,56 @@ def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> 
 
 def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, Any]]:
     _, sections = normalize_sections_for_images(body)
-    metrics = [
-        extract_section_metrics(section, index)
-        for index, section in enumerate(sections)
-        if not is_reference_heading(section.get("heading", ""))
-    ]
+    metrics = []
+    for index, section in enumerate(sections):
+        if is_reference_heading(section.get("heading", "")):
+            continue
+        metric = extract_section_metrics(section, index)
+        metric["inferred_image_type"] = infer_section_image_type(metric, is_final=index == len(sections) - 1)
+        metrics.append(metric)
     if not metrics or inline_limit <= 0:
         return []
 
     slots: list[dict[str, Any]] = []
     selected_unique: set[int] = set()
+    force_slots: list[dict[str, Any]] = []
 
-    if len(metrics) >= 3 and inline_limit >= 3:
-        midpoint = max(1, len(metrics) // 2)
-        first_half = metrics[:midpoint]
-        second_half = metrics[midpoint:]
+    eligible_metrics = [metric for metric in metrics if not (metric.get("image_directives") or {}).get("skip")]
+    if not eligible_metrics:
+        return []
+
+    for metric in eligible_metrics:
+        directives = metric.get("image_directives") or {}
+        if not directives.get("force") and directives.get("count", 0) <= 0:
+            continue
+        desired = directives.get("count", 1 if directives.get("force") else 0)
+        for variant in range(max(1, desired) if directives.get("force") else desired):
+            force_slots.append({"section_index": metric["section_index"], "variant": variant, "forced": True})
+        selected_unique.add(metric["section_index"])
+
+    for slot in force_slots[:inline_limit]:
+        slots.append(slot)
+
+    if len(slots) < inline_limit and len(eligible_metrics) >= 3 and inline_limit >= 3:
+        midpoint = max(1, len(eligible_metrics) // 2)
+        first_half = eligible_metrics[:midpoint]
+        second_half = eligible_metrics[midpoint:]
         if first_half:
             best_first = max(first_half, key=lambda item: item["section_weight"])
-            slots.append({"section_index": best_first["section_index"], "variant": 0})
+            if best_first["section_index"] not in {slot["section_index"] for slot in slots}:
+                slots.append({"section_index": best_first["section_index"], "variant": 0})
             selected_unique.add(best_first["section_index"])
         if second_half:
             best_second = max(second_half, key=lambda item: item["section_weight"])
             if best_second["section_index"] not in selected_unique:
                 slots.append({"section_index": best_second["section_index"], "variant": 0})
                 selected_unique.add(best_second["section_index"])
-    else:
-        best_single = max(metrics, key=lambda item: item["section_weight"])
+    elif len(slots) < inline_limit:
+        best_single = max(eligible_metrics, key=lambda item: item["section_weight"])
         slots.append({"section_index": best_single["section_index"], "variant": 0})
         selected_unique.add(best_single["section_index"])
 
-    for metric in sorted(metrics, key=lambda item: item["section_weight"], reverse=True):
+    for metric in sorted(eligible_metrics, key=lambda item: (item["section_weight"], item["info_hits"]), reverse=True):
         if len(slots) >= inline_limit:
             break
         if metric["section_index"] in selected_unique:
@@ -1744,11 +2044,13 @@ def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, A
         selected_unique.add(metric["section_index"])
 
     if len(slots) < inline_limit:
-        for metric in sorted(metrics, key=lambda item: (item["section_weight"], item["char_count"]), reverse=True):
+        for metric in sorted(eligible_metrics, key=lambda item: (item["section_weight"], item["char_count"], item["info_hits"]), reverse=True):
             if len(slots) >= inline_limit:
                 break
             existing = sum(1 for slot in slots if slot["section_index"] == metric["section_index"])
-            if metric["paragraph_count"] >= 4 and metric["char_count"] >= 700 and existing < 2:
+            directives = metric.get("image_directives") or {}
+            max_repeat = max(2, directives.get("count", 0)) if directives.get("force") else 2
+            if metric["paragraph_count"] >= 4 and metric["char_count"] >= 700 and existing < max_repeat:
                 slots.append({"section_index": metric["section_index"], "variant": existing})
 
     selected_metrics: list[dict[str, Any]] = []
@@ -1756,14 +2058,20 @@ def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, A
         metric = next(item for item in metrics if item["section_index"] == slot["section_index"])
         block_index = choose_section_block_index(metric, slot["variant"])
         placement_reason = "\u6309\u7ae0\u8282\u6743\u91cd\u548c\u4fe1\u606f\u5bc6\u5ea6\u4f18\u5148\u63d2\u56fe"
+        if (metric.get("image_directives") or {}).get("force"):
+            placement_reason = "\u6309\u6587\u5185\u6807\u8bb0\u5f3a\u5236\u914d\u56fe"
         if slot["variant"] > 0:
             placement_reason = "\u957f\u7ae0\u8282\u8865\u56fe\uff0c\u907f\u514d\u540e\u534a\u6bb5\u7eaf\u6587\u5b57\u5806\u79ef"
+        image_type = metric.get("inferred_image_type") or "正文插图"
+        if image_type == "正文插图" and slot["variant"] > 0 and metric["char_count"] >= 1200:
+            image_type = "分隔图"
         selected_metrics.append(
             {
                 **metric,
                 "variant": slot["variant"],
                 "placement_block_index": block_index,
                 "placement_reason": placement_reason,
+                "image_type": image_type,
             }
         )
     return selected_metrics
@@ -1771,6 +2079,8 @@ def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, A
 def cmd_plan_images(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    controls = resolve_image_controls(manifest.get("image_controls"), args)
+    manifest["image_controls"] = controls
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"\u627e\u4e0d\u5230\u6587\u7ae0\u6587\u4ef6\uff1a{article_path}")
@@ -1778,7 +2088,6 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     title = infer_title(manifest, meta, body)
     summary = manifest.get("summary") or meta.get("summary") or extract_summary(body)
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
-    controls = manifest.get("image_controls") or {}
     intro_blocks, sections = normalize_sections_for_images(body)
     provider = image_provider_from_env(args.provider)
     inline_limit = estimate_inline_image_count(body, args.inline_count)
@@ -1800,6 +2109,8 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "section_weight": 0,
             "alt": f"{title} \u5c01\u9762\u56fe",
             "aspect_ratio": "16:9",
+            "section_heading": title,
+            "section_excerpt": extract_summary("\n\n".join(intro_blocks[:2]) if intro_blocks else summary, 220),
         },
         {
             "id": "infographic-01",
@@ -1812,13 +2123,13 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "section_weight": round((final_metric["section_weight"] if final_metric else 0) + intro_char_count / 500, 2),
             "alt": f"{title} \u4fe1\u606f\u56fe",
             "aspect_ratio": "3:4",
+            "section_heading": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
+            "section_excerpt": final_metric.get("excerpt", "") if final_metric else extract_summary(summary, 220),
         },
     ]
 
     for index, section in enumerate(inline_sections, start=1):
-        image_type = "\u6b63\u6587\u63d2\u56fe"
-        if section["char_count"] >= 1200 and section["variant"] > 0:
-            image_type = "\u5206\u9694\u56fe"
+        image_type = section.get("image_type") or "\u6b63\u6587\u63d2\u56fe"
         items.append(
             {
                 "id": f"inline-{index:02d}",
@@ -1829,8 +2140,10 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
                 "placement_block_index": section["placement_block_index"],
                 "placement_reason": section["placement_reason"],
                 "section_weight": section["section_weight"],
-                "alt": f"{section['heading']} {'\u5206\u9694\u56fe' if image_type == '\u5206\u9694\u56fe' else '\u63d2\u56fe'}",
+                "alt": f"{section['heading']} {image_type}",
                 "aspect_ratio": "16:9",
+                "section_heading": section["heading"],
+                "section_excerpt": section.get("excerpt", ""),
             }
         )
 
@@ -1846,7 +2159,8 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         "provider": provider,
         "strategy": "mixed-section-density",
         "article_char_count": cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
-        "planned_inline_count": inline_limit,
+        "planned_inline_count": len(inline_sections),
+        "requested_inline_count": inline_limit,
         "image_controls": controls,
         "items": items,
         "generated_at": now_iso(),
@@ -2223,6 +2537,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     if not input_path.exists():
         raise SystemExit(f"\u627e\u4e0d\u5230\u5f85\u6e32\u67d3\u6587\u4ef6\uff1a{input_path}")
     meta, body = split_frontmatter(read_text(input_path))
+    body = strip_image_directives(body)
     title = infer_title(manifest, meta, body)
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(body)
     body = strip_leading_h1(body, title)
