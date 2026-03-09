@@ -23,6 +23,17 @@
 
 预设一旦指定，会统一覆盖整篇文章的默认 `theme/style/mood/custom_visual_brief`，从而让封面图、信息图、正文插图保持同一视觉语言。仍可用 `--image-theme`、`--image-style`、`--image-mood`、`--custom-visual-brief` 做少量覆盖。
 
+## 密度模式
+
+支持 `--image-density`：
+
+- `minimal`：少量关键图
+- `balanced`：均衡配图
+- `per-section`：尽量按章节分布
+- `rich`：更丰富的插图覆盖，默认值
+
+当前 skill 默认使用 `rich`，但仍会结合章节类型、信息密度和文内标记，避免无意义堆图。
+
 ## 文内标记
 
 支持在正文中通过 HTML 注释为某个章节声明配图约束。常用写法：
@@ -43,6 +54,24 @@
 ```
 
 这些标记只用于规划，不会出现在最终渲染结果里。
+
+## 中间产物
+
+在 `plan-images` 阶段，除了 `image-plan.json`，还会额外生成：
+
+- `image-outline.json`：结构化插图大纲
+- `image-outline.md`：人可读插图大纲
+- `prompts/images/*.md`：每张图单独的 prompt 文件
+
+这套产物更接近 baoyu 的工作流，便于复查“哪张图为什么存在、画什么、放哪里”。
+
+每张图现在会额外沉淀结构化规格：
+
+- `visual_elements`：画面里应该出现的核心元素
+- `layout_spec`：版式变体、构图规则、构图目标
+- `label_strategy`：允许出现的极少量标签
+- `text_budget`：文字预算
+- `aspect_policy`：比例与裁切策略
 
 ## 默认规划
 

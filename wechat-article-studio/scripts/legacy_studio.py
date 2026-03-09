@@ -203,6 +203,39 @@ IMAGE_TYPE_ALIASES = {
     "separator": "分隔图",
     "分隔图": "分隔图",
 }
+IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
+    "封面图": [
+        {"key": "hero-object", "label": "中心主视觉", "instruction": "Use one dominant hero object in the center with strong negative space and no embedded headline text."},
+        {"key": "editorial-collage", "label": "编辑拼贴", "instruction": "Use an editorial collage composition with layered shapes and two or three visual clusters, without text blocks."},
+        {"key": "symbolic-scene", "label": "象征场景", "instruction": "Use a symbolic scene with depth and atmosphere, showing the article idea through metaphor instead of labels."},
+    ],
+    "信息图": [
+        {"key": "stacked-cards", "label": "纵向卡片", "instruction": "Use a stacked-card infographic layout with 3 to 5 modules and only short keywords if absolutely needed."},
+        {"key": "radial-map", "label": "中心辐射", "instruction": "Use a radial map layout with one core node and surrounding branches, relying on icons and shapes more than text."},
+        {"key": "timeline-column", "label": "时间轴列", "instruction": "Use a vertical timeline or ladder layout with clear sequence and very limited short labels."},
+    ],
+    "正文插图": [
+        {"key": "scene-metaphor", "label": "场景隐喻", "instruction": "Use a scene-based metaphor with clear foreground and background, and avoid embedded text entirely."},
+        {"key": "object-closeup", "label": "物件特写", "instruction": "Use one or two symbolic objects in close-up, emphasizing texture and concept rather than labels."},
+        {"key": "abstract-geometry", "label": "抽象图形", "instruction": "Use abstract geometric composition to express the idea without any readable text."},
+    ],
+    "流程图": [
+        {"key": "path-nodes", "label": "路径节点", "instruction": "Use a node-and-path flow layout with arrows and milestones, limiting text to tiny step tags only if unavoidable."},
+        {"key": "ladder-steps", "label": "阶梯步骤", "instruction": "Use a ladder or staircase process layout that shows progression visually, not through long labels."},
+        {"key": "swimlane-flow", "label": "泳道流转", "instruction": "Use a swimlane or track-based flow layout with lanes, icons, and connectors instead of paragraphs."},
+    ],
+    "对比图": [
+        {"key": "split-panel", "label": "左右分栏", "instruction": "Use a clean split-panel comparison with strong contrast between left and right sides, minimizing text."},
+        {"key": "cards-versus", "label": "卡片对照", "instruction": "Use parallel comparison cards with mirrored structure and icon cues, not dense wording."},
+        {"key": "spectrum-contrast", "label": "光谱对照", "instruction": "Use a spectrum or axis-based contrast layout that shows differences through position, color, and shape."},
+    ],
+    "分隔图": [
+        {"key": "motif-band", "label": "主题带状", "instruction": "Use a wide motif band as a visual pause, with no embedded text and a strong thematic cue."},
+        {"key": "symbol-break", "label": "象征断点", "instruction": "Use a symbolic break image that resets rhythm between sections while staying visually minimal."},
+        {"key": "atmospheric-divider", "label": "氛围分隔", "instruction": "Use an atmospheric divider composition with strong mood and no readable text."},
+    ],
+}
+IMAGE_DENSITY_CHOICES = ("minimal", "balanced", "per-section", "rich")
 DEPTH_WORDS = [
     "案例",
     "数据",
@@ -1640,6 +1673,10 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         instructions.append(f"Section focus: {section}")
     if item.get("section_excerpt"):
         instructions.append(f"Target excerpt: {item['section_excerpt']}")
+    if item.get("layout_variant_label"):
+        instructions.append(f"Layout variant: {item['layout_variant_label']}")
+    if item.get("layout_variant_instruction"):
+        instructions.append(f"Composition rule: {item['layout_variant_instruction']}")
     if item["type"] == "封面图":
         instructions.append("Compose as a high-end WeChat cover, strong focal point, clean whitespace, no realistic faces unless requested.")
     elif item["type"] == "信息图":
@@ -1652,8 +1689,260 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         instructions.append("Design as a section-divider visual that resets rhythm while staying semantically tied to the section.")
     else:
         instructions.append("Design as an editorial inline illustration that supports the nearby paragraph.")
+    if item["type"] in {"封面图", "正文插图", "分隔图"}:
+        instructions.append("Use little to no embedded text. Prefer pure imagery, symbols, objects, and composition over words.")
+    else:
+        instructions.append("Keep embedded text extremely sparse. Use at most a few short labels, and prefer icons, arrows, grouping, and hierarchy over paragraphs.")
+    instructions.append("Do not reuse a generic poster layout for every image. Keep the article theme consistent, but make each image feel compositionally distinct.")
     instructions.append("Avoid clutter, excessive small text, watermarks, and brand logos unless explicitly requested.")
     return " ".join(instructions)
+
+
+def image_position_label(item: dict[str, Any]) -> str:
+    if item.get("type") == "封面图":
+        return "cover"
+    if item.get("type") == "信息图" and item.get("insert_strategy") == "section_end":
+        return "closing-summary"
+    target = item.get("target_section") or f"section-{item.get('target_section_index', -1)}"
+    return f"{target}@block-{item.get('placement_block_index', 0)}"
+
+
+def image_purpose_label(item: dict[str, Any]) -> str:
+    mapping = {
+        "封面图": "建立整篇文章的第一视觉印象",
+        "信息图": "把结论、框架或清单压缩成可扫读的信息结构",
+        "流程图": "把步骤、路径和节点关系讲清楚",
+        "对比图": "把两种方案或两侧观点的差异可视化",
+        "分隔图": "给长段落提供节奏变化并保持主题连续",
+        "正文插图": "为附近段落提供更直观的概念锚点",
+    }
+    return mapping.get(item.get("type", "正文插图"), "辅助读者理解附近段落")
+
+
+def image_visual_content(item: dict[str, Any]) -> str:
+    excerpt = item.get("section_excerpt") or ""
+    heading = item.get("section_heading") or item.get("target_section") or item.get("alt") or ""
+    layout = item.get("layout_variant_label") or "默认构图"
+    focus = extract_summary(f"{heading} {excerpt}".strip(), 160)
+    return f"{focus}；采用{layout}，并保持与全文统一主题一致。"
+
+
+def short_sentence_chunks(text: str, limit: int = 4, max_len: int = 18) -> list[str]:
+    candidates: list[str] = []
+    for sentence in sentence_split(text):
+        cleaned = re.sub(r"\s+", "", sentence).strip("，。；：:、 ")
+        if not cleaned:
+            continue
+        if len(cleaned) > max_len:
+            cleaned = cleaned[:max_len]
+        if cleaned and cleaned not in candidates:
+            candidates.append(cleaned)
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def image_text_budget(item: dict[str, Any]) -> str:
+    image_type = item.get("type", "正文插图")
+    if image_type in {"封面图", "正文插图", "分隔图"}:
+        return "none-to-minimal"
+    if image_type == "流程图":
+        return "up to 3 very short step labels"
+    if image_type == "对比图":
+        return "up to 4 very short contrast labels"
+    if image_type == "信息图":
+        return "up to 4 short labels or numeric callouts"
+    return "minimal"
+
+
+def image_label_strategy(item: dict[str, Any]) -> list[str]:
+    heading = item.get("section_heading") or item.get("target_section") or ""
+    excerpt = item.get("section_excerpt") or ""
+    image_type = item.get("type", "正文插图")
+    if image_type in {"封面图", "正文插图", "分隔图"}:
+        return []
+    labels = short_sentence_chunks(excerpt, limit=4, max_len=14)
+    if image_type == "流程图" and not labels:
+        labels = [heading, "步骤1", "步骤2"]
+    elif image_type == "对比图" and len(labels) < 2:
+        labels = [heading, "方案A", "方案B"]
+    elif image_type == "信息图" and not labels:
+        labels = [heading]
+    normalized: list[str] = []
+    for label in labels:
+        compact = re.sub(r"^[一二三四五六七八九十0-9]+\W*", "", label).strip()
+        if compact and compact not in normalized:
+            normalized.append(compact)
+    return normalized[:4]
+
+
+def image_visual_elements(item: dict[str, Any]) -> list[str]:
+    heading = item.get("section_heading") or item.get("target_section") or ""
+    excerpt = item.get("section_excerpt") or ""
+    image_type = item.get("type", "正文插图")
+    focus = extract_summary(f"{heading} {excerpt}".strip(), 100)
+    if image_type == "封面图":
+        return ["单一主视觉物件", "高识别度背景氛围", f"围绕“{focus}”的象征隐喻"]
+    if image_type == "流程图":
+        return ["步骤节点", "方向箭头或连接路径", f"与“{focus}”相关的操作符号"]
+    if image_type == "对比图":
+        return ["左右或双栏对照结构", "两组对立图标/物件", f"围绕“{focus}”的差异化视觉线索"]
+    if image_type == "信息图":
+        return ["分组卡片或结构模块", "图标与层级关系", f"压缩表达“{focus}”的框架元素"]
+    if image_type == "分隔图":
+        return ["节奏切换用主题母题", "情绪化背景", f"与“{focus}”关联的单一象征元素"]
+    return ["概念性主物件", "辅助环境线索", f"服务“{focus}”的局部视觉隐喻"]
+
+
+def image_layout_spec(item: dict[str, Any]) -> dict[str, str]:
+    image_type = item.get("type", "正文插图")
+    return {
+        "variant_key": item.get("layout_variant_key", "default"),
+        "variant_label": item.get("layout_variant_label", "默认构图"),
+        "instruction": item.get("layout_variant_instruction", "Use a distinct composition."),
+        "composition_goal": {
+            "封面图": "先建立第一眼记忆点，再留出可用于封面裁切的安全区。",
+            "信息图": "先让结构一眼可扫读，再让局部层级能被快速理解。",
+            "流程图": "先看懂路径顺序，再看懂节点关系。",
+            "对比图": "先看见对立关系，再看清差异细节。",
+            "分隔图": "先切换节奏，再保持主题连续。",
+        }.get(image_type, "先看见主题，再看懂附近段落的概念隐喻。"),
+    }
+
+
+def image_aspect_policy(item: dict[str, Any]) -> str:
+    image_type = item.get("type", "正文插图")
+    aspect = item.get("aspect_ratio", "16:9")
+    mapping = {
+        "封面图": f"{aspect} 宽画幅，兼容公众号封面和文章头图裁切。",
+        "信息图": f"{aspect} 纵向信息密度优先，适合结尾收束和长图浏览。",
+        "流程图": f"{aspect} 横向流程展开优先，保证路径和节点有呼吸空间。",
+        "对比图": f"{aspect} 横向对照优先，保证左右两侧平衡。",
+        "分隔图": f"{aspect} 横向节奏切换优先，适合作为段落分隔。",
+    }
+    return mapping.get(image_type, f"{aspect} 通用正文配图比例，兼顾正文阅读宽度。")
+
+
+def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: dict[str, Any]) -> str:
+    prompt = item.get("prompt") or ""
+    layout_spec = image_layout_spec(item)
+    visual_elements = image_visual_elements(item)
+    label_strategy = image_label_strategy(item)
+    text_budget = image_text_budget(item)
+    aspect_policy = image_aspect_policy(item)
+    lines = [
+        "---",
+        f"id: {item['id']}",
+        f"title: {title}",
+        f"type: {item['type']}",
+        f"position: {image_position_label(item)}",
+        f"target_section: {item.get('target_section', '')}",
+        f"layout_variant: {item.get('layout_variant_key', '')}",
+        f"preset: {controls.get('preset', '')}",
+        f"density: {controls.get('density', 'rich')}",
+        "---",
+        "",
+        f"# 图片 Prompt：{item['id']}",
+        "",
+        f"- 用途：{image_purpose_label(item)}",
+        f"- 目标读者：{audience}",
+        f"- 统一风格：{controls.get('preset_label') or controls.get('style')}",
+        f"- 版式变体：{item.get('layout_variant_label', '默认构图')}",
+        "",
+        "## 视觉内容",
+        "",
+        image_visual_content(item),
+        "",
+        "## 视觉元素",
+        "",
+    ]
+    lines.extend(f"- {element}" for element in visual_elements)
+    lines.extend([
+        "",
+        "## 布局规格",
+        "",
+        f"- 变体：{layout_spec['variant_label']} (`{layout_spec['variant_key']}`)",
+        f"- 构图规则：{layout_spec['instruction']}",
+        f"- 目标：{layout_spec['composition_goal']}",
+        "",
+        "## 文字策略",
+        "",
+        f"- 文本预算：{text_budget}",
+        f"- 允许标签：{' / '.join(label_strategy) if label_strategy else '尽量不使用嵌入文字'}",
+        "",
+        "## 比例策略",
+        "",
+        f"- {aspect_policy}",
+        "",
+        "## 目标段落摘录",
+        "",
+        item.get("section_excerpt") or "无",
+        "",
+        "## Prompt",
+        "",
+        prompt,
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def write_image_outline_artifacts(workspace: Path, title: str, audience: str, controls: dict[str, Any], plan: dict[str, Any]) -> None:
+    prompt_dir = ensure_dir(workspace / "prompts" / "images")
+    outline_items: list[dict[str, Any]] = []
+    for item in plan.get("items") or []:
+        prompt_path = prompt_dir / f"{item['id']}.md"
+        write_text(prompt_path, prompt_markdown(title, audience, controls, item))
+        layout_spec = image_layout_spec(item)
+        label_strategy = image_label_strategy(item)
+        outline_items.append(
+            {
+                "id": item["id"],
+                "type": item["type"],
+                "position": image_position_label(item),
+                "purpose": image_purpose_label(item),
+                "target_section": item.get("target_section", ""),
+                "layout_variant": item.get("layout_variant_label", ""),
+                "layout_spec": layout_spec,
+                "visual_content": image_visual_content(item),
+                "visual_elements": image_visual_elements(item),
+                "label_strategy": label_strategy,
+                "text_budget": image_text_budget(item),
+                "aspect_policy": image_aspect_policy(item),
+                "prompt_path": relative_posix(prompt_path, workspace),
+            }
+        )
+    outline = {
+        "title": title,
+        "density": controls.get("density", "rich"),
+        "preset": controls.get("preset", ""),
+        "preset_label": controls.get("preset_label", ""),
+        "planned_inline_count": plan.get("planned_inline_count", 0),
+        "requested_inline_count": plan.get("requested_inline_count", plan.get("planned_inline_count", 0)),
+        "items": outline_items,
+        "generated_at": now_iso(),
+    }
+    write_json(workspace / "image-outline.json", outline)
+    lines = [f"# 插图大纲：{title}", ""]
+    lines.append(f"- 密度：`{outline['density']}`")
+    lines.append(f"- 风格预设：`{outline['preset'] or 'default'}`")
+    lines.append(f"- 正文插图：`{outline['planned_inline_count']}`（请求值 `{outline['requested_inline_count']}`）")
+    lines.append("")
+    for item in outline_items:
+        lines.append(f"## {item['id']} · {item['type']}")
+        lines.append("")
+        lines.append(f"- 位置：`{item['position']}`")
+        lines.append(f"- 用途：{item['purpose']}")
+        lines.append(f"- 目标章节：{item['target_section'] or 'cover'}")
+        lines.append(f"- 版式：{item['layout_variant']}")
+        lines.append(f"- 布局规则：{item['layout_spec']['instruction']}")
+        lines.append(f"- 视觉内容：{item['visual_content']}")
+        lines.append(f"- 视觉元素：{'；'.join(item['visual_elements'])}")
+        lines.append(f"- 文字预算：{item['text_budget']}")
+        lines.append(f"- 标签策略：{' / '.join(item['label_strategy']) if item['label_strategy'] else '尽量不用图中文字'}")
+        lines.append(f"- 比例策略：{item['aspect_policy']}")
+        lines.append(f"- Prompt 文件：`{item['prompt_path']}`")
+        lines.append("")
+    write_text(workspace / "image-outline.md", "\n".join(lines).rstrip() + "\n")
 
 
 def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[str, Any]:
@@ -1661,6 +1950,7 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
     explicit_preset = getattr(args, "image_preset", None)
     selected_preset = explicit_preset or current.get("preset") or ""
     preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
+    density = getattr(args, "image_density", None) or current.get("density") or "rich"
 
     if selected_preset and current.get("preset") != selected_preset:
         base = {
@@ -1671,6 +1961,7 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "type": current.get("type") or "封面图",
             "mood": preset.get("mood", "专业理性"),
             "custom_visual_brief": preset.get("custom_visual_brief", ""),
+            "density": density,
         }
     else:
         base = {
@@ -1681,6 +1972,7 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "type": current.get("type") or "封面图",
             "mood": current.get("mood") or preset.get("mood") or "专业理性",
             "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
+            "density": density,
         }
 
     theme = getattr(args, "image_theme", None)
@@ -1702,6 +1994,17 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
     if base.get("preset"):
         base["preset_label"] = IMAGE_STYLE_PRESETS.get(base["preset"], {}).get("label", base.get("preset_label", ""))
     return base
+
+
+def layout_variants_for_type(image_type: str) -> list[dict[str, str]]:
+    return IMAGE_LAYOUT_VARIANTS.get(image_type, IMAGE_LAYOUT_VARIANTS.get("正文插图", []))
+
+
+def pick_layout_variant(image_type: str, occurrence_index: int) -> dict[str, str]:
+    variants = layout_variants_for_type(image_type)
+    if not variants:
+        return {"key": "default", "label": "默认构图", "instruction": "Use a distinct composition and avoid embedded text."}
+    return variants[occurrence_index % len(variants)]
 
 
 def infer_title(manifest: dict[str, Any], meta: dict[str, str], body: str) -> str:
@@ -1931,8 +2234,9 @@ def infer_section_image_type(section_metric: dict[str, Any], is_final: bool = Fa
     return "正文插图"
 
 
-def estimate_inline_image_count(body: str, explicit_count: int) -> int:
+def estimate_inline_image_count(body: str, explicit_count: int, density: str = "rich") -> int:
     char_count = cjk_len(re.sub(r"^#{1,6}\s+", "", strip_image_directives(body), flags=re.M))
+    density = density if density in IMAGE_DENSITY_CHOICES else "rich"
     minimum_inline = 4 if char_count > 2000 else 0
     if explicit_count and explicit_count > 0:
         return max(explicit_count, minimum_inline)
@@ -1952,6 +2256,7 @@ def estimate_inline_image_count(body: str, explicit_count: int) -> int:
         for index, section in enumerate(sections)
         if not is_reference_heading(section.get("heading", ""))
     ]
+    eligible_sections = [metric for metric in metrics if not (metric.get("image_directives") or {}).get("skip")]
     special_count = 0
     dense_count = 0
     force_bonus = 0
@@ -1966,11 +2271,30 @@ def estimate_inline_image_count(body: str, explicit_count: int) -> int:
             force_bonus += max(1, directives.get("count", 1))
         elif directives.get("count", 0) > 1:
             force_bonus += directives.get("count", 0) - 1
-    type_bonus = min(2, special_count // 2)
-    density_bonus = 1 if dense_count >= 3 else 0
-    section_bonus = 1 if len(metrics) >= 6 else 0
-    forced_bonus = min(2, force_bonus)
-    return max(base + type_bonus + density_bonus + section_bonus + forced_bonus, minimum_inline)
+    if density == "minimal":
+        base = max(2, base - 2)
+        type_bonus = min(1, special_count // 3)
+        density_bonus = 0
+        section_bonus = 0
+        forced_bonus = min(1, force_bonus)
+        result = base + type_bonus + forced_bonus
+    elif density == "balanced":
+        base = max(3, base - 1)
+        type_bonus = min(1, special_count // 2)
+        density_bonus = 1 if dense_count >= 4 else 0
+        section_bonus = 0
+        forced_bonus = min(2, force_bonus)
+        result = base + type_bonus + density_bonus + forced_bonus
+    elif density == "per-section":
+        result = max(base, min(len(eligible_sections), base + 2))
+        result += min(1, force_bonus)
+    else:
+        type_bonus = min(2, special_count // 2)
+        density_bonus = 1 if dense_count >= 3 else 0
+        section_bonus = 1 if len(metrics) >= 6 else 0
+        forced_bonus = min(2, force_bonus)
+        result = base + type_bonus + density_bonus + section_bonus + forced_bonus
+    return max(result, minimum_inline)
 
 
 def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> int:
@@ -2090,7 +2414,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
     intro_blocks, sections = normalize_sections_for_images(body)
     provider = image_provider_from_env(args.provider)
-    inline_limit = estimate_inline_image_count(body, args.inline_count)
+    inline_limit = estimate_inline_image_count(body, args.inline_count, controls.get("density", "rich"))
     inline_sections = select_sections_for_images(body, inline_limit)
     intro_char_count = sum(cjk_len(block) for block in intro_blocks)
     content_sections = [section for section in sections if not is_reference_heading(section.get("heading", ""))]
@@ -2127,9 +2451,19 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "section_excerpt": final_metric.get("excerpt", "") if final_metric else extract_summary(summary, 220),
         },
     ]
+    type_occurrence: dict[str, int] = {}
+    for item in items:
+        occurrence_index = type_occurrence.get(item["type"], 0)
+        variant = pick_layout_variant(item["type"], occurrence_index)
+        item["layout_variant_key"] = variant["key"]
+        item["layout_variant_label"] = variant["label"]
+        item["layout_variant_instruction"] = variant["instruction"]
+        type_occurrence[item["type"]] = occurrence_index + 1
 
     for index, section in enumerate(inline_sections, start=1):
         image_type = section.get("image_type") or "\u6b63\u6587\u63d2\u56fe"
+        occurrence_index = type_occurrence.get(image_type, 0)
+        variant = pick_layout_variant(image_type, occurrence_index)
         items.append(
             {
                 "id": f"inline-{index:02d}",
@@ -2144,8 +2478,12 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
                 "aspect_ratio": "16:9",
                 "section_heading": section["heading"],
                 "section_excerpt": section.get("excerpt", ""),
+                "layout_variant_key": variant["key"],
+                "layout_variant_label": variant["label"],
+                "layout_variant_instruction": variant["instruction"],
             }
         )
+        type_occurrence[image_type] = occurrence_index + 1
 
     for item in items:
         item["provider"] = provider
@@ -2161,12 +2499,18 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         "article_char_count": cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
         "planned_inline_count": len(inline_sections),
         "requested_inline_count": inline_limit,
+        "density_mode": controls.get("density", "rich"),
         "image_controls": controls,
         "items": items,
         "generated_at": now_iso(),
     }
     write_json(workspace / "image-plan.json", plan)
+    write_image_outline_artifacts(workspace, title, audience, controls, plan)
     manifest["image_provider"] = provider
+    manifest["image_plan_path"] = "image-plan.json"
+    manifest["image_outline_path"] = "image-outline.json"
+    manifest["image_outline_markdown_path"] = "image-outline.md"
+    manifest["image_prompt_dir"] = "prompts/images"
     save_manifest(workspace, manifest)
     print(json.dumps(plan, ensure_ascii=False, indent=2))
     return 0

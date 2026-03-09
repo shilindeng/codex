@@ -15,6 +15,8 @@ STANDARD_ARTIFACTS = [
     "score-report.json",
     "score-report.md",
     "image-plan.json",
+    "image-outline.json",
+    "image-outline.md",
     "assembled.md",
     "article.html",
     "article.wechat.html",

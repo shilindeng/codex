@@ -10,6 +10,9 @@
 - `review-report.md`：面向人读的评审摘要
 - `score-report.json`：启发式评分结果
 - `image-plan.json`：配图规划
+- `image-outline.json`：结构化插图大纲
+- `image-outline.md`：面向人读的插图大纲
+- `prompts/images/`：每张图的独立 prompt 文件
 - `assembled.md`：图文汇总稿
 - `article.html`：普通 HTML 预览
 - `article.wechat.html`：公众号兼容 HTML
@@ -35,6 +38,9 @@
 - `selected_title`
 - `source_urls`
 - `article_path`
+- `image_outline_path`
+- `image_outline_markdown_path`
+- `image_prompt_dir`
 - `score_total`
 - `score_passed`
 - `publish_intent`

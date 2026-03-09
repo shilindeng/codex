@@ -925,6 +925,7 @@ def cmd_all(args: argparse.Namespace) -> int:
             title_count=3,
             image_provider=args.provider,
             image_preset=args.image_preset,
+            image_density=args.image_density,
             image_theme=args.image_theme,
             image_style=args.image_style,
             image_type=args.image_type,
@@ -991,6 +992,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--to", choices=["render", "publish"], default="render")
     run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
     run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
     run.add_argument("--image-theme")
     run.add_argument("--image-style")
     run.add_argument("--image-type")
@@ -1018,6 +1020,7 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
     hosted_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
     hosted_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    hosted_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
     hosted_run.add_argument("--image-theme")
     hosted_run.add_argument("--image-style")
     hosted_run.add_argument("--image-type")
@@ -1044,6 +1047,7 @@ def build_parser() -> argparse.ArgumentParser:
     ideate.add_argument("--selected-title")
     ideate.add_argument("--outline-file")
     ideate.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    ideate.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
     ideate.add_argument("--image-theme")
     ideate.add_argument("--image-style")
     ideate.add_argument("--image-type")
@@ -1073,6 +1077,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_images.add_argument("--workspace", required=True)
     plan_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
     plan_images.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    plan_images.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
     plan_images.add_argument("--image-theme")
     plan_images.add_argument("--image-style")
     plan_images.add_argument("--image-type")
@@ -1128,6 +1133,7 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--workspace", required=True)
     all_cmd.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
     all_cmd.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    all_cmd.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
     all_cmd.add_argument("--image-theme")
     all_cmd.add_argument("--image-style")
     all_cmd.add_argument("--image-type")
