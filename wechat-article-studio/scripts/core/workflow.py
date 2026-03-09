@@ -26,7 +26,7 @@ from core.manifest import ensure_workspace, load_manifest, save_manifest, update
 from core.render import cmd_render as legacy_render
 from core.rewrite import generate_revision_candidate
 from providers.text.gemini_web import GeminiWebTextProvider
-from providers.text.openai_compatible import OpenAICompatibleTextProvider
+from providers.text.openai_compatible import OpenAICompatibleTextProvider, placeholder_article, placeholder_outline
 from publishers.wechat import cmd_publish as wechat_publish
 from publishers.wechat import cmd_verify_draft as wechat_verify_draft
 
@@ -104,28 +104,6 @@ def split_review_points(value: Any) -> tuple[list[str], list[str]]:
         else:
             strengths.append(item)
     return strengths, issues
-
-
-def build_research_reference_section(research: dict[str, Any]) -> str:
-    sources = normalize_string_list(research.get("sources"))
-    evidence_items = normalize_string_list(research.get("evidence_items"))
-    if not sources and not evidence_items:
-        return ""
-    lines = ["## 参考与延伸", ""]
-    for item in sources:
-        lines.append(f"- 研究线索：{item}")
-    for item in evidence_items[:3]:
-        lines.append(f"- 关键信息：{item}")
-    return "\n".join(lines).strip()
-
-
-def ensure_reference_section(body: str, research: dict[str, Any]) -> str:
-    if "## 参考" in body or "## 参考与延伸" in body or "## 来源" in body:
-        return body
-    block = build_research_reference_section(research)
-    if not block:
-        return body
-    return body.rstrip() + "\n\n" + block + "\n"
 
 
 def apply_research_credibility_boost(report: dict[str, Any], research: dict[str, Any]) -> dict[str, Any]:
@@ -288,7 +266,6 @@ def cmd_write(args: argparse.Namespace) -> int:
     )
     body = str(result.payload).strip()
     body = strip_leading_h1(body, selected_title)
-    body = ensure_reference_section(body, research)
     summary = extract_summary(body)
     article_path = workspace / "article.md"
     write_text(article_path, join_frontmatter({"title": selected_title, "summary": summary}, body))
@@ -349,6 +326,70 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def build_review_from_score(title: str, report: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+    total = int(report.get("total_score") or 0)
+    threshold = int(report.get("threshold") or legacy.DEFAULT_THRESHOLD)
+    delta = total - threshold
+    if delta >= 0:
+        summary = f"《{title}》当前版本已达到发布阈值（{total}/{threshold}），可以进入配图与排版阶段。"
+    else:
+        summary = f"《{title}》当前版本暂未达到发布阈值（{total}/{threshold}），建议先按问题清单补强后再出图排版。"
+    strengths = normalize_string_list(report.get("strengths"))[:4]
+    issues = normalize_string_list(report.get("weaknesses"))[:4]
+    mandatory = normalize_string_list(report.get("mandatory_revisions"))
+    for item in mandatory:
+        if item not in issues:
+            issues.append(item)
+    platform_notes = [
+        "微信公众号优先短段落、小标题和重点句，避免连续大段文字。",
+        "事实型内容在发布前应自行核验关键表述，但最终正文不自动附加来源区。",
+    ]
+    if manifest.get("score_passed"):
+        platform_notes.append("当前稿件已过线，进入出图前可再检查封面标题和摘要是否适合转发。")
+    return {
+        "summary": summary,
+        "findings": strengths + issues,
+        "strengths": strengths,
+        "issues": issues,
+        "platform_notes": platform_notes,
+        "title": title,
+        "provider": "host-agent",
+        "model": "session",
+        "generated_at": now_iso(),
+        "hosted": True,
+    }
+
+
+def write_review_report(workspace: Path, manifest: dict[str, Any], payload: dict[str, Any]) -> None:
+    write_json(workspace / "review-report.json", payload)
+    lines = [payload.get("summary", "")]
+    lines.extend(f"亮点：{item}" for item in payload.get("strengths", []))
+    lines.extend(f"问题：{item}" for item in payload.get("issues", []))
+    lines.extend(f"平台建议：{item}" for item in payload.get("platform_notes", []))
+    ensure_text_report(workspace / "review-report.md", "编辑评审报告", lines)
+    manifest["review_report_path"] = "review-report.json"
+    update_stage(manifest, "review", "review_status")
+
+
+def _mark_publish_intent(workspace: Path) -> None:
+    manifest = load_manifest(workspace)
+    if manifest.get("publish_intent"):
+        return
+    manifest["publish_intent"] = True
+    save_manifest(workspace, manifest)
+
+
+def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) -> None:
+    output_path = str(rewrite.get("output_path") or "").strip()
+    if not output_path:
+        return
+    current_path = str(manifest.get("article_path") or "article.md")
+    if current_path != output_path:
+        manifest["draft_source_path"] = current_path
+    manifest["article_path"] = output_path
+    manifest["active_article_variant"] = "rewrite"
+
+
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -371,6 +412,8 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest["rewrite_path"] = rewrite["output_path"]
     manifest["rewrite_preview_score"] = rewrite.get("preview_score")
     manifest["rewrite_preview_passed"] = rewrite.get("preview_passed")
+    if getattr(args, "promote", False):
+        _maybe_promote_rewrite(manifest, rewrite)
     update_stage(manifest, "revise", "draft_status")
     save_manifest(workspace, manifest)
     print(json.dumps(rewrite, ensure_ascii=False, indent=2))
@@ -404,10 +447,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "writable": legacy.can_write_directory(workspace if workspace.exists() else workspace.parent),
         },
         "text_provider": {
-            "selected_provider": provider.provider_name,
-            "configured": provider.configured(),
+            "default_mode": "hosted-agent",
+            "hosted_agent_ready": True,
+            "api_provider": provider.provider_name,
+            "api_configured": provider.configured(),
             "model": getattr(provider, "model", ""),
-            "required_env": ["ARTICLE_STUDIO_TEXT_MODEL", "OPENAI_API_KEY"],
+            "required_env": [] if not provider.configured() else ["ARTICLE_STUDIO_TEXT_MODEL", "OPENAI_API_KEY"],
+            "notes": [
+                "在 Codex / ClaudeCode / OpenClaw 中默认不要求文本环境变量，由宿主 agent 负责文本生成。",
+                "只有脱离宿主、单独运行 run 子命令时，才需要配置文本 API。",
+            ],
         },
         "image_providers": {
             "gemini-api": legacy.doctor_provider_status("gemini-api"),
@@ -439,6 +488,240 @@ def _run_score(workspace: str) -> dict[str, Any]:
         )
     )
     return read_json(Path(workspace) / "score-report.json", default={}) or {}
+
+
+def _effective_image_provider(args: argparse.Namespace) -> str | None:
+    explicit = getattr(args, "image_provider", None)
+    if explicit:
+        return explicit
+    if getattr(args, "dry_run_images", False):
+        return "openai-image"
+    return None
+
+
+def _write_hosted_research(workspace: Path, manifest: dict[str, Any], topic: str, angle: str, audience: str, source_urls: list[str]) -> None:
+    payload = {
+        "topic": topic,
+        "angle": angle,
+        "audience": audience,
+        "sources": source_urls,
+        "evidence_items": [],
+        "information_gaps": ["正文由宿主 agent 直接生成；如含事实断言，请在发布前补充来源与证据。"],
+        "forbidden_claims": ["不要把未验证信息写成确定事实。"],
+        "provider": "host-agent",
+        "model": "session",
+        "generated_at": now_iso(),
+        "hosted": True,
+    }
+    write_json(workspace / "research.json", payload)
+    manifest.update(
+        {
+            "topic": topic,
+            "direction": angle,
+            "audience": audience,
+            "source_urls": source_urls,
+            "research_path": "research.json",
+            "text_provider": "host-agent",
+            "text_model": "session",
+        }
+    )
+    update_stage(manifest, "research", "research_status")
+
+
+def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str, outline_file: str | None) -> None:
+    ideation = load_ideation(workspace)
+    ideation["topic"] = manifest.get("topic") or title
+    ideation["direction"] = manifest.get("direction") or ""
+    ideation["selected_title"] = title
+    ideation["updated_at"] = now_iso()
+    ideation["provider"] = "host-agent"
+    ideation["model"] = "session"
+    if not ideation.get("titles"):
+        ideation["titles"] = [
+            {
+                "title": title,
+                "strategy": "宿主 agent 直出",
+                "audience_fit": manifest.get("audience") or "大众读者",
+                "risk_note": "",
+            }
+        ]
+    outline_items: list[str] = []
+    if outline_file:
+        outline_items = [line.strip("- ").strip() for line in read_input_file(outline_file).splitlines() if line.strip()]
+    elif ideation.get("outline"):
+        outline_items = [str(item).strip() for item in ideation.get("outline") if str(item).strip()]
+    if outline_items:
+        ideation["outline"] = outline_items
+        ideation["outline_meta"] = {
+            "title": title,
+            "angle": manifest.get("direction") or "",
+            "sections": [{"heading": item, "goal": "宿主 agent 已生成正文", "evidence_need": "按需补充"} for item in outline_items],
+        }
+    write_json(workspace / "ideation.json", ideation)
+    manifest["selected_title"] = title
+    if outline_items:
+        manifest["outline"] = outline_items
+        update_stage(manifest, "outline", "outline_status")
+    update_stage(manifest, "titles", "title_status")
+
+
+def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: str, title: str, angle: str, audience: str) -> str:
+    provider = active_text_provider()
+    source_urls = normalize_urls(manifest.get("source_urls") or [])
+    research = load_research(workspace)
+    if not research:
+        result = provider.generate_research_pack(
+            {
+                "topic": topic,
+                "angle": angle,
+                "audience": audience,
+                "source_urls": source_urls,
+            }
+        )
+        payload = dict(result.payload)
+        payload.setdefault("topic", topic)
+        payload.setdefault("angle", angle)
+        payload.setdefault("audience", audience)
+        payload["provider"] = result.provider
+        payload["model"] = result.model
+        payload["generated_at"] = now_iso()
+        write_json(workspace / "research.json", payload)
+        manifest["research_path"] = "research.json"
+        manifest["text_provider"] = result.provider
+        manifest["text_model"] = result.model
+        update_stage(manifest, "research", "research_status")
+        research = payload
+
+    ideation = load_ideation(workspace)
+    if not ideation.get("titles"):
+        title_result = provider.generate_titles(
+            {
+                "topic": topic,
+                "audience": audience,
+                "angle": angle,
+                "count": 3,
+                "research": research,
+            }
+        )
+        titles = title_result.payload[:3] if isinstance(title_result.payload, list) else title_result.payload.get("titles", [])
+        ideation.update(
+            {
+                "topic": topic,
+                "direction": angle,
+                "titles": titles,
+                "selected_title": title or (titles[0]["title"] if titles else topic),
+                "updated_at": now_iso(),
+                "provider": title_result.provider,
+                "model": title_result.model,
+            }
+        )
+        write_json(workspace / "ideation.json", ideation)
+        manifest["selected_title"] = ideation.get("selected_title") or title
+        update_stage(manifest, "titles", "title_status")
+    title = title or ideation.get("selected_title") or manifest.get("selected_title") or topic
+
+    outline_meta = dict(ideation.get("outline_meta") or {})
+    if not outline_meta.get("sections"):
+        outline_result = provider.generate_outline(
+            {
+                "topic": topic,
+                "selected_title": title,
+                "audience": audience,
+                "direction": angle,
+                "research": research,
+                "titles": ideation.get("titles") or [],
+            }
+        )
+        outline_meta = dict(outline_result.payload)
+        if not outline_meta.get("sections"):
+            outline_meta = placeholder_outline(title)
+        ideation["selected_title"] = title
+        ideation["outline"] = outline_meta.get("sections") or []
+        ideation["outline_meta"] = outline_meta
+        ideation["updated_at"] = now_iso()
+        ideation["provider"] = outline_result.provider
+        ideation["model"] = outline_result.model
+        write_json(workspace / "ideation.json", ideation)
+        manifest["outline"] = [item.get("heading", "") for item in outline_meta.get("sections") or []]
+        update_stage(manifest, "outline", "outline_status")
+
+    article_result = provider.generate_article(
+        {
+            "topic": topic,
+            "title": title,
+            "selected_title": title,
+            "audience": audience,
+            "direction": angle,
+            "research": research,
+            "outline": outline_meta or {"sections": ideation.get("outline") or []},
+        }
+    )
+    body = str(article_result.payload).strip()
+    if not body:
+        body = placeholder_article(title, outline_meta or placeholder_outline(title), audience)
+    body = strip_leading_h1(body, title)
+    summary = extract_summary(body)
+    write_text(workspace / "article.md", join_frontmatter({"title": title, "summary": summary}, body))
+    manifest.update(
+        {
+            "selected_title": title,
+            "summary": summary,
+            "article_path": "article.md",
+            "text_provider": article_result.provider,
+            "text_model": article_result.model,
+        }
+    )
+    update_stage(manifest, "draft", "draft_status")
+    return title
+
+
+def _import_hosted_article(
+    workspace: Path,
+    manifest: dict[str, Any],
+    article_file: str | None,
+    title_hint: str | None,
+    summary_hint: str | None,
+    angle: str,
+    audience: str,
+) -> str:
+    article_path = workspace / "article.md"
+    if article_file:
+        raw = read_input_file(article_file)
+        meta, body = split_frontmatter(raw)
+        title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
+        body = strip_leading_h1(body, title)
+        summary = summary_hint or meta.get("summary") or extract_summary(body)
+        write_text(article_path, join_frontmatter({"title": title, "summary": summary}, body))
+    elif not article_path.exists():
+        title = title_hint or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
+        return _bootstrap_hosted_article(workspace, manifest, manifest.get("topic") or title, title, angle, audience)
+    meta, body = split_frontmatter(read_text(article_path))
+    title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
+    summary = summary_hint or meta.get("summary") or extract_summary(body)
+    write_text(article_path, join_frontmatter({"title": title, "summary": summary}, strip_leading_h1(body, title)))
+    manifest.update(
+        {
+            "selected_title": title,
+            "summary": summary,
+            "article_path": "article.md",
+            "text_provider": "host-agent",
+            "text_model": "session",
+        }
+    )
+    update_stage(manifest, "draft", "draft_status")
+    return title
+
+
+def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str, score_report: dict[str, Any]) -> dict[str, Any]:
+    manifest["score_status"] = "done"
+    manifest["score_report_path"] = "score-report.json"
+    manifest["score_total"] = score_report.get("total_score")
+    manifest["score_passed"] = score_report.get("passed")
+    manifest["stage"] = "score"
+    review_payload = build_review_from_score(title, score_report, manifest)
+    write_review_report(workspace, manifest, review_payload)
+    save_manifest(workspace, manifest)
+    return review_payload
 
 
 def cmd_score(args: argparse.Namespace) -> int:
@@ -511,15 +794,24 @@ def cmd_run(args: argparse.Namespace) -> int:
     manifest["stage"] = "score"
     save_manifest(workspace, manifest)
     if score_report and not score_report.get("passed", False):
-        cmd_revise(argparse.Namespace(workspace=str(workspace)))
-    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=args.image_provider, inline_count=args.inline_count))
+        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True))
+        score_report = _run_score(str(workspace))
+        manifest = load_manifest(workspace)
+        manifest["score_status"] = "done"
+        manifest["score_report_path"] = "score-report.json"
+        manifest["score_total"] = score_report.get("total_score")
+        manifest["score_passed"] = score_report.get("passed")
+        manifest["stage"] = "score"
+        save_manifest(workspace, manifest)
+    image_provider = _effective_image_provider(args)
+    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
     manifest = load_manifest(workspace)
     manifest["image_status"] = "planned"
     save_manifest(workspace, manifest)
     legacy_generate_images(
         argparse.Namespace(
             workspace=str(workspace),
-            provider=args.image_provider,
+            provider=image_provider,
             dry_run=args.dry_run_images,
             gemini_model=args.gemini_model,
             openai_model=args.openai_model,
@@ -533,6 +825,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     manifest["stage"] = "render"
     save_manifest(workspace, manifest)
     if args.to == "publish":
+        _mark_publish_intent(workspace)
         cmd_publish(
             argparse.Namespace(
                 workspace=str(workspace),
@@ -544,7 +837,68 @@ def cmd_run(args: argparse.Namespace) -> int:
                 confirmed_publish=args.confirmed_publish,
             )
         )
-        cmd_verify_draft(argparse.Namespace(workspace=str(workspace), media_id=None))
+        if not args.dry_run_publish:
+            cmd_verify_draft(argparse.Namespace(workspace=str(workspace), media_id=None))
+    return 0
+
+
+def cmd_hosted_run(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    topic = args.topic or manifest.get("topic") or "未命名主题"
+    angle = args.angle or manifest.get("direction") or ""
+    audience = args.audience or manifest.get("audience") or "大众读者"
+    source_urls = normalize_urls(args.source_url or manifest.get("source_urls") or [])
+    _write_hosted_research(workspace, manifest, topic, angle, audience, source_urls)
+    title = args.title or manifest.get("selected_title") or topic
+    _write_hosted_ideation(workspace, manifest, title, args.outline_file)
+    title = _import_hosted_article(workspace, manifest, args.article_file, title, args.summary, angle, audience)
+    save_manifest(workspace, manifest)
+
+    score_report = _run_score(str(workspace))
+    manifest = load_manifest(workspace)
+    if score_report and not score_report.get("passed", False):
+        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True))
+        score_report = _run_score(str(workspace))
+        manifest = load_manifest(workspace)
+    _finalize_after_score(workspace, manifest, title, score_report)
+
+    image_provider = _effective_image_provider(args)
+    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
+    manifest = load_manifest(workspace)
+    manifest["image_status"] = "planned"
+    save_manifest(workspace, manifest)
+    legacy_generate_images(
+        argparse.Namespace(
+            workspace=str(workspace),
+            provider=image_provider,
+            dry_run=args.dry_run_images,
+            gemini_model=args.gemini_model,
+            openai_model=args.openai_model,
+        )
+    )
+    legacy_assemble(argparse.Namespace(workspace=str(workspace)))
+    legacy_render(argparse.Namespace(workspace=str(workspace), input=None, output="article.html", accent_color=args.accent_color))
+    manifest = load_manifest(workspace)
+    manifest["image_status"] = "done"
+    manifest["render_status"] = "done"
+    manifest["stage"] = "render"
+    save_manifest(workspace, manifest)
+    if args.to == "publish":
+        _mark_publish_intent(workspace)
+        cmd_publish(
+            argparse.Namespace(
+                workspace=str(workspace),
+                input=None,
+                digest=None,
+                author=None,
+                cover=None,
+                dry_run=args.dry_run_publish,
+                confirmed_publish=args.confirmed_publish,
+            )
+        )
+        if not args.dry_run_publish:
+            cmd_verify_draft(argparse.Namespace(workspace=str(workspace), media_id=None))
     return 0
 
 
@@ -606,6 +960,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     revise = subparsers.add_parser("revise", help="基于 score/report 生成 article-rewrite.md 候选稿")
     revise.add_argument("--workspace", required=True)
+    revise.add_argument("--promote", action="store_true", help="将改写稿切换为后续流程默认正文")
     revise.set_defaults(func=cmd_revise)
 
     run = subparsers.add_parser("run", help="从 research 串到 render；显式要求时才继续 publish")
@@ -626,6 +981,27 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--openai-model", default="gpt-image-1")
     run.add_argument("--accent-color", default="#0F766E")
     run.set_defaults(func=cmd_run)
+
+    hosted_run = subparsers.add_parser("hosted-run", help="由宿主 agent 负责文本生成，再继续评分、配图、渲染与发布")
+    hosted_run.add_argument("--workspace", required=True)
+    hosted_run.add_argument("--topic", required=True)
+    hosted_run.add_argument("--angle")
+    hosted_run.add_argument("--audience")
+    hosted_run.add_argument("--source-url", action="append", default=[])
+    hosted_run.add_argument("--title")
+    hosted_run.add_argument("--outline-file")
+    hosted_run.add_argument("--article-file")
+    hosted_run.add_argument("--summary")
+    hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
+    hosted_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    hosted_run.add_argument("--inline-count", type=int, default=0)
+    hosted_run.add_argument("--dry-run-images", action="store_true")
+    hosted_run.add_argument("--dry-run-publish", action="store_true")
+    hosted_run.add_argument("--confirmed-publish", action="store_true")
+    hosted_run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
+    hosted_run.add_argument("--openai-model", default="gpt-image-1")
+    hosted_run.add_argument("--accent-color", default="#0F766E")
+    hosted_run.set_defaults(func=cmd_hosted_run)
 
     ideate = subparsers.add_parser("ideate", help="兼容模式入口：保存选题元信息到工作目录")
     ideate.add_argument("--workspace")

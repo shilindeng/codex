@@ -56,6 +56,13 @@
 - 输出：从 `research.json` 到 `article.wechat.html`，必要时追加发布产物
 - 失败条件：发布前置条件不满足
 
+## `hosted-run`
+
+- 输入：`--workspace --topic [--article-file] [--title] [--outline-file] [--to render|publish]`
+- 依赖：优先使用宿主 agent 已生成正文；若缺失则回退到当前 provider 自动补全；发布时需要微信凭证
+- 输出：写入 research/ideation/article/review/score/image/render/publish 相关产物
+- 失败条件：发布前置条件不满足，或自动补全过程失败
+
 ## 兼容命令
 
 - `ideate`：兼容旧版选题初始化

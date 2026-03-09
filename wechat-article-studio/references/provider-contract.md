@@ -2,7 +2,16 @@
 
 ## 文本 provider
 
-默认 provider：`openai-compatible`
+默认接入模式：
+
+1. 宿主 agent 模式：Codex / ClaudeCode / OpenClaw 直接使用当前对话模型生成 research、标题、大纲、正文与编辑意见
+2. API 模式：`openai-compatible`
+
+宿主 agent 模式下：
+
+- 不要求用户填写 `OPENAI_API_KEY`
+- 不要求用户填写 `ARTICLE_STUDIO_TEXT_MODEL`
+- agent 负责把生成结果写入标准工作目录，再调用 `hosted-run`
 
 环境变量：
 
@@ -22,9 +31,8 @@
 
 无配置时要求：
 
-- 命令仍可执行
-- 产出占位结构或明确说明缺配置
-- 不允许静默跳过
+- 在宿主 agent 场景，优先走 `hosted-run`
+- 在纯 CLI 场景，命令可以明确提示缺配置，但不允许静默跳过
 
 ## 图片 provider
 

@@ -2,6 +2,7 @@
 
 ## 阶段顺序
 
+0. `hosted-run`：宿主 agent 生成 research / 标题 / 大纲 / 正文后，继续自动跑后链路
 1. `research`：收集主题、来源、信息缺口
 2. `titles`：生成 3 个左右标题候选
 3. `outline`：生成文章大纲与证据需求
@@ -23,6 +24,17 @@
 ## 默认推荐入口
 
 ```bash
+python {SKILL_DIR}/scripts/studio.py hosted-run \
+  --workspace <job-dir> \
+  --topic "<主题>" \
+  --to render
+```
+
+如果宿主已经生成好正文，也可额外传入 `--article-file <agent-generated-markdown>`。
+
+如果已经配置文本 provider，也可继续使用：
+
+```bash
 python {SKILL_DIR}/scripts/studio.py run \
   --workspace <job-dir> \
   --topic "<主题>" \
@@ -32,9 +44,10 @@ python {SKILL_DIR}/scripts/studio.py run \
 正式发布追加：
 
 ```bash
-python {SKILL_DIR}/scripts/studio.py run \
+python {SKILL_DIR}/scripts/studio.py hosted-run \
   --workspace <job-dir> \
   --topic "<主题>" \
+  --article-file <agent-generated-markdown> \
   --to publish \
   --confirmed-publish
 ```

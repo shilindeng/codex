@@ -2,7 +2,7 @@ interface:
   display_name: "公众号图文工作室"
   short_description: "公众号选题、写作、评审、评分、配图、排版与草稿发布一体化技能"
   brand_color: "#0F766E"
-  default_prompt: "Use $wechat-article-studio to take a WeChat Official Account article from research to render. Prefer `python {SKILL_DIR}/scripts/studio.py run --workspace <job-dir> --topic \"<topic>\" --to render` first, and only publish after explicit user confirmation with `--confirmed-publish`."
+  default_prompt: "Use $wechat-article-studio to take a WeChat Official Account article from topic to render. Prefer writing the agent-authored markdown into `<job-dir>/article.md` and then running `python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic \"<topic>\" --to render`. If no markdown has been written yet, `hosted-run` may bootstrap from the available provider configuration. Only publish after explicit user confirmation with `--confirmed-publish`."
 
 policy:
   allow_implicit_invocation: true

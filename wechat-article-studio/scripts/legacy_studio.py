@@ -748,7 +748,7 @@ def rewrite_actions(breakdown: list[dict[str, Any]], title: str, body: str) -> t
     if by_name["文风适配度"]["score"] < 8:
         needs.append("统一语气和视角，减少‘首先/其次/最后/综上所述’等模板化表达。")
     if by_name["可信度与检索支撑"]["score"] < 5:
-        needs.append("补充来源、数据或案例出处，并在文末形成参考来源区。")
+        needs.append("补充来源、数据或案例出处，并在正文相关段落中自然融入可核验表述。")
     topic_hint = extract_summary(title + " " + body, 28)
     suggestions = {
         "replacement_hook": f"大多数人以为 {topic_hint} 靠的是运气，但真正拉开差距的，往往是那些不容易被看见的底层动作。",
@@ -1152,12 +1152,6 @@ def auto_rewrite_article(title: str, meta: dict[str, str], body: str, report: di
         heading, bullets = build_execution_section(sections)
         rewritten_parts.append(f"## {heading}\n\n" + "\n".join(f"- {bullet}" for bullet in bullets))
         applied_actions.append("补入了更适合收藏转发的行动清单")
-    if "可信度与检索支撑" in low_dims:
-        heading, items = build_reference_section(manifest, evidence_report)
-        rewritten_parts.append(f"## {heading}\n\n" + "\n".join(f"- {item}" if not re.match(r"^\d+\.\s", item) else item for item in items))
-        applied_actions.append("补入了参考与证据补强区")
-        if evidence_report.get("items"):
-            applied_actions.append("联网抓取并注入了外部证据")
     if "金句质量" in low_dims:
         applied_actions.append("补入了可截图传播的金句")
     if "文风适配度" in low_dims:
@@ -2232,25 +2226,19 @@ def cmd_render(args: argparse.Namespace) -> int:
     title = infer_title(manifest, meta, body)
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(body)
     body = strip_leading_h1(body, title)
-    evidence_report = read_json(workspace / "evidence-report.json", default={}) or {}
-    clean_body, reference_entries = build_reference_entries(body, manifest, evidence_report)
-    annotated_body = annotate_body_with_footnotes(clean_body, reference_entries)
-    content_html = markdown_to_html(annotated_body)
+    content_html = markdown_to_html(body)
     content_html = content_html.replace('<blockquote>', '<blockquote class="insight-card">')
-    content_html = re.sub(r'(?<!\w)\[(\d+)\](?!\()', r'<sup class="footnote-marker">[\1]</sup>', content_html)
-    preview_refs = build_reference_cards_preview(reference_entries)
-    preview_content = content_html + preview_refs
     style = read_text(ASSETS_DIR / "wechat-style.css").replace("{{accent_color}}", args.accent_color)
     template = read_text(ASSETS_DIR / "wechat-template.html")
     rendered = (
         template.replace("{{title}}", html.escape(title))
         .replace("{{summary}}", html.escape(summary))
         .replace("{{style}}", style)
-        .replace("{{content}}", textwrap.indent(preview_content, "      ").strip())
+        .replace("{{content}}", textwrap.indent(content_html, "      ").strip())
     )
     output_path = workspace / args.output
     write_text(output_path, rendered)
-    wechat_fragment = build_wechat_fragment(content_html, title, summary, args.accent_color, reference_entries)
+    wechat_fragment = build_wechat_fragment(content_html, title, summary, args.accent_color, None)
     wechat_output = workspace / (Path(args.output).stem + ".wechat.html")
     write_text(wechat_output, wechat_fragment)
     manifest["html_path"] = relative_posix(output_path, workspace)
