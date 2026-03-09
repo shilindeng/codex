@@ -3,8 +3,12 @@
 ## 必备产物
 
 - `manifest.json`：状态机与路径索引
+- `topic-discovery.json`：最近 12/24 小时热点选题发现结果
+- `topic-discovery.md`：面向人读的热点选题建议
 - `research.json`：调研输入、来源、证据摘录、信息缺口
 - `ideation.json`：标题候选、选中标题、大纲、创作意图
+- `title-report.json`：标题多维评分与准入结果
+- `title-report.md`：面向人读的标题评分摘要
 - `article.md`：当前活跃正文
 - `review-report.json`：编辑评审结果
 - `review-report.md`：面向人读的评审摘要
@@ -33,9 +37,13 @@
 - `publish_status`
 - `verify_status`
 - `topic`
+- `topic_discovery_path`
 - `direction`
 - `audience`
 - `selected_title`
+- `title_report_path`
+- `title_score`
+- `title_gate_passed`
 - `source_urls`
 - `article_path`
 - `image_outline_path`

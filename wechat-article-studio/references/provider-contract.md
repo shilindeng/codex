@@ -29,6 +29,12 @@
 - `review_article(context) -> dict`
 - `revise_article(context) -> str`
 
+标题生成要求：
+
+- `topic` 不等于最终标题
+- 生成标题后必须经过本地标题评分与准入
+- 未通过准入的标题不能优先作为默认 `selected_title`
+
 无配置时要求：
 
 - 在宿主 agent 场景，优先走 `hosted-run`

@@ -22,9 +22,11 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 import zlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -107,6 +109,22 @@ GOLDEN_QUOTE_WORDS = [
     "能力",
     "信任",
 ]
+TITLE_BENEFIT_WORDS = [
+    "方法", "清单", "公式", "避坑", "模板", "答案", "机会", "趋势", "增长", "提升", "翻倍", "入门", "进阶", "判断", "指南", "秘籍",
+]
+TITLE_CURIOSITY_WORDS = [
+    "为什么", "真相", "误区", "别再", "你以为", "其实", "背后", "被低估", "正在", "突然", "没想到", "关键", "看懂",
+]
+TITLE_TIMELY_WORDS = [
+    "今天", "今年", "最近", "这次", "刚刚", "最新", "24小时", "本周", "2026", "眼下", "正在",
+]
+TITLE_AUDIENCE_WORDS = [
+    "普通人", "新手", "职场人", "创业者", "管理者", "家长", "中小企业", "开发者", "运营人", "创作者", "打工人",
+]
+TITLE_SCORE_THRESHOLD = 56
+DISCOVERY_TOPIC_LIMIT = 8
+DISCOVERY_FEED_LIMIT = 20
+START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动"}
 AI_STYLE_PHRASES = [
     "首先",
     "其次",
@@ -596,6 +614,145 @@ def fetch_text_from_url(url: str, timeout: int = 15) -> tuple[str, str]:
     raise ValueError(f"unsupported source url: {url}")
 
 
+def parse_rss_datetime(raw: str) -> datetime | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def google_news_feed_url(query: str = "", window_hours: int = 24) -> str:
+    if query:
+        q = f"{query} when:{window_hours}h"
+        encoded = urllib.parse.quote(q)
+        return f"https://news.google.com/rss/search?q={encoded}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+    return "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+
+
+def fetch_google_news_items(query: str, window_hours: int, limit: int) -> list[dict[str, Any]]:
+    url = google_news_feed_url(query, window_hours)
+    request = urllib.request.Request(url, headers=HTTP_HEADERS)
+    raw, headers = urlopen_with_retry(request, timeout=NETWORK_TIMEOUT, retries=NETWORK_RETRIES)
+    xml_text = decode_response_body(raw, headers)
+    root = ET.fromstring(xml_text)
+    channel = root.find("channel")
+    if channel is None:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    items: list[dict[str, Any]] = []
+    for item in channel.findall("item"):
+        title = (item.findtext("title") or "").strip()
+        link = (item.findtext("link") or "").strip()
+        pub_raw = (item.findtext("pubDate") or "").strip()
+        source = ""
+        source_elem = item.find("{http://search.yahoo.com/mrss/}source")
+        if source_elem is not None and (source_elem.text or "").strip():
+            source = source_elem.text.strip()
+        published_at = parse_rss_datetime(pub_raw)
+        if published_at and published_at < cutoff:
+            continue
+        if not title or not link:
+            continue
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "source": source or "Google 新闻",
+                "published_at": published_at.isoformat() if published_at else "",
+                "query": query or "top",
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def classify_news_topic(title: str) -> dict[str, Any]:
+    value = (title or "").strip()
+    if re.search(r"AI|人工智能|模型|芯片|OpenAI|Google|Meta|算力|机器人", value, flags=re.I):
+        return {
+            "topic_type": "科技/AI",
+            "angles": ["这条新闻背后的行业信号是什么", "普通人/从业者会受到什么影响", "下一步产品与商业机会在哪里"],
+            "viewpoints": ["不要只盯着发布本身，更要看背后能力边界有没有变化。", "热点的价值在于判断它会不会从新闻变成基础设施。"],
+        }
+    if re.search(r"股|融资|并购|财报|经济|关税|出口|消费|楼市|房价|就业|失业", value):
+        return {
+            "topic_type": "财经/职场",
+            "angles": ["事件背后的底层变量是什么", "对普通人的资产/工作意味着什么", "哪些判断最容易被情绪带偏"],
+            "viewpoints": ["财经热点更适合做‘判断框架’，而不是情绪复述。", "公众号文章要解释影响路径，而不是只重复涨跌结果。"],
+        }
+    if re.search(r"教育|学校|高考|考研|留学|老师|课程", value):
+        return {
+            "topic_type": "教育",
+            "angles": ["政策/事件会改变哪些人的决策", "家长或学生真正该关注什么", "最容易踩的误区是什么"],
+            "viewpoints": ["教育热点要少喊口号，多解释决策后果。", "真正有传播力的是‘怎么判断，怎么行动’。"],
+        }
+    if re.search(r"电影|综艺|明星|演唱会|游戏|社交平台|短视频|直播", value):
+        return {
+            "topic_type": "文娱/平台",
+            "angles": ["为什么这件事能爆", "平台机制和用户情绪分别起了什么作用", "能沉淀出什么长期内容判断"],
+            "viewpoints": ["流行事件适合写成‘爆红机制拆解’。", "不要只复盘热闹，要提炼可迁移的方法论。"],
+        }
+    return {
+        "topic_type": "社会热点",
+        "angles": ["这件事为什么现在值得关注", "真正影响普通人的点是什么", "如何避免只看表象不看结构"],
+        "viewpoints": ["热点文章需要把新闻翻译成读者能执行的判断。", "好的选题不是复述事件，而是解释事件。"],
+    }
+
+
+def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        title = (item.get("title") or "").strip()
+        normalized = re.sub(r"\s+", "", title)
+        if not title or normalized in seen:
+            continue
+        seen.add(normalized)
+        classification = classify_news_topic(title)
+        candidates.append(
+            {
+                "hot_title": title,
+                "source": item.get("source", ""),
+                "published_at": item.get("published_at", ""),
+                "source_url": item.get("link", ""),
+                "query": item.get("query", ""),
+                "topic_type": classification["topic_type"],
+                "recommended_topic": title,
+                "angles": classification["angles"],
+                "viewpoints": classification["viewpoints"],
+                "why_now": f"该话题出现在最近 {item.get('query') or 'top'} 的新闻流中，具备时效与讨论度。",
+            }
+        )
+        if len(candidates) >= limit:
+            break
+    return candidates
+
+
+def discover_recent_topics(window_hours: int = 24, limit: int = DISCOVERY_TOPIC_LIMIT) -> dict[str, Any]:
+    queries = ["", "热点", "科技", "AI", "财经", "就业", "教育"]
+    collected: list[dict[str, Any]] = []
+    for query in queries:
+        try:
+            collected.extend(fetch_google_news_items(query, window_hours, DISCOVERY_FEED_LIMIT))
+        except Exception:
+            continue
+    collected.sort(key=lambda item: item.get("published_at", ""), reverse=True)
+    candidates = build_topic_candidates_from_news(collected, limit)
+    return {
+        "window_hours": window_hours,
+        "generated_at": now_iso(),
+        "sources": collected[:limit * 2],
+        "candidates": candidates,
+    }
+
+
 def extract_page_title(raw: str) -> str:
     match = re.search(r"<title[^>]*>(.*?)</title>", raw, flags=re.I | re.S)
     if not match:
@@ -786,6 +943,131 @@ def title_score(title: str) -> tuple[int, str]:
     if any(mark in title for mark in ["？", "?", "：", ":"]):
         score += 1
     return min(score, 8), "标题越具体、越有利益点、越有反差，越接近高分。"
+
+
+def title_dimension_score(title: str, audience: str = "", angle: str = "") -> dict[str, Any]:
+    value = (title or "").strip()
+    compact = re.sub(r"\s+", "", value)
+    length = cjk_len(compact)
+    benefit_hits = count_occurrences(compact, TITLE_BENEFIT_WORDS)
+    curiosity_hits = count_occurrences(compact, TITLE_CURIOSITY_WORDS)
+    timely_hits = count_occurrences(compact, TITLE_TIMELY_WORDS)
+    audience_hits = count_occurrences(compact + audience, TITLE_AUDIENCE_WORDS)
+    concrete_hits = len(re.findall(r"[0-9一二三四五六七八九十]+|AI|SOP|ROI|增长|趋势|方法|清单|模板|案例|机会|风险", compact, flags=re.I))
+    conflict_hits = len(re.findall(r"不是.+而是|但|却|反而|误区|真相", compact))
+    marks_hits = sum(1 for mark in ["？", "?", "：", ":", "｜", "|"] if mark in compact)
+
+    hook_score = 8
+    hook_score += min(8, curiosity_hits * 3 + conflict_hits * 2 + marks_hits)
+    hook_score += 2 if compact.startswith(("为什么", "别再", "真正")) else 0
+
+    specificity_score = 8
+    if 11 <= length <= 24:
+        specificity_score += 6
+    elif 8 <= length <= 30:
+        specificity_score += 3
+    specificity_score += min(6, concrete_hits * 2)
+    specificity_score += 2 if any(word in compact for word in ["清单", "步骤", "公式", "案例", "方法"]) else 0
+
+    benefit_score = 8
+    benefit_score += min(8, benefit_hits * 3)
+    benefit_score += 3 if any(word in compact for word in ["避坑", "机会", "增长", "提升", "答案"]) else 0
+    benefit_score += 2 if any(word in angle for word in ["方法", "策略", "判断", "趋势"]) and any(word in compact for word in ["方法", "策略", "判断", "趋势"]) else 0
+
+    relevance_score = 8
+    relevance_score += 4 if audience_hits > 0 else 0
+    relevance_score += 4 if angle and any(token for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", angle) if token in compact) else 0
+    relevance_score += 4 if any(word in compact for word in ["普通人", "新手", "打工人", "创业者", "开发者"]) else 0
+
+    timely_score = 6
+    timely_score += min(8, timely_hits * 3)
+    timely_score += 3 if re.search(r"20\d{2}|这次|最近|刚刚|本周|24小时", compact) else 0
+    timely_score += 3 if any(word in compact for word in ["趋势", "信号", "风向", "爆发", "拐点"]) else 0
+
+    dimensions = [
+        {"dimension": "钩子强度", "weight": 22, "score": min(hook_score, 22), "note": "是否有反差、悬念、问题感和点击冲动。"},
+        {"dimension": "具体度", "weight": 20, "score": min(specificity_score, 20), "note": "是否具体、可感知、带数字/对象/方法。"},
+        {"dimension": "利益点", "weight": 22, "score": min(benefit_score, 22), "note": "是否让读者一眼看到收益、避坑或行动价值。"},
+        {"dimension": "人群相关性", "weight": 18, "score": min(relevance_score, 18), "note": "是否对准目标读者和文章方向。"},
+        {"dimension": "时效热度", "weight": 18, "score": min(timely_score, 18), "note": "是否具备当下感、趋势感或话题性。"},
+    ]
+    total = sum(item["score"] for item in dimensions)
+    return {
+        "title": value,
+        "total_score": total,
+        "threshold": TITLE_SCORE_THRESHOLD,
+        "passed": total >= TITLE_SCORE_THRESHOLD,
+        "score_breakdown": dimensions,
+    }
+
+
+def rank_title_candidates(
+    titles: list[dict[str, Any]],
+    topic: str,
+    audience: str,
+    angle: str,
+    selected_title: str = "",
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    scored: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    candidates = list(titles or [])
+    if topic and all((item.get("title") or "").strip() != topic.strip() for item in candidates):
+        candidates.append({"title": topic, "strategy": "原始主题", "audience_fit": audience, "risk_note": "作为原始 topic 参与标题评分。"})
+    if selected_title and all((item.get("title") or "").strip() != selected_title.strip() for item in candidates):
+        candidates.append({"title": selected_title, "strategy": "显式指定标题", "audience_fit": audience, "risk_note": "由用户显式指定，保留参与评分。"})
+    for item in candidates:
+        title = (item.get("title") or "").strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        report = title_dimension_score(title, audience, angle)
+        scored.append(
+            {
+                **item,
+                "title": title,
+                "title_score": report["total_score"],
+                "title_gate_passed": report["passed"],
+                "title_score_breakdown": report["score_breakdown"],
+                "title_score_threshold": report["threshold"],
+            }
+        )
+    scored.sort(key=lambda item: (item.get("title_gate_passed", False), item.get("title_score", 0)), reverse=True)
+    selected = scored[0] if scored else None
+    return scored, selected
+
+
+def generate_hot_title_variants(topic: str, angle: str = "", audience: str = "") -> list[dict[str, str]]:
+    focus = extract_summary(f"{topic} {angle}".strip(), 22) or (topic or "这个问题")
+    audience_hint = ""
+    for word in TITLE_AUDIENCE_WORDS:
+        if word in (audience or ""):
+            audience_hint = word
+            break
+    lead = audience_hint or "普通人"
+    variants = [
+        f"为什么大多数人做不好{focus}？{lead}一定要先想清这3件事",
+        f"{focus}的真相：别再凭感觉了，先看这份判断清单",
+        f"如果你最近在关注{focus}，这5个误区越早避开越好",
+        f"{focus}为什么突然重要了？看懂这3个信号，你就知道下一步怎么做",
+        f"关于{focus}，真正拉开差距的不是信息量，而是这套判断方法",
+        f"{lead}最容易忽略的{focus}机会，往往就藏在这4个细节里",
+    ]
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for title in variants:
+        normalized = re.sub(r"\s+", "", title)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(
+            {
+                "title": title,
+                "strategy": "爆款标题优化",
+                "audience_fit": audience or "大众读者",
+                "risk_note": "由本地启发式标题工厂自动生成，供准入补强。",
+            }
+        )
+    return deduped
 
 
 def intro_score(title: str, intro: str) -> tuple[int, str]:
@@ -2035,6 +2317,41 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         lines.append(f"- Prompt 文件：`{item['prompt_path']}`")
         lines.append("")
     write_text(workspace / "image-outline.md", "\n".join(lines).rstrip() + "\n")
+
+
+def write_topic_discovery_artifacts(workspace: Path, payload: dict[str, Any]) -> None:
+    write_json(workspace / "topic-discovery.json", payload)
+    lines = [
+        f"# 热点选题发现（最近 {payload.get('window_hours', 24)} 小时）",
+        "",
+    ]
+    for index, item in enumerate(payload.get("candidates") or [], start=1):
+        lines.append(f"## {index}. {item['recommended_topic']}")
+        lines.append("")
+        lines.append(f"- 热点标题：{item['hot_title']}")
+        lines.append(f"- 来源：{item['source']}")
+        if item.get("published_at"):
+            lines.append(f"- 时间：{item['published_at']}")
+        lines.append(f"- 类型：{item['topic_type']}")
+        lines.append(f"- 为什么值得写：{item['why_now']}")
+        lines.append(f"- 建议角度：{' / '.join(item.get('angles') or [])}")
+        lines.append(f"- 可写观点：{' / '.join(item.get('viewpoints') or [])}")
+        lines.append(f"- 原始链接：{item['source_url']}")
+        lines.append("")
+    write_text(workspace / "topic-discovery.md", "\n".join(lines).rstrip() + "\n")
+
+
+def cmd_discover_topics(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    window_hours = int(args.window_hours or 24)
+    limit = int(args.limit or DISCOVERY_TOPIC_LIMIT)
+    payload = discover_recent_topics(window_hours=window_hours, limit=limit)
+    write_topic_discovery_artifacts(workspace, payload)
+    manifest["topic_discovery_path"] = "topic-discovery.json"
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
 
 
 def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[str, Any]:

@@ -106,6 +106,59 @@ def split_review_points(value: Any) -> tuple[list[str], list[str]]:
     return strengths, issues
 
 
+def write_title_report(workspace: Path, topic: str, selected_title: str, ranked_titles: list[dict[str, Any]]) -> None:
+    payload = {
+        "topic": topic,
+        "selected_title": selected_title,
+        "threshold": legacy.TITLE_SCORE_THRESHOLD,
+        "candidates": ranked_titles,
+        "generated_at": now_iso(),
+    }
+    write_json(workspace / "title-report.json", payload)
+    lines = [f"原始主题：{topic}", f"最终标题：{selected_title}", f"准入阈值：{legacy.TITLE_SCORE_THRESHOLD}"]
+    for item in ranked_titles[:5]:
+        lines.append(f"{item['title']}｜得分 {item['title_score']}｜{'通过' if item['title_gate_passed'] else '未通过'}")
+    ensure_text_report(workspace / "title-report.md", "标题评分报告", lines)
+
+
+def select_scored_title(
+    workspace: Path,
+    manifest: dict[str, Any],
+    ideation: dict[str, Any],
+    topic: str,
+    audience: str,
+    angle: str,
+    selected_title: str = "",
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    candidates = list(ideation.get("titles") or [])
+    ranked_titles, selected = legacy.rank_title_candidates(candidates, topic, audience, angle, selected_title)
+    if not selected or not selected.get("title_gate_passed", False):
+        boosted_candidates = candidates + legacy.generate_hot_title_variants(topic, angle, audience)
+        ranked_titles, selected = legacy.rank_title_candidates(boosted_candidates, topic, audience, angle, selected_title)
+    chosen_title = selected_title or (selected.get("title") if selected else topic)
+    if selected_title:
+        selected_report = legacy.title_dimension_score(selected_title, audience, angle)
+        ideation["selected_title_score"] = selected_report["total_score"]
+        ideation["selected_title_gate_passed"] = selected_report["passed"]
+    elif selected:
+        chosen_title = selected["title"]
+        ideation["selected_title_score"] = selected.get("title_score", 0)
+        ideation["selected_title_gate_passed"] = selected.get("title_gate_passed", False)
+    else:
+        ideation["selected_title_score"] = 0
+        ideation["selected_title_gate_passed"] = False
+    ideation["selected_title"] = chosen_title
+    ideation["title_threshold"] = legacy.TITLE_SCORE_THRESHOLD
+    ideation["titles"] = ranked_titles
+    write_title_report(workspace, topic, chosen_title, ranked_titles)
+    manifest["selected_title"] = chosen_title
+    manifest["title_report_path"] = "title-report.json"
+    manifest["title_gate_threshold"] = legacy.TITLE_SCORE_THRESHOLD
+    manifest["title_gate_passed"] = ideation.get("selected_title_gate_passed", False)
+    manifest["title_score"] = ideation.get("selected_title_score", 0)
+    return ideation, selected
+
+
 def apply_research_credibility_boost(report: dict[str, Any], research: dict[str, Any]) -> dict[str, Any]:
     sources = normalize_string_list(research.get("sources"))
     evidence_items = normalize_string_list(research.get("evidence_items"))
@@ -195,11 +248,19 @@ def cmd_titles(args: argparse.Namespace) -> int:
             "topic": topic,
             "direction": manifest.get("direction") or research.get("angle") or "",
             "titles": titles,
-            "selected_title": args.selected_title or ideation.get("selected_title") or (titles[0]["title"] if titles else ""),
             "updated_at": now_iso(),
             "provider": result.provider,
             "model": result.model,
         }
+    )
+    ideation, _ = select_scored_title(
+        workspace,
+        manifest,
+        ideation,
+        topic,
+        audience,
+        manifest.get("direction") or research.get("angle") or "",
+        args.selected_title or "",
     )
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = ideation.get("selected_title") or manifest.get("selected_title", "")
@@ -478,6 +539,10 @@ def cmd_consent(args: argparse.Namespace) -> int:
     return legacy.cmd_consent(args)
 
 
+def cmd_discover_topics(args: argparse.Namespace) -> int:
+    return legacy.cmd_discover_topics(args)
+
+
 def _run_score(workspace: str) -> dict[str, Any]:
     cmd_score(
         argparse.Namespace(
@@ -571,6 +636,35 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
         manifest["outline"] = outline_items
         update_stage(manifest, "outline", "outline_status")
     update_stage(manifest, "titles", "title_status")
+
+
+def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str, audience: str, angle: str, requested_title: str = "") -> None:
+    ideation = load_ideation(workspace)
+    if not ideation.get("titles"):
+        provider = active_text_provider()
+        research = load_research(workspace)
+        result = provider.generate_titles(
+            {
+                "topic": topic,
+                "audience": audience,
+                "angle": angle,
+                "count": 4,
+                "research": research,
+            }
+        )
+        titles = result.payload[:4] if isinstance(result.payload, list) else result.payload.get("titles", [])
+        ideation.update(
+            {
+                "topic": topic,
+                "direction": angle,
+                "titles": titles,
+                "updated_at": now_iso(),
+                "provider": result.provider,
+                "model": result.model,
+            }
+        )
+    ideation, _ = select_scored_title(workspace, manifest, ideation, topic, audience, angle, requested_title)
+    write_json(workspace / "ideation.json", ideation)
 
 
 def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: str, title: str, angle: str, audience: str) -> str:
@@ -775,7 +869,10 @@ def cmd_score(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    topic = args.topic or manifest.get("topic") or "未命名主题"
+    raw_topic = (args.topic or manifest.get("topic") or "").strip()
+    if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
+        return legacy.cmd_discover_topics(argparse.Namespace(workspace=str(workspace), window_hours=24, limit=legacy.DISCOVERY_TOPIC_LIMIT))
+    topic = raw_topic or "未命名主题"
     if not (workspace / "research.json").exists():
         cmd_research(
             argparse.Namespace(
@@ -855,12 +952,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_hosted_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    topic = args.topic or manifest.get("topic") or "未命名主题"
+    raw_topic = (args.topic or manifest.get("topic") or "").strip()
+    if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
+        return legacy.cmd_discover_topics(argparse.Namespace(workspace=str(workspace), window_hours=24, limit=legacy.DISCOVERY_TOPIC_LIMIT))
+    topic = raw_topic or "未命名主题"
     angle = args.angle or manifest.get("direction") or ""
     audience = args.audience or manifest.get("audience") or "大众读者"
     source_urls = normalize_urls(args.source_url or manifest.get("source_urls") or [])
     _write_hosted_research(workspace, manifest, topic, angle, audience, source_urls)
-    title = args.title or manifest.get("selected_title") or topic
+    _ensure_hosted_titles(workspace, manifest, topic, audience, angle, args.title or "")
+    refreshed = load_ideation(workspace)
+    title = args.title or refreshed.get("selected_title") or manifest.get("selected_title") or topic
     _write_hosted_ideation(workspace, manifest, title, args.outline_file)
     title = _import_hosted_article(workspace, manifest, args.article_file, title, args.summary, angle, audience)
     save_manifest(workspace, manifest)
@@ -1009,9 +1111,15 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--accent-color", default="#0F766E")
     run.set_defaults(func=cmd_run)
 
+    discover_topics = subparsers.add_parser("discover-topics", help="联网发现最近 12/24 小时的热点新闻与可写选题")
+    discover_topics.add_argument("--workspace", required=True)
+    discover_topics.add_argument("--window-hours", type=int, choices=[12, 24], default=24)
+    discover_topics.add_argument("--limit", type=int, default=legacy.DISCOVERY_TOPIC_LIMIT)
+    discover_topics.set_defaults(func=cmd_discover_topics)
+
     hosted_run = subparsers.add_parser("hosted-run", help="由宿主 agent 负责文本生成，再继续评分、配图、渲染与发布")
     hosted_run.add_argument("--workspace", required=True)
-    hosted_run.add_argument("--topic", required=True)
+    hosted_run.add_argument("--topic")
     hosted_run.add_argument("--angle")
     hosted_run.add_argument("--audience")
     hosted_run.add_argument("--source-url", action="append", default=[])

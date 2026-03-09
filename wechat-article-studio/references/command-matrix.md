@@ -11,8 +11,9 @@
 
 - 输入：`--workspace [--count 3]`
 - 依赖：`research.json` 推荐存在；缺失时用 manifest 信息兜底
-- 输出：更新 `ideation.json`
+- 输出：更新 `ideation.json`、`title-report.json`、`title-report.md`
 - 失败条件：工作目录不可写
+- 说明：候选标题会做多维爆款评分，并优先选择通过阈值的标题作为 `selected_title`
 
 ## `outline`
 
@@ -74,6 +75,18 @@
   - `--image-layout-family`
   - `--inline-count`
   - `--dry-run-images`
+- 特殊行为：
+  - 若 `--topic` 为空或为“开始”，会先走热点发现并输出选题建议
+
+## `discover-topics`
+
+- 输入：`--workspace [--window-hours 12|24] [--limit 8]`
+- 依赖：可联网访问新闻 RSS
+- 输出：
+  - `topic-discovery.json`
+  - `topic-discovery.md`
+- 失败条件：新闻源不可用或返回为空
+- 说明：用于“无主题启动”，抓最近 12/24 小时热点新闻并给出可写角度与观点提示
 
 ## `plan-images`
 

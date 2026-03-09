@@ -7,9 +7,13 @@ import legacy_studio as legacy
 
 STANDARD_ARTIFACTS = [
     "manifest.json",
+    "topic-discovery.json",
+    "topic-discovery.md",
     "research.json",
     "ideation.json",
     "article.md",
+    "title-report.json",
+    "title-report.md",
     "review-report.json",
     "review-report.md",
     "score-report.json",

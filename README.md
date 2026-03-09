@@ -37,6 +37,7 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 
 - Codex / ClaudeCode / OpenClaw：默认由宿主 agent 直接生成 research、标题、大纲、正文，不要求用户额外填写文本模型配置
 - 只提供主题也能跑通：`hosted-run` 会优先使用现成 `article.md` / `--article-file`，缺失时再从当前 provider 能力自动补全正文
+- 无主题启动也支持：当用户只说“开始”或不提供 topic 时，可先运行 `discover-topics` 联网发现最近 12/24 小时热点，再从建议里二次创作
 - 图片生成：提供 Gemini API Key 或 Gemini Web Cookie，或显式改用 OpenAI 图片接口
 - 统一图片风格：可选 `--image-preset`，当前内置 `cute / fresh / warm / bold / minimal / retro / pop / notion / chalkboard / editorial-grain / organic-natural / scientific-blueprint / professional-corporate / abstract-geometric / luxury-minimal / illustrated-handdrawn / photoreal-sketch`
 - 图片密度模式：支持 `--image-density minimal|balanced|per-section|rich`，默认 `rich`
@@ -49,11 +50,12 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 ### 文本与工作流
 
 - `--workspace`：工作目录。所有中间产物、图片、HTML、发布结果都会写到这里。
-- `--topic`：文章主题。`hosted-run` 必填。
+- `--topic`：文章主题。`hosted-run` 推荐传入；不传或传“开始”时会走热点发现。
 - `--angle`：切入角度或文章方向。
 - `--audience`：目标读者画像，影响写作语气和配图表达。
 - `--source-url`：可重复传入，用于补充研究来源。
 - `--title`：显式指定文章标题；不传则从正文或规划过程推断。
+- 标题准入：系统会对候选标题做多维爆款评分，并优先选择通过准入阈值的标题作为最终 `selected_title`。
 - `--article-file`：宿主 agent 已经写好的 Markdown 正文文件。
 - `--outline-file`：可选章节大纲文件，每行一个章节。
 - `--to render|publish`：只渲染，或继续走到草稿箱发布。
@@ -167,3 +169,25 @@ python -m py_compile wechat-article-studio/scripts/studio.py
 python wechat-article-studio/scripts/studio.py run --help
 python wechat-article-studio/scripts/studio.py doctor
 ```
+### 5. 无主题启动，先抓热点选题
+
+```powershell
+python wechat-article-studio/scripts/studio.py discover-topics `
+  --workspace runs/demo `
+  --window-hours 24 `
+  --limit 8
+```
+
+## 标题系统怎么工作
+
+- `topic` 只是主题，不默认等于最终标题。
+- `titles` 阶段会生成候选标题，并做多维评分：
+  - 钩子强度
+  - 具体度
+  - 利益点
+  - 人群相关性
+  - 时效热度
+- 只有满足准入阈值的标题，才会被优先选为 `selected_title`。
+- 相关产物：
+  - `title-report.json`
+  - `title-report.md`

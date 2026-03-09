@@ -21,8 +21,10 @@ MANIFEST_STATUS_DEFAULTS = {
 
 ARTIFACT_DEFAULTS = {
     "research_path": "research.json",
+    "topic_discovery_path": "topic-discovery.json",
     "ideation_path": "ideation.json",
     "article_path": "article.md",
+    "title_report_path": "title-report.json",
     "review_report_path": "review-report.json",
     "score_report_path": "score-report.json",
     "image_plan_path": "image-plan.json",
