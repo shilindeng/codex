@@ -2,7 +2,7 @@ interface:
   display_name: "公众号图文工作室"
   short_description: "公众号选题、写作、评分、配图、排版与草稿发布一体化技能"
   brand_color: "#0F766E"
-  default_prompt: "Use $wechat-article-studio to research, write, score, illustrate, format, and publish a WeChat Official Account article draft."
+  default_prompt: "Use $wechat-article-studio to research, write, score, illustrate, format, preview, publish, and verify a WeChat Official Account draft. Prefer official image providers first, require preview before publishing, and verify the draft after publishing."
 
 policy:
   allow_implicit_invocation: true

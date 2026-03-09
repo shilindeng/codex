@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -33,6 +34,11 @@ SKILL_DIR = SCRIPT_DIR.parent
 ASSETS_DIR = SKILL_DIR / "assets"
 DEFAULT_THRESHOLD = 85
 DISCLAIMER_VERSION = "1.0"
+MANIFEST_VERSION = 2
+DEFAULT_COVER_POLICY = "thumb_only"
+NETWORK_TIMEOUT = 30
+NETWORK_RETRIES = 3
+WECHAT_BATCHGET_COUNT = 20
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9pY8m7QAAAAASUVORK5CYII="
 )
@@ -260,16 +266,32 @@ def join_frontmatter(meta: dict[str, Any], body: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def load_manifest(workspace: Path) -> dict[str, Any]:
-    manifest = read_json(workspace / "manifest.json", default={}) or {}
-    manifest.setdefault("workspace", str(workspace))
+def ensure_manifest_schema(manifest: dict[str, Any], workspace: Path | None = None) -> dict[str, Any]:
+    manifest.setdefault("manifest_version", MANIFEST_VERSION)
+    if workspace is not None:
+        manifest.setdefault("workspace", str(workspace))
     manifest.setdefault("created_at", manifest.get("created_at") or now_iso())
     manifest.setdefault("updated_at", now_iso())
     manifest.setdefault("asset_paths", {})
+    manifest.setdefault("cover_policy", DEFAULT_COVER_POLICY)
+    manifest.setdefault("publish_status", "not_started")
+    manifest.setdefault("draft_media_id", "")
+    manifest.setdefault("uploaded_html_path", "")
+    manifest.setdefault("verify_status", "not_run")
+    manifest.setdefault("verify_errors", [])
+    manifest.setdefault("expected_inline_count", 0)
+    manifest.setdefault("uploaded_inline_count", 0)
+    manifest.setdefault("verified_inline_count", 0)
     return manifest
 
 
+def load_manifest(workspace: Path) -> dict[str, Any]:
+    manifest = read_json(workspace / "manifest.json", default={}) or {}
+    return ensure_manifest_schema(manifest, workspace)
+
+
 def save_manifest(workspace: Path, manifest: dict[str, Any]) -> None:
+    ensure_manifest_schema(manifest, workspace)
     manifest["updated_at"] = now_iso()
     write_json(workspace / "manifest.json", manifest)
 
@@ -308,9 +330,9 @@ HTTP_HEADERS = {
     "Accept-Encoding": "identity",
 }
 EVIDENCE_STOPWORDS = {
-    "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??", "??",
-    "??", "??", "??", "??", "??", "??", "??", "??", "???", "??", "??", "??", "??",
-    "??", "??", "??", "??", "??",
+    "我们", "你们", "他们", "这个", "那个", "这些", "那些", "一种", "一个", "一些", "已经", "没有", "不是", "以及",
+    "因为", "所以", "如果", "但是", "而且", "还有", "可以", "需要", "进行", "相关", "关于", "更多", "使用", "平台",
+    "内容", "文章", "标题", "用户", "官方", "账号", "公众号",
     "official", "account", "article", "content", "title", "about", "with", "from", "that", "this", "have", "will",
 }
 
@@ -318,20 +340,58 @@ EVIDENCE_STOPWORDS = {
 EVIDENCE_NOISE_PHRASES = ["Latest News", "Donate", "Search", "Read more", "Skip to content", "Help section", "Copyright", "Privacy"]
 
 
+def decode_response_body(raw: bytes, headers: Any, default_charset: str = "utf-8") -> str:
+    charset = None
+    if headers is not None:
+        getter = getattr(headers, "get_content_charset", None)
+        if callable(getter):
+            charset = getter()
+        if not charset:
+            content_type = headers.get("Content-Type", "")
+            match = re.search(r"charset=([\w-]+)", content_type, flags=re.I)
+            if match:
+                charset = match.group(1)
+    return raw.decode(charset or default_charset, errors="replace")
+
+
+def urlopen_with_retry(request: urllib.request.Request | str, timeout: int = NETWORK_TIMEOUT, retries: int = NETWORK_RETRIES) -> tuple[bytes, Any]:
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read()
+                content_encoding = (response.headers.get("Content-Encoding") or "").lower()
+                if content_encoding == "gzip" or raw[:2] == bytes.fromhex("1f8b"):
+                    raw = gzip.decompress(raw)
+                elif content_encoding == "deflate":
+                    raw = zlib.decompress(raw)
+                return raw, response.headers
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            if exc.code >= 500 and attempt < retries:
+                time.sleep(0.5 * attempt)
+                continue
+            message = decode_response_body(raw, exc.headers)
+            raise SystemExit(f"请求失败：HTTP {exc.code} {message}") from exc
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if attempt < retries:
+                time.sleep(0.5 * attempt)
+                continue
+            reason = getattr(exc, "reason", exc)
+            raise SystemExit(f"请求失败：{reason}") from exc
+    if last_error is not None:
+        raise SystemExit(f"请求失败：{last_error}") from last_error
+    raise SystemExit("请求失败：未知网络错误")
+
+
 def fetch_text_from_url(url: str, timeout: int = 15) -> tuple[str, str]:
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme in {"http", "https"}:
         request = urllib.request.Request(url, headers=HTTP_HEADERS)
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read()
-            content_encoding = (response.headers.get("Content-Encoding") or "").lower()
-            if content_encoding == "gzip" or raw[:2] == bytes.fromhex("1f8b"):
-                raw = gzip.decompress(raw)
-            elif content_encoding == "deflate":
-                raw = zlib.decompress(raw)
-            charset = response.headers.get_content_charset() or "utf-8"
-            content_type = response.headers.get("Content-Type", "")
-            return raw.decode(charset, errors="replace"), content_type
+        raw, headers = urlopen_with_retry(request, timeout=timeout)
+        content_type = headers.get("Content-Type", "")
+        return decode_response_body(raw, headers), content_type
     if parsed.scheme == "file":
         path = Path(urllib.request.url2pathname(parsed.path))
         return path.read_text(encoding="utf-8"), "text/plain"
@@ -377,7 +437,7 @@ def extract_keywords_for_evidence(title: str, body: str) -> list[str]:
 
 def split_evidence_sentences(text: str) -> list[str]:
     normalized = re.sub(r"\s+", " ", text)
-    parts = re.split(r"(?<=[???!??;])", normalized)
+    parts = re.split(r"(?<=[。！？!?；;])", normalized)
     sentences = []
     for part in parts:
         sentence = part.strip()
@@ -398,11 +458,11 @@ def score_evidence_sentence(sentence: str, keywords: list[str]) -> float:
     for keyword in keywords:
         if keyword.lower() in sentence.lower():
             score += 2.0 if len(keyword) >= 3 else 1.0
-    if re.search(r"\d{4}?|\d+(?:\.\d+)?%|\d+(?:\.\d+)??|\d+(?:\.\d+)??|\d+(?:\.\d+)??", sentence):
+    if re.search(r"\d{4}年|\d+(?:\.\d+)?%|\d+(?:\.\d+)?(?:万|亿|倍|个|项|次)", sentence):
         score += 2.5
-    if any(word in sentence for word in ["??", "??", "????", "according", "survey", "report", "study"]):
+    if any(word in sentence for word in ["据", "显示", "研究", "报告", "according", "survey", "report", "study"]):
         score += 1.5
-    if any(mark in sentence for mark in ["?", ":", "?", "("]):
+    if any(mark in sentence for mark in ["：", ":", "（", "("]):
         score += 0.5
     return score
 
@@ -860,6 +920,31 @@ def build_execution_section(sections: list[dict[str, Any]]) -> tuple[str, list[s
     return "最后给你一个可执行清单", bullets
 
 
+def build_reference_section(manifest: dict[str, Any], evidence_report: dict[str, Any]) -> tuple[str, list[str]]:
+    lines: list[str] = []
+    seen: set[str] = set()
+    for item in (evidence_report or {}).get("items") or []:
+        url = (item.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        title = (item.get("page_title") or urllib.parse.urlparse(url).netloc.replace("www.", "") or "参考来源").strip()
+        lines.append(f"{title}：{url}")
+        seen.add(url)
+    for url in manifest.get("source_urls") or []:
+        normalized = (url or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        domain = urllib.parse.urlparse(normalized).netloc.replace("www.", "") or normalized
+        lines.append(f"{domain}：{normalized}")
+        seen.add(normalized)
+    if not lines:
+        lines = [
+            "补充 2~3 个可以公开验证的来源链接。",
+            "优先使用官方发布、文档、研究或权威媒体来源。",
+        ]
+    return "参考来源", lines
+
+
 REFERENCE_SECTION_TITLES = {
     "参考来源",
     "参考资料",
@@ -1102,13 +1187,11 @@ def auto_rewrite_article(title: str, meta: dict[str, str], body: str, report: di
 def image_provider_from_env(explicit: str | None) -> str:
     if explicit:
         return explicit
-    if os.getenv("GEMINI_WEB_COOKIE") or os.getenv("GEMINI_WEB_COOKIE_PATH") or os.getenv("GEMINI_WEB_CHROME_PROFILE_DIR"):
-        return "gemini-web"
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
         return "gemini-api"
     if os.getenv("OPENAI_API_KEY"):
         return "openai-image"
-    raise SystemExit("未检测到可用图片后端。请显式指定 --provider，或设置 GEMINI_WEB_COOKIE / GEMINI_API_KEY / OPENAI_API_KEY。")
+    raise SystemExit("未检测到稳定图片后端。默认仅自动选择 gemini-api 或 openai-image；如需 gemini-web，请显式传 --provider gemini-web。")
 
 
 def consent_dir() -> Path:
@@ -1184,26 +1267,31 @@ def ensure_gemini_web_vendor() -> Path:
         target = root / relative
         ensure_dir(target.parent)
         url = f"{base_url}/{relative}"
-        with urllib.request.urlopen(url) as response:
-            target.write_bytes(response.read())
+        target.write_bytes(download_binary(url))
     return root
 
 
-def request_json(url: str, data: dict[str, Any] | None = None, headers: dict[str, str] | None = None, method: str | None = None) -> dict[str, Any]:
+def request_json(
+    url: str,
+    data: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    method: str | None = None,
+    timeout: int = NETWORK_TIMEOUT,
+    retries: int = NETWORK_RETRIES,
+) -> dict[str, Any]:
     payload = None if data is None else json.dumps(data, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json; charset=utf-8", **(headers or {})}, method=method)
     try:
-        with urllib.request.urlopen(req) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw)
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"请求失败：{exc.code} {raw}") from exc
+        raw, response_headers = urlopen_with_retry(req, timeout=timeout, retries=retries)
+        return json.loads(decode_response_body(raw, response_headers))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"请求失败：响应不是合法 JSON：{url}") from exc
 
 
-def download_binary(url: str) -> bytes:
-    with urllib.request.urlopen(url) as response:
-        return response.read()
+def download_binary(url: str, timeout: int = NETWORK_TIMEOUT, retries: int = NETWORK_RETRIES) -> bytes:
+    request = urllib.request.Request(url, headers=HTTP_HEADERS)
+    raw, _ = urlopen_with_retry(request, timeout=timeout, retries=retries)
+    return raw
 
 
 def save_binary(path: Path, payload: bytes) -> None:
@@ -1336,11 +1424,43 @@ def generate_gemini_web_image(prompt: str, output_path: Path) -> dict[str, Any]:
     if env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
         command.extend(["--profile-dir", env["GEMINI_WEB_CHROME_PROFILE_DIR"]])
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, env=env, check=True)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stdout = (exc.stdout or "").strip()
+        stderr = (exc.stderr or "").strip()
+        combined = "\n".join(part for part in [stdout, stderr] if part).lower()
+        auth_markers = [
+            "autherror",
+            "unauthorized",
+            "login",
+            "sign in",
+            "signin",
+            "__secure-1psid",
+            "__secure-1psidts",
+            "cookie",
+            "refresh cookies",
+            "failed to refresh cookies",
+        ]
+        if any(marker in combined for marker in auth_markers):
+            raise SystemExit(
+                "Gemini 登录态可能已失效，请重新登录 Gemini 后再试。"
+                " 如果你使用的是 cookie 文件，请刷新 cookie；"
+                " 如果你使用的是浏览器 Profile，请先在对应浏览器里确认 Gemini 已登录。"
+            ) from exc
+        detail = "\n".join(part for part in [stdout, stderr] if part)
+        raise SystemExit(f"gemini-web 图片生成失败：{detail or str(exc)}") from exc
     finally:
         if cookie_temp and cookie_temp.exists():
             cookie_temp.unlink(missing_ok=True)
-    stdout = completed.stdout.strip()
+    stdout = (completed.stdout or "").strip()
     try:
         payload = json.loads(stdout) if stdout else {}
     except json.JSONDecodeError:
@@ -1476,7 +1596,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
     if not article_path.exists():
-        raise SystemExit(f"????????{article_path}")
+        raise SystemExit(f"找不到待评分文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
     title = infer_title(manifest, meta, body)
     threshold = args.threshold or manifest.get("score_threshold") or DEFAULT_THRESHOLD
@@ -2036,22 +2156,6 @@ def markdown_to_html(body: str) -> str:
 def build_reference_cards_wechat(reference_entries: list[dict[str, Any]], accent_color: str) -> str:
     if not reference_entries:
         return ""
-    items = []
-    for entry in reference_entries:
-        desc = html.escape(entry["title"] or entry["description"] or entry["domain"])
-        url = html.escape(entry["url"], quote=True)
-        items.append(
-            '<li style="margin:12px 0;line-height:1.9;color:#1f2937;">'
-            f'<span style="color:#111827;">[{entry["index"]}] {desc}</span><br />'
-            f'<a style="display:inline-block;margin-top:2px;font-size:13px;line-height:1.7;color:{accent_color};text-decoration:none;word-break:break-all;" href="{url}">{url}</a>'
-            '</li>'
-        )
-    return '<ol style="margin:14px 0 0;padding-left:20px;">' + ''.join(items) + '</ol>'
-
-
-def build_reference_cards_wechat(reference_entries: list[dict[str, Any]], accent_color: str) -> str:
-    if not reference_entries:
-        return ""
     cards = []
     for entry in reference_entries:
         cards.append(
@@ -2183,8 +2287,8 @@ def request_multipart(url: str, file_path: Path) -> dict[str, Any]:
     mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
     body, boundary = multipart_form({}, {"media": (file_path.name, file_path.read_bytes(), mime)})
     req = urllib.request.Request(url, data=body, headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}, method="POST")
-    with urllib.request.urlopen(req) as response:
-        return json.loads(response.read().decode("utf-8"))
+    raw, response_headers = urlopen_with_retry(req)
+    return json.loads(decode_response_body(raw, response_headers))
 
 
 def wechat_access_token(app_id: str, app_secret: str) -> str:
@@ -2218,22 +2322,235 @@ def upload_wechat_inline(access_token: str, image_path: Path) -> str:
     return url
 
 
-def replace_local_images(html_text: str, html_path: Path, access_token: str) -> tuple[str, list[dict[str, Any]]]:
+IMG_TAG_PATTERN = re.compile(r"<img\b[^>]*>", flags=re.I)
+IMG_ATTR_PATTERN = re.compile(
+    r"(?P<name>src|data-src)\s*=\s*(?:(?P<quote>[\"'])(?P<qvalue>.*?)(?P=quote)|(?P<uvalue>[^\s>]+))",
+    flags=re.I,
+)
+
+
+def extract_image_attr_value(match: re.Match[str]) -> str:
+    return html.unescape(match.group("qvalue") if match.group("qvalue") is not None else (match.group("uvalue") or ""))
+
+
+def is_remote_image_reference(value: str) -> bool:
+    lower = value.strip().lower()
+    return lower.startswith("http://") or lower.startswith("https://") or lower.startswith("data:")
+
+
+def is_wechat_image_url(value: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(value)
+    except ValueError:
+        return False
+    host = (parsed.netloc or "").lower()
+    return host.endswith("qpic.cn") or host.endswith("mmbiz.qpic.cn")
+
+
+def is_local_like_image_reference(value: str) -> bool:
+    raw = value.strip()
+    lower = raw.lower()
+    if not raw or is_remote_image_reference(raw):
+        return False
+    if lower.startswith("file://"):
+        return True
+    if raw.startswith(("./", "../", "/", "\\")):
+        return True
+    if re.match(r"^[A-Za-z]:[\\/]", raw):
+        return True
+    return bool(re.search(r"\.(png|jpe?g|gif|webp|bmp|svg)(?:$|[?#])", lower))
+
+
+def resolve_html_image_path(value: str, html_path: Path) -> Path | None:
+    raw = value.strip()
+    if not is_local_like_image_reference(raw):
+        return None
+    if raw.lower().startswith("file://"):
+        parsed = urllib.parse.urlparse(raw)
+        return Path(urllib.request.url2pathname(parsed.path)).resolve()
+    if re.match(r"^[A-Za-z]:[\\/]", raw) or raw.startswith("\\"):
+        return Path(raw).resolve()
+    if raw.startswith("/"):
+        return Path(raw).resolve()
+    return (html_path.parent / raw).resolve()
+
+
+def count_local_image_candidates(html_text: str, html_path: Path) -> int:
+    count = 0
+    for tag_match in IMG_TAG_PATTERN.finditer(html_text):
+        tag = tag_match.group(0)
+        attrs = [extract_image_attr_value(attr) for attr in IMG_ATTR_PATTERN.finditer(tag)]
+        if any(resolve_html_image_path(value, html_path) is not None for value in attrs):
+            count += 1
+    return count
+
+
+def count_wechat_remote_images(html_text: str) -> int:
+    count = 0
+    for tag_match in IMG_TAG_PATTERN.finditer(html_text):
+        tag = tag_match.group(0)
+        attrs = [extract_image_attr_value(attr) for attr in IMG_ATTR_PATTERN.finditer(tag)]
+        if any(is_wechat_image_url(value) for value in attrs):
+            count += 1
+    return count
+
+
+def find_residual_local_image_refs(html_text: str, html_path: Path | None = None) -> list[str]:
+    residuals: list[str] = []
+    for tag_match in IMG_TAG_PATTERN.finditer(html_text):
+        tag = tag_match.group(0)
+        for attr in IMG_ATTR_PATTERN.finditer(tag):
+            value = extract_image_attr_value(attr)
+            if is_local_like_image_reference(value):
+                if html_path is None or resolve_html_image_path(value, html_path) is not None:
+                    residuals.append(value)
+    return list(dict.fromkeys(residuals))
+
+
+def replace_local_images(
+    html_text: str,
+    html_path: Path,
+    access_token: str,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], int, int]:
     uploads: list[dict[str, Any]] = []
+    skipped_uploads: list[dict[str, Any]] = []
+    upload_cache: dict[str, str] = {}
+    expected_inline_count = 0
+    replaced_inline_count = 0
 
-    def replacer(match: re.Match[str]) -> str:
-        src = match.group(1)
-        if src.startswith("http://") or src.startswith("https://") or src.startswith("data:"):
-            return match.group(0)
-        image_path = (html_path.parent / src).resolve()
-        if not image_path.exists():
-            return match.group(0)
-        remote_url = upload_wechat_inline(access_token, image_path)
-        uploads.append({"local": str(image_path), "remote": remote_url})
-        return match.group(0).replace(src, remote_url)
+    def replace_tag(match: re.Match[str]) -> str:
+        nonlocal expected_inline_count, replaced_inline_count
+        original_tag = match.group(0)
+        attr_matches = list(IMG_ATTR_PATTERN.finditer(original_tag))
+        local_entries: list[tuple[re.Match[str], str, Path | None]] = []
+        for attr in attr_matches:
+            raw_value = extract_image_attr_value(attr)
+            resolved = resolve_html_image_path(raw_value, html_path)
+            if resolved is not None:
+                local_entries.append((attr, raw_value, resolved))
+        if not local_entries:
+            return original_tag
+        expected_inline_count += 1
+        valid_entry = next((entry for entry in local_entries if entry[2] and entry[2].exists()), None)
+        if valid_entry is None:
+            skipped_uploads.append(
+                {
+                    "local": local_entries[0][1],
+                    "reason": "file_not_found",
+                    "html_path": str(html_path),
+                }
+            )
+            return original_tag
+        image_path = valid_entry[2]
+        cache_key = str(image_path)
+        remote_url = upload_cache.get(cache_key)
+        if remote_url is None:
+            remote_url = upload_wechat_inline(access_token, image_path)
+            upload_cache[cache_key] = remote_url
+            uploads.append({"local": str(image_path), "remote": remote_url})
+        updated_tag = original_tag
+        for attr, raw_value, resolved in local_entries:
+            if resolved is None:
+                skipped_uploads.append({"local": raw_value, "reason": "unresolvable_path", "html_path": str(html_path)})
+                continue
+            if resolved != image_path:
+                skipped_uploads.append({"local": raw_value, "reason": "multiple_local_refs_in_single_tag", "html_path": str(html_path)})
+                continue
+            quote = attr.group("quote") or '"'
+            new_fragment = f'{attr.group("name")}={quote}{html.escape(remote_url, quote=True)}{quote}'
+            updated_tag = updated_tag.replace(attr.group(0), new_fragment, 1)
+        replaced_inline_count += 1
+        return updated_tag
 
-    updated = re.sub(r"<img[^>]+src=[\"']([^\"']+)[\"']", replacer, html_text)
-    return updated, uploads
+    updated = IMG_TAG_PATTERN.sub(replace_tag, html_text)
+    return updated, uploads, skipped_uploads, expected_inline_count, replaced_inline_count
+
+
+def resolve_wechat_credentials(required: bool) -> tuple[str | None, str | None, list[str]]:
+    app_id = os.getenv("WECHAT_APP_ID")
+    app_secret = os.getenv("WECHAT_APP_SECRET")
+    missing = []
+    if not app_id:
+        missing.append("WECHAT_APP_ID")
+    if not app_secret:
+        missing.append("WECHAT_APP_SECRET")
+    if required and missing:
+        raise SystemExit(f"缺少微信发布环境变量：{', '.join(missing)}")
+    return app_id, app_secret, missing
+
+
+def wechat_draft_batchget(access_token: str, offset: int = 0, count: int = WECHAT_BATCHGET_COUNT, no_content: int = 0) -> dict[str, Any]:
+    response = request_json(
+        f"https://api.weixin.qq.com/cgi-bin/draft/batchget?access_token={urllib.parse.quote(access_token)}",
+        data={"offset": offset, "count": count, "no_content": no_content},
+        method="POST",
+    )
+    if response.get("errcode"):
+        raise SystemExit(f"微信草稿回读失败：{json.dumps(response, ensure_ascii=False)}")
+    return response
+
+
+def select_draft_item(batchget_response: dict[str, Any], media_id: str | None) -> tuple[dict[str, Any] | None, str, list[str]]:
+    items = batchget_response.get("item") or []
+    if not items:
+        return None, media_id or "", ["草稿箱回读为空。"]
+    if media_id:
+        for item in items:
+            if item.get("media_id") == media_id:
+                return item, media_id, []
+        latest = items[0]
+        return latest, latest.get("media_id") or media_id, [f"未在草稿回读中找到 media_id={media_id}，已回退到最新草稿进行验收。"]
+    latest = items[0]
+    return latest, latest.get("media_id") or "", []
+
+
+def verify_draft_publication(
+    workspace: Path,
+    access_token: str,
+    media_id: str | None = None,
+    expected_inline_count: int | None = None,
+) -> dict[str, Any]:
+    batchget_response = wechat_draft_batchget(access_token)
+    draft_batchget_path = workspace / "draft-batchget.json"
+    latest_content_path = workspace / "latest-draft-content.html"
+    latest_report_path = workspace / "latest-draft-report.json"
+    write_json(draft_batchget_path, batchget_response)
+    selected_item, selected_media_id, errors = select_draft_item(batchget_response, media_id)
+    news_item = (((selected_item or {}).get("content") or {}).get("news_item") or [{}])[0]
+    content_html = news_item.get("content") or ""
+    write_text(latest_content_path, content_html)
+    if not content_html:
+        errors.append("草稿回读内容为空。")
+    if expected_inline_count is None:
+        publish_result = read_json(workspace / "publish-result.json", default={}) or {}
+        manifest = load_manifest(workspace)
+        expected_inline_count = int(
+            publish_result.get("expected_inline_count")
+            or manifest.get("expected_inline_count")
+            or 0
+        )
+    residual_local_refs = find_residual_local_image_refs(content_html)
+    verified_inline_count = count_wechat_remote_images(content_html)
+    if expected_inline_count and verified_inline_count < expected_inline_count:
+        errors.append(f"草稿回读只发现 {verified_inline_count} 张微信图片，少于预期的 {expected_inline_count} 张。")
+    if residual_local_refs:
+        preview = ", ".join(residual_local_refs[:3])
+        errors.append(f"草稿回读仍包含本地图片路径：{preview}")
+    if selected_item and not news_item.get("thumb_media_id"):
+        errors.append("草稿回读缺少 thumb_media_id。")
+    report = {
+        "draft_media_id": selected_media_id,
+        "expected_inline_count": expected_inline_count,
+        "verified_inline_count": verified_inline_count,
+        "verify_status": "passed" if not errors else "failed",
+        "verify_errors": errors,
+        "residual_local_refs": residual_local_refs,
+        "thumb_media_id": news_item.get("thumb_media_id") or "",
+        "draft_batchget_path": str(draft_batchget_path),
+        "latest_draft_content_path": str(latest_content_path),
+    }
+    write_json(latest_report_path, report)
+    return report
 
 
 def derive_digest(meta: dict[str, str], manifest: dict[str, Any], body: str) -> str:
@@ -2243,15 +2560,15 @@ def derive_digest(meta: dict[str, str], manifest: dict[str, Any], body: str) -> 
 def cmd_publish(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    html_rel = manifest.get("wechat_html_path") or manifest.get("html_path") or args.input or "article.html"
+    html_rel = args.input or manifest.get("wechat_html_path") or manifest.get("html_path") or "article.html"
     html_path = workspace / html_rel
     assembled_path = workspace / (manifest.get("assembled_path") or "assembled.md")
     article_source = assembled_path if assembled_path.exists() else workspace / "article.md"
     if not html_path.exists():
         if not article_source.exists():
-            raise SystemExit(f"??? HTML ???{html_path}")
+            raise SystemExit(f"找不到待发布的 HTML 文件：{html_path}")
         meta, body = split_frontmatter(read_text(article_source))
-        title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "?????"
+        title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名文章"
         digest_preview = meta.get("summary") or manifest.get("summary") or extract_summary(body)
         fragment = build_wechat_fragment(markdown_to_html(strip_leading_h1(body, title)), title, digest_preview, "#0F766E")
         html_path = workspace / "article.wechat.html"
@@ -2259,36 +2576,56 @@ def cmd_publish(args: argparse.Namespace) -> int:
         manifest["wechat_html_path"] = relative_posix(html_path, workspace)
         save_manifest(workspace, manifest)
     meta, body = split_frontmatter(read_text(article_source))
-    title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "?????"
+    title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名文章"
     digest = args.digest or derive_digest(meta, manifest, body)
     author = args.author if args.author is not None else (meta.get("author") or manifest.get("author") or "")
     cover_rel = args.cover or manifest.get("asset_paths", {}).get("cover")
     cover_path = (workspace / cover_rel).resolve() if cover_rel else None
     if not cover_path or not cover_path.exists():
-        raise SystemExit("?????????????????????? assemble?")
-    app_id = os.getenv("WECHAT_APP_ID")
-    app_secret = os.getenv("WECHAT_APP_SECRET")
-    if not app_id or not app_secret:
-        raise SystemExit("?? WECHAT_APP_ID ? WECHAT_APP_SECRET?")
+        raise SystemExit("找不到封面图。请先完成 assemble，或通过 --cover 显式传入封面图路径。")
+    html_text = read_text(html_path)
+    expected_inline_count = count_local_image_candidates(html_text, html_path)
     result: dict[str, Any] = {
         "title": title,
         "digest": digest,
         "author": author,
         "html_path": str(html_path),
         "cover_path": str(cover_path),
+        "cover_policy": manifest.get("cover_policy") or DEFAULT_COVER_POLICY,
+        "uploaded_html_path": "",
+        "draft_media_id": "",
+        "expected_inline_count": expected_inline_count,
+        "uploaded_inline_count": 0,
+        "verified_inline_count": 0,
+        "verify_status": "not_run",
+        "verify_errors": [],
+        "skipped_uploads": [],
         "mode": "dry-run" if args.dry_run else "live",
         "generated_at": now_iso(),
     }
     if args.dry_run:
-        token = wechat_access_token(app_id, app_secret)
-        result["access_token_verified"] = bool(token)
+        app_id, app_secret, missing_env = resolve_wechat_credentials(required=False)
+        result["missing_env"] = missing_env
+        result["access_token_verified"] = False
+        if app_id and app_secret:
+            token = wechat_access_token(app_id, app_secret)
+            result["access_token_verified"] = bool(token)
+        manifest["publish_status"] = "dry_run_ready"
+        manifest["expected_inline_count"] = expected_inline_count
         write_json(workspace / "publish-result.json", result)
+        save_manifest(workspace, manifest)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    if not getattr(args, "confirmed_publish", False):
+        raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
+    if not manifest.get("publish_intent"):
+        raise SystemExit("当前工作目录未记录 publish_intent=true。请先在用户明确确认后用 ideate --publish-intent 更新工作目录。")
+    app_id, app_secret, _ = resolve_wechat_credentials(required=True)
     token = wechat_access_token(app_id, app_secret)
     thumb_media_id = upload_wechat_cover(token, cover_path)
-    html_text = read_text(html_path)
-    updated_html, uploads = replace_local_images(html_text, html_path, token)
+    updated_html, uploads, skipped_uploads, expected_inline_count, replaced_inline_count = replace_local_images(html_text, html_path, token)
+    uploaded_html_path = workspace / "article.wechat.uploaded.html"
+    write_text(uploaded_html_path, updated_html)
     payload = {
         "articles": [
             {
@@ -2309,12 +2646,145 @@ def cmd_publish(args: argparse.Namespace) -> int:
         method="POST",
     )
     if response.get("errcode"):
-        raise SystemExit(f"?????????{json.dumps(response, ensure_ascii=False)}")
-    result.update({"thumb_media_id": thumb_media_id, "inline_uploads": uploads, "response": response})
+        raise SystemExit(f"微信草稿发布失败：{json.dumps(response, ensure_ascii=False)}")
+    draft_media_id = response.get("media_id") or ""
+    verify_report = verify_draft_publication(workspace, token, media_id=draft_media_id, expected_inline_count=expected_inline_count)
+    result.update(
+        {
+            "uploaded_html_path": str(uploaded_html_path),
+            "thumb_media_id": thumb_media_id,
+            "draft_media_id": draft_media_id,
+            "inline_uploads": uploads,
+            "expected_inline_count": expected_inline_count,
+            "uploaded_inline_count": replaced_inline_count,
+            "verified_inline_count": verify_report["verified_inline_count"],
+            "verify_status": verify_report["verify_status"],
+            "verify_errors": verify_report["verify_errors"],
+            "skipped_uploads": skipped_uploads,
+            "response": response,
+            "draft_batchget_path": verify_report["draft_batchget_path"],
+            "latest_draft_content_path": verify_report["latest_draft_content_path"],
+        }
+    )
     write_json(workspace / "publish-result.json", result)
-    manifest["publish_status"] = "draft_saved"
+    manifest["draft_media_id"] = draft_media_id
+    manifest["uploaded_html_path"] = relative_posix(uploaded_html_path, workspace)
+    manifest["expected_inline_count"] = expected_inline_count
+    manifest["uploaded_inline_count"] = replaced_inline_count
+    manifest["verified_inline_count"] = verify_report["verified_inline_count"]
+    manifest["verify_status"] = verify_report["verify_status"]
+    manifest["verify_errors"] = verify_report["verify_errors"]
+    manifest["publish_status"] = "verified" if verify_report["verify_status"] == "passed" else "draft_verify_failed"
     save_manifest(workspace, manifest)
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if verify_report["verify_status"] == "passed" else 2
+
+
+def cmd_verify_draft(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    app_id, app_secret, _ = resolve_wechat_credentials(required=True)
+    token = wechat_access_token(app_id, app_secret)
+    report = verify_draft_publication(
+        workspace,
+        token,
+        media_id=args.media_id or manifest.get("draft_media_id") or None,
+        expected_inline_count=int(manifest.get("expected_inline_count") or 0),
+    )
+    manifest["draft_media_id"] = report.get("draft_media_id") or manifest.get("draft_media_id") or ""
+    manifest["verified_inline_count"] = report["verified_inline_count"]
+    manifest["verify_status"] = report["verify_status"]
+    manifest["verify_errors"] = report["verify_errors"]
+    manifest["publish_status"] = "verified" if report["verify_status"] == "passed" else manifest.get("publish_status") or "draft_verify_failed"
+    save_manifest(workspace, manifest)
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0 if report["verify_status"] == "passed" else 2
+
+
+def can_write_directory(path: Path) -> bool:
+    try:
+        ensure_dir(path)
+        handle = tempfile.NamedTemporaryFile(dir=path, prefix="doctor-", suffix=".tmp", delete=False)
+        handle.close()
+        Path(handle.name).unlink(missing_ok=True)
+        return True
+    except Exception:
+        return False
+
+
+def doctor_provider_status(provider: str) -> dict[str, Any]:
+    if provider == "gemini-api":
+        ok = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+        return {
+            "ok": ok,
+            "missing": [] if ok else ["GEMINI_API_KEY/GOOGLE_API_KEY"],
+            "notes": ["官方 Gemini 图片接口，推荐作为稳定路径。"],
+        }
+    if provider == "openai-image":
+        ok = bool(os.getenv("OPENAI_API_KEY"))
+        return {
+            "ok": ok,
+            "missing": [] if ok else ["OPENAI_API_KEY"],
+            "notes": ["官方 OpenAI 图片接口，推荐作为稳定路径。"],
+        }
+    vendor_missing = [relative for relative in IMAGE_PROVIDER_FILES if not (vendor_root() / relative).exists()]
+    cookie_ready = bool(os.getenv("GEMINI_WEB_COOKIE") or os.getenv("GEMINI_WEB_COOKIE_PATH") or os.getenv("GEMINI_WEB_CHROME_PROFILE_DIR"))
+    bun_ready = shutil.which("bun") is not None
+    npx_ready = shutil.which("npx") is not None
+    ok = cookie_ready and (bun_ready or npx_ready) and not vendor_missing
+    missing: list[str] = []
+    if not cookie_ready:
+        missing.append("GEMINI_WEB_COOKIE/GEMINI_WEB_COOKIE_PATH/GEMINI_WEB_CHROME_PROFILE_DIR")
+    if not (bun_ready or npx_ready):
+        missing.append("bun 或 npx")
+    if vendor_missing:
+        missing.append("vendor 文件不完整")
+    return {
+        "ok": ok,
+        "missing": missing,
+        "notes": ["非官方 best-effort 路径，仅在显式指定 --provider gemini-web 时启用。"],
+        "bun_available": bun_ready,
+        "npx_available": npx_ready,
+        "vendor_missing_count": len(vendor_missing),
+    }
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    workspace = Path(args.workspace).resolve() if args.workspace else Path.cwd().resolve()
+    workspace_target = workspace if workspace.exists() else workspace.parent
+    auto_provider = None
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        auto_provider = "gemini-api"
+    elif os.getenv("OPENAI_API_KEY"):
+        auto_provider = "openai-image"
+    provider = args.provider or auto_provider
+    report = {
+        "python": {
+            "version": sys.version.split()[0],
+            "ok": sys.version_info >= (3, 10),
+        },
+        "platform": {
+            "os_name": os.name,
+            "sys_platform": sys.platform,
+        },
+        "workspace": {
+            "path": str(workspace),
+            "exists": workspace.exists(),
+            "writable": can_write_directory(workspace_target),
+        },
+        "wechat": {
+            "has_app_id": bool(os.getenv("WECHAT_APP_ID")),
+            "has_app_secret": bool(os.getenv("WECHAT_APP_SECRET")),
+        },
+        "auto_provider": auto_provider,
+        "selected_provider": provider,
+        "providers": {
+            "gemini-api": doctor_provider_status("gemini-api"),
+            "openai-image": doctor_provider_status("openai-image"),
+            "gemini-web": doctor_provider_status("gemini-web"),
+        },
+    }
+    print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
 def cmd_consent(args: argparse.Namespace) -> int:
@@ -2336,10 +2806,22 @@ def cmd_consent(args: argparse.Namespace) -> int:
 
 
 def cmd_all(args: argparse.Namespace) -> int:
-    namespace = argparse.Namespace(workspace=args.workspace, input=None, threshold=args.threshold, fail_below=False, no_rewrite=False, rewrite_output=None)
-    cmd_score(namespace)
-    cmd_plan_images(argparse.Namespace(workspace=args.workspace, provider=args.provider, inline_count=args.inline_count))
-    cmd_generate_images(
+    score_rc = cmd_score(
+        argparse.Namespace(
+            workspace=args.workspace,
+            input=None,
+            threshold=args.threshold,
+            fail_below=True,
+            no_rewrite=False,
+            rewrite_output=None,
+        )
+    )
+    if score_rc != 0:
+        return score_rc
+    plan_rc = cmd_plan_images(argparse.Namespace(workspace=args.workspace, provider=args.provider, inline_count=args.inline_count))
+    if plan_rc != 0:
+        return plan_rc
+    image_rc = cmd_generate_images(
         argparse.Namespace(
             workspace=args.workspace,
             provider=args.provider,
@@ -2348,10 +2830,28 @@ def cmd_all(args: argparse.Namespace) -> int:
             openai_model=args.openai_model,
         )
     )
-    cmd_assemble(argparse.Namespace(workspace=args.workspace))
-    cmd_render(argparse.Namespace(workspace=args.workspace, input=None, output="article.html", accent_color=args.accent_color))
+    if image_rc != 0:
+        return image_rc
+    assemble_rc = cmd_assemble(argparse.Namespace(workspace=args.workspace))
+    if assemble_rc != 0:
+        return assemble_rc
+    render_rc = cmd_render(argparse.Namespace(workspace=args.workspace, input=None, output="article.html", accent_color=args.accent_color))
+    if render_rc != 0:
+        return render_rc
     if args.publish:
-        cmd_publish(argparse.Namespace(workspace=args.workspace, input=None, digest=None, author=None, cover=None, dry_run=args.dry_run_publish))
+        publish_rc = cmd_publish(
+            argparse.Namespace(
+                workspace=args.workspace,
+                input=None,
+                digest=None,
+                author=None,
+                cover=None,
+                dry_run=args.dry_run_publish,
+                confirmed_publish=args.confirmed_publish,
+            )
+        )
+        if publish_rc != 0:
+            return publish_rc
     return 0
 
 
@@ -2427,7 +2927,18 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--author")
     publish.add_argument("--cover")
     publish.add_argument("--dry-run", action="store_true")
+    publish.add_argument("--confirmed-publish", action="store_true")
     publish.set_defaults(func=cmd_publish)
+
+    verify_draft = subparsers.add_parser("verify-draft", help="回读公众号草稿并做图片验收")
+    verify_draft.add_argument("--workspace", required=True)
+    verify_draft.add_argument("--media-id")
+    verify_draft.set_defaults(func=cmd_verify_draft)
+
+    doctor = subparsers.add_parser("doctor", help="检查本地环境和发布依赖")
+    doctor.add_argument("--workspace")
+    doctor.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    doctor.set_defaults(func=cmd_doctor)
 
     consent = subparsers.add_parser("consent", help="管理 gemini-web 同意状态")
     consent.add_argument("--accept", action="store_true")
@@ -2442,6 +2953,7 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--dry-run-images", action="store_true")
     all_cmd.add_argument("--publish", action="store_true")
     all_cmd.add_argument("--dry-run-publish", action="store_true")
+    all_cmd.add_argument("--confirmed-publish", action="store_true")
     all_cmd.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     all_cmd.add_argument("--openai-model", default="gpt-image-1")
     all_cmd.add_argument("--accent-color", default="#0F766E")
