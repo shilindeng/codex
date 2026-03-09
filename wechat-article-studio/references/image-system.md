@@ -20,6 +20,14 @@
 - `pop`：流行拼贴
 - `notion`：知识卡片
 - `chalkboard`：黑板讲解
+- `editorial-grain`：杂志颗粒
+- `organic-natural`：自然有机
+- `scientific-blueprint`：科学蓝图
+- `professional-corporate`：专业商务
+- `abstract-geometric`：抽象几何
+- `luxury-minimal`：轻奢极简
+- `illustrated-handdrawn`：手绘讲述
+- `photoreal-sketch`：写实速写
 
 预设一旦指定，会统一覆盖整篇文章的默认 `theme/style/mood/custom_visual_brief`，从而让封面图、信息图、正文插图保持同一视觉语言。仍可用 `--image-theme`、`--image-style`、`--image-mood`、`--custom-visual-brief` 做少量覆盖。
 
@@ -33,6 +41,22 @@
 - `rich`：更丰富的插图覆盖，默认值
 
 当前 skill 默认使用 `rich`，但仍会结合章节类型、信息密度和文内标记，避免无意义堆图。
+
+## 布局家族
+
+支持 `--image-layout-family`：
+
+- `editorial`：更偏封面和正文插图的编辑式构图
+- `process`：更偏流程图和步骤图
+- `comparison`：更偏对比图
+- `timeline`：更偏时间轴和线性推进
+- `hierarchy`：更偏层级树与结构关系
+- `dashboard`：更偏数据卡片、仪表板、矩阵
+- `map`：更偏地理映射
+- `radial`：更偏中心辐射
+- `list`：更偏清单、卡片堆叠
+
+布局家族不会破坏整篇文章的统一主题，只会影响每张图优先选哪组版式模板。
 
 ## 文内标记
 
@@ -72,6 +96,8 @@
 - `label_strategy`：允许出现的极少量标签
 - `text_budget`：文字预算
 - `aspect_policy`：比例与裁切策略
+
+`generate-images` 会优先回读 `prompts/images/*.md` 中的 `## Prompt` 段落。也就是说，你可以先人工微调 prompt 文件，再执行真实出图。
 
 ## 默认规划
 

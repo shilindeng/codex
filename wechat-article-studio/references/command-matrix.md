@@ -55,6 +55,12 @@
 - 依赖：工作目录可写；发布时需要微信凭证
 - 输出：从 `research.json` 到 `article.wechat.html`，必要时追加发布产物
 - 失败条件：发布前置条件不满足
+- 常用图片参数：
+  - `--image-preset`
+  - `--image-density`
+  - `--image-layout-family`
+  - `--inline-count`
+  - `--dry-run-images`
 
 ## `hosted-run`
 
@@ -62,6 +68,31 @@
 - 依赖：优先使用宿主 agent 已生成正文；若缺失则回退到当前 provider 自动补全；发布时需要微信凭证
 - 输出：写入 research/ideation/article/review/score/image/render/publish 相关产物
 - 失败条件：发布前置条件不满足，或自动补全过程失败
+- 常用图片参数：
+  - `--image-preset`
+  - `--image-density`
+  - `--image-layout-family`
+  - `--inline-count`
+  - `--dry-run-images`
+
+## `plan-images`
+
+- 输入：`--workspace [--provider] [--image-preset] [--image-density] [--image-layout-family] [--inline-count]`
+- 依赖：`article.md` 或当前活跃正文存在
+- 输出：
+  - `image-plan.json`
+  - `image-outline.json`
+  - `image-outline.md`
+  - `prompts/images/*.md`
+- 失败条件：找不到正文，或图片 provider 不可用
+
+## `generate-images`
+
+- 输入：`--workspace [--provider] [--dry-run]`
+- 依赖：`image-plan.json`
+- 执行逻辑：优先读取 `prompts/images/*.md` 中的 `## Prompt` 段落作为最终 Prompt；若缺失则回退到 `image-plan.json`
+- 输出：图片文件写入 `assets/images/`，并回写 `image-plan.json`
+- 失败条件：找不到 `image-plan.json`，或图片接口调用失败
 
 ## 兼容命令
 

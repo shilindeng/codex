@@ -184,6 +184,62 @@ IMAGE_STYLE_PRESETS: dict[str, dict[str, str]] = {
         "mood": "教学感强",
         "custom_visual_brief": "use dark chalkboard background, chalk-like strokes, hand-drawn diagram cues, and classroom explanation vibe",
     },
+    "editorial-grain": {
+        "label": "杂志颗粒",
+        "theme": "编辑大片视觉表达",
+        "style": "杂志颗粒拼版风",
+        "mood": "克制高级",
+        "custom_visual_brief": "use editorial magazine composition, subtle grain texture, restrained palette, and premium print-like balance",
+    },
+    "organic-natural": {
+        "label": "自然有机",
+        "theme": "自然有机视觉表达",
+        "style": "植物感柔和插画",
+        "mood": "舒展松弛",
+        "custom_visual_brief": "use organic shapes, earthy palette, natural textures, and soft handcrafted rhythm",
+    },
+    "scientific-blueprint": {
+        "label": "科学蓝图",
+        "theme": "科学解释视觉表达",
+        "style": "蓝图线稿信息风",
+        "mood": "理性精确",
+        "custom_visual_brief": "use blueprint-like diagrams, technical linework, subtle grid cues, and scientific precision",
+    },
+    "professional-corporate": {
+        "label": "专业商务",
+        "theme": "专业商务视觉表达",
+        "style": "企业报告图形风",
+        "mood": "稳健可信",
+        "custom_visual_brief": "use polished business graphics, clean corporate hierarchy, and confident restrained color usage",
+    },
+    "abstract-geometric": {
+        "label": "抽象几何",
+        "theme": "抽象几何视觉表达",
+        "style": "几何构成海报风",
+        "mood": "前卫理性",
+        "custom_visual_brief": "use bold geometric forms, abstract spatial balance, limited palette, and minimal symbolic storytelling",
+    },
+    "luxury-minimal": {
+        "label": "轻奢极简",
+        "theme": "轻奢极简视觉表达",
+        "style": "高端留白版式",
+        "mood": "高级冷静",
+        "custom_visual_brief": "use generous whitespace, elegant material cues, sophisticated contrast, and premium understated composition",
+    },
+    "illustrated-handdrawn": {
+        "label": "手绘讲述",
+        "theme": "手绘叙事视觉表达",
+        "style": "手绘说明插画风",
+        "mood": "有人味",
+        "custom_visual_brief": "use hand-drawn lines, annotated illustration feel, approachable storytelling, and warm human touch",
+    },
+    "photoreal-sketch": {
+        "label": "写实速写",
+        "theme": "写实概念视觉表达",
+        "style": "写实草图混合风",
+        "mood": "真实克制",
+        "custom_visual_brief": "blend realistic lighting with sketch overlays, tactile surfaces, and concept-driven realism without heavy text",
+    },
 }
 IMAGE_STYLE_PRESET_CHOICES = tuple(IMAGE_STYLE_PRESETS.keys())
 IMAGE_DIRECTIVE_RE = re.compile(r"<!--\s*image:(.*?)-->", flags=re.I | re.S)
@@ -208,26 +264,38 @@ IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
         {"key": "hero-object", "label": "中心主视觉", "instruction": "Use one dominant hero object in the center with strong negative space and no embedded headline text."},
         {"key": "editorial-collage", "label": "编辑拼贴", "instruction": "Use an editorial collage composition with layered shapes and two or three visual clusters, without text blocks."},
         {"key": "symbolic-scene", "label": "象征场景", "instruction": "Use a symbolic scene with depth and atmosphere, showing the article idea through metaphor instead of labels."},
+        {"key": "diagonal-poster", "label": "斜向张力", "instruction": "Use a diagonal poster composition with directional energy and one clear focal object, keeping text out of the image."},
+        {"key": "framed-window", "label": "窗景框构", "instruction": "Use a framed-window composition that creates depth and hierarchy through nested planes instead of text."},
     ],
     "信息图": [
         {"key": "stacked-cards", "label": "纵向卡片", "instruction": "Use a stacked-card infographic layout with 3 to 5 modules and only short keywords if absolutely needed."},
         {"key": "radial-map", "label": "中心辐射", "instruction": "Use a radial map layout with one core node and surrounding branches, relying on icons and shapes more than text."},
         {"key": "timeline-column", "label": "时间轴列", "instruction": "Use a vertical timeline or ladder layout with clear sequence and very limited short labels."},
+        {"key": "dashboard-panels", "label": "仪表板面板", "instruction": "Use dashboard-like information panels with clear metrics, compact modules, and restrained labels."},
+        {"key": "matrix-grid", "label": "矩阵网格", "instruction": "Use a matrix or quadrant grid with strong grouping and spatial categorization instead of explanatory text."},
+        {"key": "tree-hierarchy", "label": "层级树", "instruction": "Use a hierarchy tree that shows parent-child structure clearly with icons, branches, and very short labels."},
+        {"key": "map-geography", "label": "地理映射", "instruction": "Use a map-driven layout with location markers or regions, minimizing text and emphasizing spatial relationships."},
     ],
     "正文插图": [
         {"key": "scene-metaphor", "label": "场景隐喻", "instruction": "Use a scene-based metaphor with clear foreground and background, and avoid embedded text entirely."},
         {"key": "object-closeup", "label": "物件特写", "instruction": "Use one or two symbolic objects in close-up, emphasizing texture and concept rather than labels."},
         {"key": "abstract-geometry", "label": "抽象图形", "instruction": "Use abstract geometric composition to express the idea without any readable text."},
+        {"key": "editorial-panel", "label": "编辑画面", "instruction": "Use an editorial illustration panel with one strong concept frame and no embedded text."},
+        {"key": "cutaway-layer", "label": "剖面分层", "instruction": "Use a cutaway or layered depth composition to reveal the concept without resorting to labels."},
     ],
     "流程图": [
         {"key": "path-nodes", "label": "路径节点", "instruction": "Use a node-and-path flow layout with arrows and milestones, limiting text to tiny step tags only if unavoidable."},
         {"key": "ladder-steps", "label": "阶梯步骤", "instruction": "Use a ladder or staircase process layout that shows progression visually, not through long labels."},
         {"key": "swimlane-flow", "label": "泳道流转", "instruction": "Use a swimlane or track-based flow layout with lanes, icons, and connectors instead of paragraphs."},
+        {"key": "loop-cycle", "label": "闭环循环", "instruction": "Use a cyclical process layout when the workflow repeats or feeds back into itself, keeping labels extremely short."},
+        {"key": "timeline-flow", "label": "时间推进", "instruction": "Use a linear timeline flow with milestone markers and sparse labels to show sequence."},
     ],
     "对比图": [
         {"key": "split-panel", "label": "左右分栏", "instruction": "Use a clean split-panel comparison with strong contrast between left and right sides, minimizing text."},
         {"key": "cards-versus", "label": "卡片对照", "instruction": "Use parallel comparison cards with mirrored structure and icon cues, not dense wording."},
         {"key": "spectrum-contrast", "label": "光谱对照", "instruction": "Use a spectrum or axis-based contrast layout that shows differences through position, color, and shape."},
+        {"key": "matrix-versus", "label": "矩阵对照", "instruction": "Use a comparison matrix to contrast multiple dimensions visually with minimal wording."},
+        {"key": "before-after", "label": "前后对照", "instruction": "Use a before-versus-after composition emphasizing transition and difference rather than descriptive text."},
     ],
     "分隔图": [
         {"key": "motif-band", "label": "主题带状", "instruction": "Use a wide motif band as a visual pause, with no embedded text and a strong thematic cue."},
@@ -236,6 +304,18 @@ IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
     ],
 }
 IMAGE_DENSITY_CHOICES = ("minimal", "balanced", "per-section", "rich")
+IMAGE_LAYOUT_FAMILY_VARIANTS: dict[str, list[str]] = {
+    "editorial": ["hero-object", "editorial-collage", "editorial-panel", "framed-window"],
+    "process": ["path-nodes", "ladder-steps", "swimlane-flow", "timeline-flow", "loop-cycle"],
+    "comparison": ["split-panel", "cards-versus", "spectrum-contrast", "matrix-versus", "before-after"],
+    "timeline": ["timeline-column", "timeline-flow"],
+    "hierarchy": ["tree-hierarchy", "radial-map"],
+    "dashboard": ["dashboard-panels", "matrix-grid", "stacked-cards"],
+    "map": ["map-geography"],
+    "radial": ["radial-map"],
+    "list": ["stacked-cards", "matrix-grid"],
+}
+IMAGE_LAYOUT_FAMILY_CHOICES = tuple(IMAGE_LAYOUT_FAMILY_VARIANTS.keys())
 DEPTH_WORDS = [
     "案例",
     "数据",
@@ -1838,6 +1918,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         f"position: {image_position_label(item)}",
         f"target_section: {item.get('target_section', '')}",
         f"layout_variant: {item.get('layout_variant_key', '')}",
+        f"layout_family: {controls.get('layout_family', '')}",
         f"preset: {controls.get('preset', '')}",
         f"density: {controls.get('density', 'rich')}",
         "---",
@@ -1916,8 +1997,12 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         "density": controls.get("density", "rich"),
         "preset": controls.get("preset", ""),
         "preset_label": controls.get("preset_label", ""),
+        "layout_family": controls.get("layout_family", ""),
         "planned_inline_count": plan.get("planned_inline_count", 0),
         "requested_inline_count": plan.get("requested_inline_count", plan.get("planned_inline_count", 0)),
+        "planning_shortfall_reason": plan.get("planning_shortfall_reason", ""),
+        "skipped_sections": plan.get("skipped_sections", []),
+        "forced_sections": plan.get("forced_sections", []),
         "items": outline_items,
         "generated_at": now_iso(),
     }
@@ -1925,7 +2010,14 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
     lines = [f"# 插图大纲：{title}", ""]
     lines.append(f"- 密度：`{outline['density']}`")
     lines.append(f"- 风格预设：`{outline['preset'] or 'default'}`")
+    lines.append(f"- 布局家族：`{outline['layout_family'] or 'auto'}`")
     lines.append(f"- 正文插图：`{outline['planned_inline_count']}`（请求值 `{outline['requested_inline_count']}`）")
+    if outline.get("planning_shortfall_reason"):
+        lines.append(f"- 规划说明：{outline['planning_shortfall_reason']}")
+    if outline.get("forced_sections"):
+        lines.append(f"- 强制配图章节：{' / '.join(outline['forced_sections'])}")
+    if outline.get("skipped_sections"):
+        lines.append(f"- 跳过配图章节：{' / '.join(outline['skipped_sections'])}")
     lines.append("")
     for item in outline_items:
         lines.append(f"## {item['id']} · {item['type']}")
@@ -1951,6 +2043,7 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
     selected_preset = explicit_preset or current.get("preset") or ""
     preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
     density = getattr(args, "image_density", None) or current.get("density") or "rich"
+    layout_family = getattr(args, "image_layout_family", None) or current.get("layout_family") or ""
 
     if selected_preset and current.get("preset") != selected_preset:
         base = {
@@ -1962,6 +2055,7 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "mood": preset.get("mood", "专业理性"),
             "custom_visual_brief": preset.get("custom_visual_brief", ""),
             "density": density,
+            "layout_family": layout_family,
         }
     else:
         base = {
@@ -1973,6 +2067,7 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "mood": current.get("mood") or preset.get("mood") or "专业理性",
             "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
             "density": density,
+            "layout_family": layout_family,
         }
 
     theme = getattr(args, "image_theme", None)
@@ -2000,11 +2095,31 @@ def layout_variants_for_type(image_type: str) -> list[dict[str, str]]:
     return IMAGE_LAYOUT_VARIANTS.get(image_type, IMAGE_LAYOUT_VARIANTS.get("正文插图", []))
 
 
-def pick_layout_variant(image_type: str, occurrence_index: int) -> dict[str, str]:
+def pick_layout_variant(image_type: str, occurrence_index: int, layout_family: str = "") -> dict[str, str]:
     variants = layout_variants_for_type(image_type)
     if not variants:
         return {"key": "default", "label": "默认构图", "instruction": "Use a distinct composition and avoid embedded text."}
+    if layout_family and layout_family in IMAGE_LAYOUT_FAMILY_VARIANTS:
+        family_keys = set(IMAGE_LAYOUT_FAMILY_VARIANTS[layout_family])
+        family_variants = [variant for variant in variants if variant["key"] in family_keys]
+        if family_variants:
+            return family_variants[occurrence_index % len(family_variants)]
     return variants[occurrence_index % len(variants)]
+
+
+def extract_prompt_from_markdown(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    text = read_text(path)
+    marker = "\n## Prompt\n"
+    index = text.find(marker)
+    if index == -1:
+        marker = "## Prompt\n"
+        index = text.find(marker)
+        if index == -1:
+            return None
+    content = text[index + len(marker):].strip()
+    return content or None
 
 
 def infer_title(manifest: dict[str, Any], meta: dict[str, str], body: str) -> str:
@@ -2400,6 +2515,35 @@ def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, A
         )
     return selected_metrics
 
+
+def image_planning_diagnostics(sections: list[dict[str, Any]], inline_sections: list[dict[str, Any]], requested_inline_count: int) -> dict[str, Any]:
+    skipped_sections: list[str] = []
+    forced_sections: list[str] = []
+    eligible_sections = 0
+    for section in sections:
+        if is_reference_heading(section.get("heading", "")):
+            continue
+        directives = section.get("image_directives") or {}
+        if directives.get("skip"):
+            skipped_sections.append(section.get("heading", ""))
+            continue
+        eligible_sections += 1
+        if directives.get("force") or directives.get("count", 0) > 0:
+            forced_sections.append(section.get("heading", ""))
+    planned_count = len(inline_sections)
+    reasons: list[str] = []
+    if planned_count < requested_inline_count:
+        reasons.append("高密度 rich 规划已请求更多正文图，但可用章节和长章节复用次数有限。")
+    if skipped_sections:
+        reasons.append(f"有 {len(skipped_sections)} 个章节被显式标记为 skip。")
+    if eligible_sections < requested_inline_count:
+        reasons.append(f"可配图章节只有 {eligible_sections} 个。")
+    return {
+        "skipped_sections": skipped_sections,
+        "forced_sections": forced_sections,
+        "planning_shortfall_reason": " ".join(reasons).strip(),
+    }
+
 def cmd_plan_images(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -2420,6 +2564,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     content_sections = [section for section in sections if not is_reference_heading(section.get("heading", ""))]
     final_section = content_sections[-1] if content_sections else None
     final_metric = extract_section_metrics(final_section, sections.index(final_section)) if final_section else None
+    diagnostics = image_planning_diagnostics(sections, inline_sections, inline_limit)
 
     items: list[dict[str, Any]] = [
         {
@@ -2454,7 +2599,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     type_occurrence: dict[str, int] = {}
     for item in items:
         occurrence_index = type_occurrence.get(item["type"], 0)
-        variant = pick_layout_variant(item["type"], occurrence_index)
+        variant = pick_layout_variant(item["type"], occurrence_index, controls.get("layout_family", ""))
         item["layout_variant_key"] = variant["key"]
         item["layout_variant_label"] = variant["label"]
         item["layout_variant_instruction"] = variant["instruction"]
@@ -2463,7 +2608,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     for index, section in enumerate(inline_sections, start=1):
         image_type = section.get("image_type") or "\u6b63\u6587\u63d2\u56fe"
         occurrence_index = type_occurrence.get(image_type, 0)
-        variant = pick_layout_variant(image_type, occurrence_index)
+        variant = pick_layout_variant(image_type, occurrence_index, controls.get("layout_family", ""))
         items.append(
             {
                 "id": f"inline-{index:02d}",
@@ -2500,6 +2645,10 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         "planned_inline_count": len(inline_sections),
         "requested_inline_count": inline_limit,
         "density_mode": controls.get("density", "rich"),
+        "layout_family": controls.get("layout_family", ""),
+        "planning_shortfall_reason": diagnostics["planning_shortfall_reason"],
+        "skipped_sections": diagnostics["skipped_sections"],
+        "forced_sections": diagnostics["forced_sections"],
         "image_controls": controls,
         "items": items,
         "generated_at": now_iso(),
@@ -2529,27 +2678,33 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
         filename = f"{item['id']}.png"
         output_path = images_dir / filename
         aspect = item.get("aspect_ratio") or "16:9"
+        prompt_path = workspace / "prompts" / "images" / f"{item['id']}.md"
+        prompt_override = extract_prompt_from_markdown(prompt_path)
+        effective_prompt = prompt_override or item["prompt"]
+        if prompt_override:
+            item["prompt"] = prompt_override
         if args.dry_run:
             width, height = make_placeholder_png(output_path)
             result = {
                 "provider": provider,
-                "prompt": item["prompt"],
-                "revised_prompt": item["prompt"],
+                "prompt": effective_prompt,
+                "revised_prompt": effective_prompt,
                 "width": width,
                 "height": height,
-                "source_meta": {"dry_run": True},
+                "source_meta": {"dry_run": True, "prompt_source": "prompt-file" if prompt_override else "plan"},
             }
         elif provider == "gemini-web":
-            result = generate_gemini_web_image(item["prompt"], output_path)
+            result = generate_gemini_web_image(effective_prompt, output_path)
         elif provider == "gemini-api":
-            result = generate_gemini_api_image(item["prompt"], output_path, args.gemini_model, aspect)
+            result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
         elif provider == "openai-image":
-            result = generate_openai_image(item["prompt"], output_path, args.openai_model, aspect)
+            result = generate_openai_image(effective_prompt, output_path, args.openai_model, aspect)
         else:
             raise SystemExit(f"不支持的图片后端：{provider}")
         item["provider"] = provider
         item["asset_path"] = relative_posix(output_path, workspace)
         item["revised_prompt"] = result["revised_prompt"]
+        item["prompt_source"] = "prompt-file" if prompt_override else "plan"
         item["source_meta"] = result["source_meta"]
         item["width"] = result["width"]
         item["height"] = result["height"]
