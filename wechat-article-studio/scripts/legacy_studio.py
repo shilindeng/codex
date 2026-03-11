@@ -131,7 +131,7 @@ TITLE_AUDIENCE_WORDS = [
 TITLE_SCORE_THRESHOLD = 56
 DISCOVERY_TOPIC_LIMIT = 8
 DISCOVERY_FEED_LIMIT = 20
-DISCOVERY_PROVIDER_CHOICES = ("auto", "google-news-rss", "tavily")
+DISCOVERY_PROVIDER_CHOICES = ("auto", "google-news-rss", "custom-rss", "tavily")
 START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动", "开启公众号创作", "开启创作", "开始创作"}
 GEMINI_WEB_NO_IMAGE_MARKER = "No image returned in response."
 GEMINI_WEB_IMAGE_MODEL_CANDIDATES = [
@@ -702,6 +702,165 @@ TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search"
 DISCOVERY_FOCUS_CHOICES = ("ai-tech", "all")
 DISCOVERY_QUERIES_ALL = ["", "热点", "科技", "AI", "财经", "就业", "教育"]
 DISCOVERY_QUERIES_AI_TECH = ["AI", "人工智能", "大模型", "OpenAI", "Agent", "RAG", "芯片 算力", "互联网 平台"]
+DISCOVERY_RSS_URLS_DEFAULT = [
+    "https://hnrss.org/frontpage",
+    "https://feed.infoq.com/",
+    "https://export.arxiv.org/rss/cs.AI",
+    "https://export.arxiv.org/rss/cs.LG",
+    "https://export.arxiv.org/rss/cs.CL",
+]
+
+
+def discovery_rss_urls(extra: list[str] | None = None) -> list[str]:
+    urls: list[str] = []
+    # CLI-provided URLs should take priority.
+    for raw in extra or []:
+        value = (raw or "").strip()
+        if value:
+            urls.append(value)
+    env_raw = (os.getenv("DISCOVERY_RSS_URLS") or "").strip()
+    if env_raw:
+        for part in env_raw.split(","):
+            value = part.strip()
+            if value:
+                urls.append(value)
+    urls.extend(DISCOVERY_RSS_URLS_DEFAULT)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
+def rss_feed_label(feed_url: str) -> str:
+    parsed = urllib.parse.urlparse(feed_url)
+    domain = parsed.netloc.replace("www.", "").strip().lower()
+    path = (parsed.path or "").strip()
+    if domain == "hnrss.org":
+        return "hn"
+    if domain == "feed.infoq.com":
+        return "infoq"
+    if domain.endswith("arxiv.org") and path.startswith("/rss/"):
+        return "arxiv " + path.removeprefix("/rss/").strip("/")
+    if domain:
+        return domain
+    return feed_url.strip() or "rss"
+
+
+def parse_atom_datetime(raw: str) -> datetime | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    # Example: 2026-03-11T12:34:56Z
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def fetch_custom_rss_items(feed_url: str, window_hours: int, limit: int) -> list[dict[str, Any]]:
+    label = rss_feed_label(feed_url)
+    request = urllib.request.Request(feed_url, headers=HTTP_HEADERS)
+    raw, headers = urlopen_with_retry(request, timeout=NETWORK_TIMEOUT, retries=NETWORK_RETRIES)
+    xml_text = decode_response_body(raw, headers)
+    root = ET.fromstring(xml_text)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+
+    def text_of(elem: Any, tag: str) -> str:
+        if elem is None:
+            return ""
+        for child in list(elem):
+            if child is None:
+                continue
+            name = child.tag.split("}", 1)[-1].lower()
+            if name == tag.lower():
+                return (child.text or "").strip()
+        return ""
+
+    items: list[dict[str, Any]] = []
+    root_name = root.tag.split("}", 1)[-1].lower()
+    if root_name == "rss":
+        channel = root.find("channel") or root.find("{*}channel")
+        if channel is None:
+            return []
+        for item in channel.findall("item") or channel.findall("{*}item"):
+            title = (item.findtext("title") or item.findtext("{*}title") or "").strip()
+            link = (item.findtext("link") or item.findtext("{*}link") or "").strip()
+            pub_raw = (item.findtext("pubDate") or item.findtext("{*}pubDate") or "").strip()
+            published_at = parse_rss_datetime(pub_raw)
+            if published_at and published_at < cutoff:
+                continue
+            if not title or not link:
+                continue
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "source": label,
+                    "published_at": published_at.isoformat() if published_at else "",
+                    "query": label,
+                }
+            )
+            if len(items) >= limit:
+                break
+        return items
+
+    if root_name == "feed":  # Atom
+        for entry in root.findall("{*}entry"):
+            title = (entry.findtext("{*}title") or "").strip()
+            link = ""
+            for link_elem in entry.findall("{*}link"):
+                href = (link_elem.get("href") or "").strip()
+                if href:
+                    link = href
+                    break
+            published_raw = (entry.findtext("{*}updated") or entry.findtext("{*}published") or "").strip()
+            published_at = parse_atom_datetime(published_raw)
+            if published_at and published_at < cutoff:
+                continue
+            if not title or not link:
+                continue
+            items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "source": label,
+                    "published_at": published_at.isoformat() if published_at else "",
+                    "query": label,
+                }
+            )
+            if len(items) >= limit:
+                break
+        return items
+
+    # Unknown format: try RSS-like fallback.
+    for item in root.findall(".//item") + root.findall(".//{*}item"):
+        title = (text_of(item, "title") or "").strip()
+        link = (text_of(item, "link") or "").strip()
+        if not title or not link:
+            continue
+        items.append({"title": title, "link": link, "source": label, "published_at": "", "query": label})
+        if len(items) >= limit:
+            break
+    return items
+
+
+def collect_custom_rss_items(rss_urls: list[str], window_hours: int, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+    collected: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for feed_url in rss_urls:
+        try:
+            collected.extend(fetch_custom_rss_items(feed_url, window_hours, limit))
+        except (SystemExit, Exception) as exc:
+            errors.append(str(exc))
+    return collected, errors
 
 
 def tavily_api_key() -> str:
@@ -715,6 +874,10 @@ def normalize_discovery_provider(value: str | None) -> str:
         "google-news": "google-news-rss",
         "google_news_rss": "google-news-rss",
         "rss": "google-news-rss",
+        "custom": "custom-rss",
+        "custom_rss": "custom-rss",
+        "custom-rss": "custom-rss",
+        "rss-custom": "custom-rss",
         "tavily-api": "tavily",
     }
     normalized = aliases.get(raw, raw)
@@ -790,6 +953,45 @@ def fetch_tavily_news_items(query: str, window_hours: int, limit: int) -> list[d
     return items
 
 
+def tavily_search_urls(query: str, max_results: int = 6) -> list[str]:
+    api_key = tavily_api_key()
+    if not api_key:
+        return []
+    payload = {
+        "api_key": api_key,
+        "query": (query or "").strip(),
+        "search_depth": "advanced",
+        "include_answer": False,
+        "include_raw_content": False,
+        "max_results": int(max_results),
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        TAVILY_SEARCH_ENDPOINT,
+        data=data,
+        headers={**HTTP_HEADERS, "Content-Type": "application/json"},
+        method="POST",
+    )
+    raw, headers = urlopen_with_retry(request, timeout=NETWORK_TIMEOUT, retries=NETWORK_RETRIES)
+    text = decode_response_body(raw, headers)
+    try:
+        response = json.loads(text) if text else {}
+    except json.JSONDecodeError:
+        return []
+    results = response.get("results") or []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for result in results:
+        url = (result.get("url") or result.get("link") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+        if len(urls) >= int(max_results):
+            break
+    return urls
+
+
 def classify_news_topic(title: str) -> dict[str, Any]:
     value = (title or "").strip()
     if re.search(
@@ -837,6 +1039,58 @@ def classify_news_topic(title: str) -> dict[str, Any]:
     }
 
 
+def classify_discovery_content_kind(title: str) -> str:
+    value = (title or "").strip()
+    if re.search(r"教程|指南|入门|手把手|怎么|如何|实战|SOP|清单|模板|案例|Best Practice|最佳实践", value, flags=re.I):
+        return "教程/工具"
+    if re.search(r"发布|上线|更新|开源|推出|新增|版本|beta|preview|release|v\\d", value, flags=re.I):
+        return "产品更新"
+    if re.search(r"论文|arxiv|研究|paper|benchmark|评测", value, flags=re.I):
+        return "研究/论文"
+    if re.search(r"收购|融资|裁员|监管|诉讼|禁令|事故|故障|宕机|泄露|安全事件", value):
+        return "事件解读"
+    return "趋势观点"
+
+
+def classify_discovery_source_tier(source_url: str) -> str:
+    url = (source_url or "").strip()
+    if not url:
+        return "媒体"
+    domain = urllib.parse.urlparse(url).netloc.replace("www.", "").strip().lower()
+    if not domain:
+        return "媒体"
+    official = {
+        "openai.com",
+        "anthropic.com",
+        "ai.google",
+        "blog.google",
+        "google.com",
+        "deepmind.google",
+        "microsoft.com",
+        "azure.com",
+        "meta.com",
+        "nvidia.com",
+        "apple.com",
+        "aws.amazon.com",
+        "huggingface.co",
+        "pytorch.org",
+        "tensorflow.org",
+    }
+    opensource = {"github.com", "gitlab.com", "bitbucket.org"}
+    community = {"news.ycombinator.com", "hnrss.org"}
+    if domain in opensource:
+        return "开源"
+    if domain in community:
+        return "社区"
+    if domain.endswith("arxiv.org"):
+        return "媒体"
+    if domain in official or domain.endswith((".openai.com", ".anthropic.com", ".microsoft.com", ".google.com")):
+        return "官方"
+    if domain.startswith("docs.") or ".docs." in domain:
+        return "官方"
+    return "媒体"
+
+
 def evaluate_discovery_topic(title: str, audience: str = "大众读者") -> dict[str, Any]:
     variants = generate_hot_title_variants(title, angle="", audience=audience)
     ranked, selected = rank_title_candidates(variants, title, audience, angle="", selected_title="")
@@ -870,6 +1124,9 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int, au
         classification = classify_news_topic(title)
         evaluation = evaluate_discovery_topic(title, audience=audience)
         hit_count = len(hit_queries.get(normalized) or set()) or 1
+        content_kind = classify_discovery_content_kind(title)
+        source_url = (item.get("link") or "").strip()
+        source_tier = classify_discovery_source_tier(source_url)
         query_label = (item.get("query") or "").strip() or "top"
         why_now = f"该话题出现在最近 {query_label} 的新闻流中，具备时效与讨论度。"
         if hit_count >= 2:
@@ -879,9 +1136,11 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int, au
                 "hot_title": title,
                 "source": item.get("source", ""),
                 "published_at": item.get("published_at", ""),
-                "source_url": item.get("link", ""),
+                "source_url": source_url,
                 "query": item.get("query", ""),
                 "hit_count": hit_count,
+                "content_kind": content_kind,
+                "source_tier": source_tier,
                 "topic_type": classification["topic_type"],
                 "recommended_topic": title,
                 **evaluation,
@@ -918,11 +1177,16 @@ def collect_tavily_news_items(queries: list[str], window_hours: int, limit: int)
 
 
 def discover_recent_topics(
-    window_hours: int = 24, limit: int = DISCOVERY_TOPIC_LIMIT, provider: str | None = None, focus: str | None = None
+    window_hours: int = 24,
+    limit: int = DISCOVERY_TOPIC_LIMIT,
+    provider: str | None = None,
+    focus: str | None = None,
+    rss_urls: list[str] | None = None,
 ) -> dict[str, Any]:
     chosen = normalize_discovery_provider(provider)
     chosen_focus = normalize_discovery_focus(focus)
     queries = list(DISCOVERY_QUERIES_AI_TECH if chosen_focus == "ai-tech" else DISCOVERY_QUERIES_ALL)
+    feeds = discovery_rss_urls(rss_urls)
     candidate_seed_limit = max(int(limit) * 4, int(limit))
 
     def finalize(collected: list[dict[str, Any]], used_provider: str) -> dict[str, Any]:
@@ -930,15 +1194,32 @@ def discover_recent_topics(
         candidates = build_topic_candidates_from_news(collected, candidate_seed_limit, audience="大众读者")
         if chosen_focus == "ai-tech":
             candidates = [item for item in candidates if item.get("topic_type") in {"科技/AI", "科技/互联网"}]
-        candidates.sort(
-            key=lambda item: (
-                bool(item.get("recommended_title_gate_passed", False)),
-                int(item.get("hit_count") or 0),
-                int(item.get("recommended_title_score") or 0),
-                item.get("published_at", ""),
-            ),
-            reverse=True,
-        )
+
+        def tutorial_boost(item: dict[str, Any]) -> int:
+            kind = str(item.get("content_kind") or "").strip()
+            return 1 if kind in {"教程/工具", "产品更新"} else 0
+
+        if chosen_focus == "ai-tech":
+            candidates.sort(
+                key=lambda item: (
+                    bool(item.get("recommended_title_gate_passed", False)),
+                    tutorial_boost(item),
+                    int(item.get("hit_count") or 0),
+                    int(item.get("recommended_title_score") or 0),
+                    item.get("published_at", ""),
+                ),
+                reverse=True,
+            )
+        else:
+            candidates.sort(
+                key=lambda item: (
+                    bool(item.get("recommended_title_gate_passed", False)),
+                    int(item.get("hit_count") or 0),
+                    int(item.get("recommended_title_score") or 0),
+                    item.get("published_at", ""),
+                ),
+                reverse=True,
+            )
         return {
             "provider": used_provider,
             "focus": chosen_focus,
@@ -960,6 +1241,18 @@ def discover_recent_topics(
             raise SystemExit("Google News RSS 返回为空，未能构建任何可写选题。")
         return payload
 
+    if chosen == "custom-rss":
+        collected, errors = collect_custom_rss_items(feeds, window_hours, DISCOVERY_FEED_LIMIT)
+        if not collected:
+            message = "Custom RSS 不可用或返回为空。"
+            if errors:
+                message += f" 诊断信息：{errors[0]}"
+            raise SystemExit(message + "（可通过 --rss-url 或环境变量 DISCOVERY_RSS_URLS 配置源）")
+        payload = finalize(collected, "custom-rss")
+        if not payload.get("candidates"):
+            raise SystemExit("Custom RSS 返回为空，未能构建任何可写选题。")
+        return payload
+
     if chosen == "tavily":
         if not tavily_api_key():
             raise SystemExit("未配置 TAVILY_API_KEY，无法使用 Tavily 热点发现。请先设置环境变量：TAVILY_API_KEY=tvly-***")
@@ -976,6 +1269,10 @@ def discover_recent_topics(
     rss_payload = finalize(rss_collected, "google-news-rss") if rss_collected else {"candidates": []}
     if rss_payload.get("candidates"):
         return rss_payload
+    custom_collected, custom_errors = collect_custom_rss_items(feeds, window_hours, DISCOVERY_FEED_LIMIT)
+    custom_payload = finalize(custom_collected, "custom-rss") if custom_collected else {"candidates": []}
+    if custom_payload.get("candidates"):
+        return custom_payload
     if tavily_api_key():
         tav_collected, tav_errors = collect_tavily_news_items(queries, window_hours, DISCOVERY_FEED_LIMIT)
         tav_payload = finalize(tav_collected, "tavily") if tav_collected else {"candidates": []}
@@ -984,11 +1281,15 @@ def discover_recent_topics(
         diagnostic = ""
         if rss_errors:
             diagnostic = f" RSS 错误示例：{rss_errors[0]}"
+        if custom_errors:
+            diagnostic += f" Custom RSS 错误示例：{custom_errors[0]}"
         if tav_errors:
             diagnostic += f" Tavily 错误示例：{tav_errors[0]}"
-        raise SystemExit("热点发现失败：RSS 无结果，Tavily 也无结果。" + diagnostic)
+        raise SystemExit("热点发现失败：RSS 无结果，Custom RSS 也无结果，Tavily 也无结果。" + diagnostic)
     diagnostic = f" RSS 错误示例：{rss_errors[0]}" if rss_errors else ""
-    raise SystemExit("热点发现失败：RSS 无结果，且未配置 TAVILY_API_KEY。" + diagnostic)
+    if custom_errors:
+        diagnostic += f" Custom RSS 错误示例：{custom_errors[0]}"
+    raise SystemExit("热点发现失败：RSS 无结果，Custom RSS 也无结果，且未配置 TAVILY_API_KEY。" + diagnostic)
     return {
         "window_hours": window_hours,
         "generated_at": now_iso(),
@@ -2804,6 +3105,10 @@ def write_topic_discovery_artifacts(workspace: Path, payload: dict[str, Any]) ->
             lines.append(f"- 时间：{item['published_at']}")
         hit_count = int(item.get("hit_count") or 1)
         lines.append(f"- 热度信号：在 {hit_count} 个关键词流中出现")
+        if item.get("content_kind"):
+            lines.append(f"- 内容类型：{item['content_kind']}")
+        if item.get("source_tier"):
+            lines.append(f"- 来源层级：{item['source_tier']}")
         lines.append(f"- 类型：{item['topic_type']}")
         lines.append(f"- 为什么值得写：{item['why_now']}")
         lines.append(f"- 建议角度：{' / '.join(item.get('angles') or [])}")
@@ -2820,7 +3125,8 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     limit = int(args.limit or DISCOVERY_TOPIC_LIMIT)
     provider = getattr(args, "provider", None)
     focus = normalize_discovery_focus(getattr(args, "focus", None))
-    payload = discover_recent_topics(window_hours=window_hours, limit=limit, provider=provider, focus=focus)
+    rss_urls = list(getattr(args, "rss_url", None) or [])
+    payload = discover_recent_topics(window_hours=window_hours, limit=limit, provider=provider, focus=focus, rss_urls=rss_urls)
     write_topic_discovery_artifacts(workspace, payload)
     manifest["topic_discovery_path"] = "topic-discovery.json"
     manifest["topic_discovery_provider"] = payload.get("provider") or normalize_discovery_provider(provider)
