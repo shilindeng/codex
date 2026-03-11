@@ -40,6 +40,13 @@ MANIFEST_VERSION = 2
 DEFAULT_COVER_POLICY = "thumb_only"
 NETWORK_TIMEOUT = 30
 NETWORK_RETRIES = 3
+GEMINI_WEB_IMAGE_TIMEOUT = 120
+_gemini_web_timeout_raw = (os.getenv("GEMINI_WEB_IMAGE_TIMEOUT") or os.getenv("GEMINI_WEB_IMAGE_TIMEOUT_SEC") or "").strip()
+if _gemini_web_timeout_raw:
+    try:
+        GEMINI_WEB_IMAGE_TIMEOUT = max(10, int(_gemini_web_timeout_raw))
+    except ValueError:
+        pass
 WECHAT_BATCHGET_COUNT = 20
 TRANSPARENT_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9pY8m7QAAAAASUVORK5CYII="
@@ -124,7 +131,8 @@ TITLE_AUDIENCE_WORDS = [
 TITLE_SCORE_THRESHOLD = 56
 DISCOVERY_TOPIC_LIMIT = 8
 DISCOVERY_FEED_LIMIT = 20
-START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动"}
+DISCOVERY_PROVIDER_CHOICES = ("auto", "google-news-rss", "tavily")
+START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动", "开启公众号创作", "开启创作", "开始创作"}
 GEMINI_WEB_NO_IMAGE_MARKER = "No image returned in response."
 GEMINI_WEB_IMAGE_MODEL_CANDIDATES = [
     "gemini-3.1-flash-image",
@@ -420,7 +428,8 @@ def ensure_dir(path: Path) -> Path:
 
 
 def read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    # PowerShell/Windows may write UTF-8 with BOM, which can break downstream processing and console output.
+    return path.read_text(encoding="utf-8").lstrip("\ufeff")
 
 
 def write_text(path: Path, content: str) -> None:
@@ -431,7 +440,7 @@ def write_text(path: Path, content: str) -> None:
 def read_json(path: Path, default: Any | None = None) -> Any:
     if not path.exists():
         return copy.deepcopy(default)
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8").lstrip("\ufeff"))
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -679,6 +688,82 @@ def fetch_google_news_items(query: str, window_hours: int, limit: int) -> list[d
     return items
 
 
+TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search"
+DISCOVERY_QUERIES = ["", "热点", "科技", "AI", "财经", "就业", "教育"]
+
+
+def tavily_api_key() -> str:
+    return (os.getenv("TAVILY_API_KEY") or "").strip()
+
+
+def normalize_discovery_provider(value: str | None) -> str:
+    raw = (value or "auto").strip().lower()
+    aliases = {
+        "google": "google-news-rss",
+        "google-news": "google-news-rss",
+        "google_news_rss": "google-news-rss",
+        "rss": "google-news-rss",
+        "tavily-api": "tavily",
+    }
+    normalized = aliases.get(raw, raw)
+    return normalized if normalized in DISCOVERY_PROVIDER_CHOICES else "auto"
+
+
+def tavily_query_text(query: str, window_hours: int) -> str:
+    seed = (query or "").strip() or "今日热点"
+    if seed in {"热点", "top"}:
+        seed = "今日热点"
+    return f"{seed} 新闻 热点 过去{window_hours}小时"
+
+
+def fetch_tavily_news_items(query: str, window_hours: int, limit: int) -> list[dict[str, Any]]:
+    api_key = tavily_api_key()
+    if not api_key:
+        raise SystemExit("未配置 TAVILY_API_KEY，无法使用 Tavily 热点发现。请先设置环境变量：TAVILY_API_KEY=tvly-***")
+    payload = {
+        "api_key": api_key,
+        "query": tavily_query_text(query, window_hours),
+        "search_depth": "advanced",
+        "include_answer": False,
+        "include_raw_content": False,
+        "max_results": int(limit),
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        TAVILY_SEARCH_ENDPOINT,
+        data=data,
+        headers={**HTTP_HEADERS, "Content-Type": "application/json"},
+        method="POST",
+    )
+    raw, headers = urlopen_with_retry(request, timeout=NETWORK_TIMEOUT, retries=NETWORK_RETRIES)
+    text = decode_response_body(raw, headers)
+    try:
+        response = json.loads(text) if text else {}
+    except json.JSONDecodeError as exc:
+        raise SystemExit("Tavily 返回不是合法 JSON，无法解析热点发现结果。") from exc
+    results = response.get("results") or []
+    items: list[dict[str, Any]] = []
+    for result in results:
+        title = (result.get("title") or "").strip()
+        link = (result.get("url") or result.get("link") or "").strip()
+        if not title or not link:
+            continue
+        domain = urllib.parse.urlparse(link).netloc.strip()
+        published_at = (result.get("published_date") or result.get("published_at") or result.get("date") or "").strip()
+        items.append(
+            {
+                "title": title,
+                "link": link,
+                "source": domain or "Tavily",
+                "published_at": published_at,
+                "query": query or "top",
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
 def classify_news_topic(title: str) -> dict[str, Any]:
     value = (title or "").strip()
     if re.search(r"AI|人工智能|模型|芯片|OpenAI|Google|Meta|算力|机器人", value, flags=re.I):
@@ -712,7 +797,20 @@ def classify_news_topic(title: str) -> dict[str, Any]:
     }
 
 
-def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+def evaluate_discovery_topic(title: str, audience: str = "大众读者") -> dict[str, Any]:
+    variants = generate_hot_title_variants(title, angle="", audience=audience)
+    ranked, selected = rank_title_candidates(variants, title, audience, angle="", selected_title="")
+    best = selected or {}
+    return {
+        "recommended_title": best.get("title") or title,
+        "recommended_title_score": int(best.get("title_score") or 0),
+        "recommended_title_gate_passed": bool(best.get("title_gate_passed", False)),
+        "recommended_title_score_breakdown": best.get("title_score_breakdown") or [],
+        "recommended_title_threshold": int(best.get("title_score_threshold") or TITLE_SCORE_THRESHOLD),
+    }
+
+
+def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int, audience: str = "大众读者") -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in items:
@@ -722,6 +820,7 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int) ->
             continue
         seen.add(normalized)
         classification = classify_news_topic(title)
+        evaluation = evaluate_discovery_topic(title, audience=audience)
         candidates.append(
             {
                 "hot_title": title,
@@ -731,6 +830,7 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int) ->
                 "query": item.get("query", ""),
                 "topic_type": classification["topic_type"],
                 "recommended_topic": title,
+                **evaluation,
                 "angles": classification["angles"],
                 "viewpoints": classification["viewpoints"],
                 "why_now": f"该话题出现在最近 {item.get('query') or 'top'} 的新闻流中，具备时效与讨论度。",
@@ -741,16 +841,93 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int) ->
     return candidates
 
 
-def discover_recent_topics(window_hours: int = 24, limit: int = DISCOVERY_TOPIC_LIMIT) -> dict[str, Any]:
-    queries = ["", "热点", "科技", "AI", "财经", "就业", "教育"]
+def collect_google_news_items(queries: list[str], window_hours: int, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
     collected: list[dict[str, Any]] = []
+    errors: list[str] = []
     for query in queries:
         try:
-            collected.extend(fetch_google_news_items(query, window_hours, DISCOVERY_FEED_LIMIT))
-        except Exception:
-            continue
-    collected.sort(key=lambda item: item.get("published_at", ""), reverse=True)
-    candidates = build_topic_candidates_from_news(collected, limit)
+            collected.extend(fetch_google_news_items(query, window_hours, limit))
+        except (SystemExit, Exception) as exc:
+            errors.append(str(exc))
+    return collected, errors
+
+
+def collect_tavily_news_items(queries: list[str], window_hours: int, limit: int) -> tuple[list[dict[str, Any]], list[str]]:
+    collected: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for query in queries:
+        try:
+            collected.extend(fetch_tavily_news_items(query, window_hours, limit))
+        except (SystemExit, Exception) as exc:
+            errors.append(str(exc))
+    return collected, errors
+
+
+def discover_recent_topics(window_hours: int = 24, limit: int = DISCOVERY_TOPIC_LIMIT, provider: str | None = None) -> dict[str, Any]:
+    chosen = normalize_discovery_provider(provider)
+    queries = list(DISCOVERY_QUERIES)
+    candidate_seed_limit = max(int(limit) * 4, int(limit))
+
+    def finalize(collected: list[dict[str, Any]], used_provider: str) -> dict[str, Any]:
+        collected.sort(key=lambda item: item.get("published_at", ""), reverse=True)
+        candidates = build_topic_candidates_from_news(collected, candidate_seed_limit, audience="大众读者")
+        candidates.sort(
+            key=lambda item: (
+                bool(item.get("recommended_title_gate_passed", False)),
+                int(item.get("recommended_title_score") or 0),
+                item.get("published_at", ""),
+            ),
+            reverse=True,
+        )
+        return {
+            "provider": used_provider,
+            "window_hours": window_hours,
+            "generated_at": now_iso(),
+            "sources": collected[:candidate_seed_limit * 2],
+            "candidates": candidates[: int(limit)],
+        }
+
+    if chosen == "google-news-rss":
+        collected, errors = collect_google_news_items(queries, window_hours, DISCOVERY_FEED_LIMIT)
+        if not collected:
+            message = "Google News RSS 不可用或返回为空。"
+            if errors:
+                message += f" 诊断信息：{errors[0]}"
+            raise SystemExit(message + "（可能是网络不可达或被封锁）")
+        payload = finalize(collected, "google-news-rss")
+        if not payload.get("candidates"):
+            raise SystemExit("Google News RSS 返回为空，未能构建任何可写选题。")
+        return payload
+
+    if chosen == "tavily":
+        if not tavily_api_key():
+            raise SystemExit("未配置 TAVILY_API_KEY，无法使用 Tavily 热点发现。请先设置环境变量：TAVILY_API_KEY=tvly-***")
+        collected, _ = collect_tavily_news_items(queries, window_hours, DISCOVERY_FEED_LIMIT)
+        if not collected:
+            raise SystemExit("Tavily 热点发现返回为空，未能构建任何可写选题。")
+        payload = finalize(collected, "tavily")
+        if not payload.get("candidates"):
+            raise SystemExit("Tavily 热点发现返回为空，未能构建任何可写选题。")
+        return payload
+
+    # auto
+    rss_collected, rss_errors = collect_google_news_items(queries, window_hours, DISCOVERY_FEED_LIMIT)
+    rss_payload = finalize(rss_collected, "google-news-rss") if rss_collected else {"candidates": []}
+    if rss_payload.get("candidates"):
+        return rss_payload
+    if tavily_api_key():
+        tav_collected, tav_errors = collect_tavily_news_items(queries, window_hours, DISCOVERY_FEED_LIMIT)
+        tav_payload = finalize(tav_collected, "tavily") if tav_collected else {"candidates": []}
+        if tav_payload.get("candidates"):
+            return tav_payload
+        diagnostic = ""
+        if rss_errors:
+            diagnostic = f" RSS 错误示例：{rss_errors[0]}"
+        if tav_errors:
+            diagnostic += f" Tavily 错误示例：{tav_errors[0]}"
+        raise SystemExit("热点发现失败：RSS 无结果，Tavily 也无结果。" + diagnostic)
+    diagnostic = f" RSS 错误示例：{rss_errors[0]}" if rss_errors else ""
+    raise SystemExit("热点发现失败：RSS 无结果，且未配置 TAVILY_API_KEY。" + diagnostic)
     return {
         "window_hours": window_hours,
         "generated_at": now_iso(),
@@ -2018,7 +2195,7 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
                 errors="replace",
                 env=env,
                 check=True,
-                timeout=12,
+                timeout=GEMINI_WEB_IMAGE_TIMEOUT,
             )
                 break
             except subprocess.CalledProcessError as exc:
@@ -2089,28 +2266,103 @@ def make_placeholder_png(path: Path) -> tuple[int, int]:
     return 1, 1
 
 
+def visual_profile_for_item(controls: dict[str, Any], item: dict[str, Any]) -> dict[str, str]:
+    style_mode = controls.get("style_mode") or "uniform"
+    base_preset = (controls.get("preset") or "").strip()
+    base_preset_label = (controls.get("preset_label") or "").strip()
+    base_theme = controls.get("theme", "科技")
+    base_style = controls.get("style", "未来科技")
+    base_mood = controls.get("mood", "专业理性")
+    base_brief = (controls.get("custom_visual_brief") or "").strip()
+
+    if style_mode != "mixed-by-type":
+        return {
+            "style_mode": "uniform",
+            "base_preset": base_preset,
+            "base_preset_label": base_preset_label,
+            "visual_preset": base_preset,
+            "visual_preset_label": base_preset_label,
+            "visual_theme": base_theme,
+            "visual_style": base_style,
+            "visual_mood": base_mood,
+            "visual_brief": base_brief or "highlight the core insight without clutter",
+        }
+
+    item_type = item.get("type", "正文插图")
+    if item_type == "封面图":
+        preset_key = (controls.get("preset_cover") or "").strip() or "bold"
+    elif item_type == "信息图":
+        preset_key = (controls.get("preset_infographic") or "").strip() or "notion"
+    else:
+        preset_key = (controls.get("preset_inline") or "").strip() or "editorial-grain"
+
+    preset = IMAGE_STYLE_PRESETS.get(preset_key, {})
+    preset_label = preset.get("label", "").strip()
+    style = preset.get("style", "").strip() or base_style
+    mood = preset.get("mood", "").strip() or base_mood
+    item_brief = (preset.get("custom_visual_brief") or "").strip()
+
+    merged_brief = base_brief
+    if item_brief:
+        if merged_brief and item_brief not in merged_brief:
+            merged_brief = f"{merged_brief}; {item_brief}"
+        elif not merged_brief:
+            merged_brief = item_brief
+    if merged_brief:
+        merged_brief = f"{merged_brief}; keep palette and motif consistent with the base preset"
+    else:
+        merged_brief = "keep palette and motif consistent with the base preset"
+
+    return {
+        "style_mode": "mixed-by-type",
+        "base_preset": base_preset,
+        "base_preset_label": base_preset_label,
+        "visual_preset": preset_key,
+        "visual_preset_label": preset_label,
+        "visual_theme": base_theme,
+        "visual_style": style,
+        "visual_mood": mood,
+        "visual_brief": merged_brief,
+    }
+
+
 def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dict[str, Any], audience: str) -> str:
     section = item.get("section_heading") or item.get("alt")
+    style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
+    theme = item.get("visual_theme") or controls.get("theme", "科技")
+    style = item.get("visual_style") or controls.get("style", "未来科技")
+    mood = item.get("visual_mood") or controls.get("mood", "专业理性")
+    brief = item.get("visual_brief") or controls.get("custom_visual_brief") or "highlight the core insight without clutter"
     instructions = [
         "Create a polished visual for a Chinese WeChat Official Account article.",
         f"Article title: {title}",
         f"Audience: {audience or 'general readers'}",
         f"Purpose: {item['type']}",
-        f"Theme: {controls.get('theme', '科技')}",
-        f"Style: {controls.get('style', '未来科技')}",
-        f"Mood: {controls.get('mood', '专业理性')}",
-        f"Visual brief: {controls.get('custom_visual_brief', 'highlight the core insight without clutter')}",
+        f"Theme: {theme}",
+        f"Style: {style}",
+        f"Mood: {mood}",
+        f"Visual brief: {brief}",
         f"Content summary: {summary}",
     ]
     if controls.get("preset"):
-        instructions.append(f"Unified visual preset: {controls['preset']}")
+        instructions.append(f"Base visual preset: {controls['preset']}")
         if controls.get("preset_label"):
-            instructions.append(f"Preset label: {controls['preset_label']}")
-        instructions.append("Keep the same visual language across cover, infographic, and inline illustrations for this article.")
+            instructions.append(f"Base preset label: {controls['preset_label']}")
+        if style_mode == "mixed-by-type":
+            instructions.append("Style mode: mixed-by-type (cover/infographic/inline use different presets).")
+            if item.get("visual_preset"):
+                instructions.append(f"This image preset: {item.get('visual_preset')}")
+            if item.get("visual_preset_label"):
+                instructions.append(f"This image preset label: {item.get('visual_preset_label')}")
+            instructions.append("Keep palette, icon language, and motif consistent across the whole article.")
+        else:
+            instructions.append("Keep the same visual language across cover, infographic, and inline illustrations for this article.")
     if section:
         instructions.append(f"Section focus: {section}")
+    if item.get("anchor_block_excerpt"):
+        instructions.append("Image will be inserted right after the following paragraph. Anchor excerpt: " + str(item["anchor_block_excerpt"]))
     if item.get("section_excerpt"):
-        instructions.append(f"Target excerpt: {item['section_excerpt']}")
+        instructions.append("Section excerpt: " + str(item["section_excerpt"]))
     if item.get("layout_variant_label"):
         instructions.append(f"Layout variant: {item['layout_variant_label']}")
     if item.get("layout_variant_instruction"):
@@ -2268,6 +2520,15 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
     label_strategy = image_label_strategy(item)
     text_budget = image_text_budget(item)
     aspect_policy = image_aspect_policy(item)
+    style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
+    base_style_label = (item.get("base_preset_label") or controls.get("preset_label") or controls.get("style") or "").strip()
+    visual_style_label = (item.get("visual_preset_label") or base_style_label).strip()
+    style_lines: list[str] = []
+    if style_mode == "mixed-by-type":
+        style_lines.append(f"- 基调风格：{base_style_label or 'default'}")
+        style_lines.append(f"- 当前图片风格：{visual_style_label or 'default'}")
+    else:
+        style_lines.append(f"- 统一风格：{base_style_label or 'default'}")
     lines = [
         "---",
         f"id: {item['id']}",
@@ -2277,15 +2538,19 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         f"target_section: {item.get('target_section', '')}",
         f"layout_variant: {item.get('layout_variant_key', '')}",
         f"layout_family: {controls.get('layout_family', '')}",
-        f"preset: {controls.get('preset', '')}",
-        f"density: {controls.get('density', 'rich')}",
+        f"style_mode: {style_mode}",
+        f"base_preset: {controls.get('preset', '')}",
+        f"preset: {item.get('visual_preset') or controls.get('preset', '')}",
+        f"density: {controls.get('density', 'balanced')}",
         "---",
         "",
         f"# 图片 Prompt：{item['id']}",
         "",
         f"- 用途：{image_purpose_label(item)}",
         f"- 目标读者：{audience}",
-        f"- 统一风格：{controls.get('preset_label') or controls.get('style')}",
+    ]
+    lines.extend(style_lines)
+    lines.extend([
         f"- 版式变体：{item.get('layout_variant_label', '默认构图')}",
         "",
         "## 视觉内容",
@@ -2294,7 +2559,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         "",
         "## 视觉元素",
         "",
-    ]
+    ])
     lines.extend(f"- {element}" for element in visual_elements)
     lines.extend([
         "",
@@ -2313,7 +2578,11 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         "",
         f"- {aspect_policy}",
         "",
-        "## 目标段落摘录",
+        "## 锚定段落（插入点）摘录",
+        "",
+        item.get("anchor_block_excerpt") or "无",
+        "",
+        "## 章节摘要",
         "",
         item.get("section_excerpt") or "无",
         "",
@@ -2322,7 +2591,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         prompt,
         "",
     ])
-    return "\n".join(lines)
+    return "\n".join(line for line in lines if line is not None)
 
 
 def write_image_outline_artifacts(workspace: Path, title: str, audience: str, controls: dict[str, Any], plan: dict[str, Any]) -> None:
@@ -2341,20 +2610,33 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
                 "purpose": image_purpose_label(item),
                 "target_section": item.get("target_section", ""),
                 "layout_variant": item.get("layout_variant_label", ""),
+                "style_mode": item.get("style_mode") or controls.get("style_mode") or "uniform",
+                "base_preset": item.get("base_preset") or controls.get("preset") or "",
+                "base_preset_label": item.get("base_preset_label") or controls.get("preset_label") or "",
+                "preset": item.get("visual_preset") or controls.get("preset") or "",
+                "preset_label": item.get("visual_preset_label") or "",
                 "layout_spec": layout_spec,
                 "visual_content": image_visual_content(item),
                 "visual_elements": image_visual_elements(item),
                 "label_strategy": label_strategy,
                 "text_budget": image_text_budget(item),
                 "aspect_policy": image_aspect_policy(item),
+                "anchor_block_excerpt": item.get("anchor_block_excerpt") or "",
                 "prompt_path": relative_posix(prompt_path, workspace),
             }
         )
     outline = {
         "title": title,
-        "density": controls.get("density", "rich"),
+        "density": controls.get("density", "balanced"),
         "preset": controls.get("preset", ""),
         "preset_label": controls.get("preset_label", ""),
+        "style_mode": controls.get("style_mode", "uniform"),
+        "preset_cover": controls.get("preset_cover", ""),
+        "preset_cover_label": controls.get("preset_cover_label", ""),
+        "preset_infographic": controls.get("preset_infographic", ""),
+        "preset_infographic_label": controls.get("preset_infographic_label", ""),
+        "preset_inline": controls.get("preset_inline", ""),
+        "preset_inline_label": controls.get("preset_inline_label", ""),
         "layout_family": controls.get("layout_family", ""),
         "planned_inline_count": plan.get("planned_inline_count", 0),
         "requested_inline_count": plan.get("requested_inline_count", plan.get("planned_inline_count", 0)),
@@ -2367,7 +2649,13 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
     write_json(workspace / "image-outline.json", outline)
     lines = [f"# 插图大纲：{title}", ""]
     lines.append(f"- 密度：`{outline['density']}`")
-    lines.append(f"- 风格预设：`{outline['preset'] or 'default'}`")
+    if outline.get("style_mode") == "mixed-by-type":
+        lines.append(
+            f"- 风格模式：`{outline['style_mode']}`（封面 `{outline.get('preset_cover')}` / 信息图 `{outline.get('preset_infographic')}` / 正文 `{outline.get('preset_inline')}`）"
+        )
+        lines.append(f"- 基调预设：`{outline['preset'] or 'default'}`")
+    else:
+        lines.append(f"- 风格预设：`{outline['preset'] or 'default'}`")
     lines.append(f"- 布局家族：`{outline['layout_family'] or 'auto'}`")
     lines.append(f"- 正文插图：`{outline['planned_inline_count']}`（请求值 `{outline['requested_inline_count']}`）")
     if outline.get("planning_shortfall_reason"):
@@ -2400,11 +2688,18 @@ def write_topic_discovery_artifacts(workspace: Path, payload: dict[str, Any]) ->
     lines = [
         f"# 热点选题发现（最近 {payload.get('window_hours', 24)} 小时）",
         "",
+        f"- 数据源：`{payload.get('provider', 'google-news-rss')}`",
+        "",
     ]
     for index, item in enumerate(payload.get("candidates") or [], start=1):
         lines.append(f"## {index}. {item['recommended_topic']}")
         lines.append("")
         lines.append(f"- 热点标题：{item['hot_title']}")
+        recommended_title = item.get("recommended_title") or item.get("recommended_topic") or item.get("hot_title")
+        threshold = int(item.get('recommended_title_threshold') or TITLE_SCORE_THRESHOLD)
+        score = int(item.get('recommended_title_score') or 0)
+        gate = bool(item.get('recommended_title_gate_passed', False))
+        lines.append(f"- 推荐标题：{recommended_title}｜评分 {score}/{threshold}｜{'通过' if gate else '未通过'}")
         lines.append(f"- 来源：{item['source']}")
         if item.get("published_at"):
             lines.append(f"- 时间：{item['published_at']}")
@@ -2422,9 +2717,20 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     window_hours = int(args.window_hours or 24)
     limit = int(args.limit or DISCOVERY_TOPIC_LIMIT)
-    payload = discover_recent_topics(window_hours=window_hours, limit=limit)
+    provider = getattr(args, "provider", None)
+    payload = discover_recent_topics(window_hours=window_hours, limit=limit, provider=provider)
     write_topic_discovery_artifacts(workspace, payload)
     manifest["topic_discovery_path"] = "topic-discovery.json"
+    manifest["topic_discovery_provider"] = payload.get("provider") or normalize_discovery_provider(provider)
+    controls = dict(manifest.get("image_controls") or {})
+    # 无主题启动链路默认：balanced + mixed-by-type（不覆盖用户已有配置）。
+    controls.setdefault("density", "balanced")
+    controls.setdefault("style_mode", "mixed-by-type")
+    controls.setdefault("preset", "editorial-grain")
+    controls.setdefault("preset_cover", "bold")
+    controls.setdefault("preset_infographic", "notion")
+    controls.setdefault("preset_inline", "editorial-grain")
+    manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -2432,14 +2738,27 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
 
 def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[str, Any]:
     current = dict(existing or {})
+    raw_style_mode = getattr(args, "image_style_mode", None) or current.get("style_mode") or "uniform"
+    style_mode = "mixed-by-type" if str(raw_style_mode).strip().lower().replace("_", "-") in {"mixed-by-type", "mixed"} else "uniform"
     explicit_preset = getattr(args, "image_preset", None)
     selected_preset = explicit_preset or current.get("preset") or ""
+    if style_mode == "mixed-by-type" and not str(selected_preset).strip():
+        selected_preset = "editorial-grain"
     preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
-    density = getattr(args, "image_density", None) or current.get("density") or "rich"
+    density = getattr(args, "image_density", None) or current.get("density") or "balanced"
     layout_family = getattr(args, "image_layout_family", None) or current.get("layout_family") or ""
+
+    preset_cover = getattr(args, "image_preset_cover", None) or current.get("preset_cover") or ""
+    preset_infographic = getattr(args, "image_preset_infographic", None) or current.get("preset_infographic") or ""
+    preset_inline = getattr(args, "image_preset_inline", None) or current.get("preset_inline") or ""
+    if style_mode == "mixed-by-type":
+        preset_cover = preset_cover or "bold"
+        preset_infographic = preset_infographic or "notion"
+        preset_inline = preset_inline or "editorial-grain"
 
     if selected_preset and current.get("preset") != selected_preset:
         base = {
+            "style_mode": style_mode,
             "preset": selected_preset,
             "preset_label": preset.get("label", ""),
             "theme": preset.get("theme", "科技"),
@@ -2449,9 +2768,13 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "custom_visual_brief": preset.get("custom_visual_brief", ""),
             "density": density,
             "layout_family": layout_family,
+            "preset_cover": preset_cover,
+            "preset_infographic": preset_infographic,
+            "preset_inline": preset_inline,
         }
     else:
         base = {
+            "style_mode": style_mode,
             "preset": current.get("preset", selected_preset),
             "preset_label": current.get("preset_label", preset.get("label", "")),
             "theme": current.get("theme") or preset.get("theme") or "科技",
@@ -2461,6 +2784,9 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
             "density": density,
             "layout_family": layout_family,
+            "preset_cover": preset_cover,
+            "preset_infographic": preset_infographic,
+            "preset_inline": preset_inline,
         }
 
     theme = getattr(args, "image_theme", None)
@@ -2481,6 +2807,12 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
         base["custom_visual_brief"] = brief
     if base.get("preset"):
         base["preset_label"] = IMAGE_STYLE_PRESETS.get(base["preset"], {}).get("label", base.get("preset_label", ""))
+    if base.get("preset_cover"):
+        base["preset_cover_label"] = IMAGE_STYLE_PRESETS.get(base["preset_cover"], {}).get("label", "")
+    if base.get("preset_infographic"):
+        base["preset_infographic_label"] = IMAGE_STYLE_PRESETS.get(base["preset_infographic"], {}).get("label", "")
+    if base.get("preset_inline"):
+        base["preset_inline_label"] = IMAGE_STYLE_PRESETS.get(base["preset_inline"], {}).get("label", "")
     return base
 
 
@@ -2742,9 +3074,9 @@ def infer_section_image_type(section_metric: dict[str, Any], is_final: bool = Fa
     return "正文插图"
 
 
-def estimate_inline_image_count(body: str, explicit_count: int, density: str = "rich") -> int:
+def estimate_inline_image_count(body: str, explicit_count: int, density: str = "balanced") -> int:
     char_count = cjk_len(re.sub(r"^#{1,6}\s+", "", strip_image_directives(body), flags=re.M))
-    density = density if density in IMAGE_DENSITY_CHOICES else "rich"
+    density = density if density in IMAGE_DENSITY_CHOICES else "balanced"
     minimum_inline = 4 if char_count > 2000 else 0
     if explicit_count and explicit_count > 0:
         return max(explicit_count, minimum_inline)
@@ -2806,14 +3138,60 @@ def estimate_inline_image_count(body: str, explicit_count: int, density: str = "
 
 
 def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> int:
-    paragraph_count = section_metric.get("paragraph_count", 0)
+    blocks = [block for block in (section_metric.get("blocks") or []) if str(block).strip()]
+    paragraph_count = len(blocks) if blocks else int(section_metric.get("paragraph_count") or 0)
     if paragraph_count <= 1:
         return 0
-    if variant <= 0:
-        return 1 if paragraph_count >= 3 else 0
-    if paragraph_count <= 3:
-        return paragraph_count - 1
-    return min(paragraph_count - 1, max(2, paragraph_count // 2))
+    if not blocks:
+        # fallback: keep previous placement heuristic when正文块不可用
+        if variant <= 0:
+            return 1 if paragraph_count >= 3 else 0
+        if paragraph_count <= 3:
+            return paragraph_count - 1
+        return min(paragraph_count - 1, max(2, paragraph_count // 2))
+
+    def block_score(index: int, block: str) -> float:
+        length = cjk_len(block)
+        score = 0.0
+        if 80 <= length <= 380:
+            score += 3.0
+        elif 40 <= length < 80:
+            score += 1.0
+        elif length > 380:
+            score += 1.0
+        else:
+            score -= 2.0
+
+        if re.search(r"(^|\n)\s*(?:[-*]\s+|\d+[\.、]\s+)", block, flags=re.M):
+            score += 2.0
+        if re.search(r"\d{4}年|\d+(?:\.\d+)?%|\d+(?:\.\d+)?(?:万|亿|个|次|倍)", block):
+            score += 2.0
+        if re.search(r"步骤|清单|对比|区别|误区|结论|框架|模型|指标|数据|案例|例如|比如|要点|建议", block):
+            score += 1.5
+        if "：" in block or ":" in block:
+            score += 0.5
+        if length < 60 and re.search(r"^(所以|因此|然后|接下来|下面|再说|另外|总之)[，。:：]?$", re.sub(r"\s+", "", block)):
+            score -= 3.0
+        if block.strip().startswith(">"):
+            score -= 1.0
+
+        if variant <= 0:
+            desired = 1 if paragraph_count >= 3 else 0
+            if index == 0 and paragraph_count >= 3:
+                score -= 1.0
+        else:
+            desired = min(paragraph_count - 1, max(2, paragraph_count // 2 + variant))
+            if index < paragraph_count // 2:
+                score -= 0.5
+        score -= abs(index - desired) * 0.25
+        return score
+
+    desired = 1 if paragraph_count >= 3 else 0
+    if variant > 0:
+        desired = min(paragraph_count - 1, max(2, paragraph_count // 2 + variant))
+    scored = [(block_score(i, blocks[i]), -abs(i - desired), i) for i in range(paragraph_count)]
+    scored.sort(reverse=True)
+    return int(scored[0][2])
 
 
 def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, Any]]:
@@ -2926,7 +3304,7 @@ def image_planning_diagnostics(sections: list[dict[str, Any]], inline_sections: 
     planned_count = len(inline_sections)
     reasons: list[str] = []
     if planned_count < requested_inline_count:
-        reasons.append("高密度 rich 规划已请求更多正文图，但可用章节和长章节复用次数有限。")
+        reasons.append("当前密度规划已请求更多正文图，但可用章节和长章节复用次数有限。")
     if skipped_sections:
         reasons.append(f"有 {len(skipped_sections)} 个章节被显式标记为 skip。")
     if eligible_sections < requested_inline_count:
@@ -2951,7 +3329,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
     intro_blocks, sections = normalize_sections_for_images(body)
     provider = image_provider_from_env(args.provider)
-    inline_limit = estimate_inline_image_count(body, args.inline_count, controls.get("density", "rich"))
+    inline_limit = estimate_inline_image_count(body, args.inline_count, controls.get("density", "balanced"))
     inline_sections = select_sections_for_images(body, inline_limit)
     intro_char_count = sum(cjk_len(block) for block in intro_blocks)
     content_sections = [section for section in sections if not is_reference_heading(section.get("heading", ""))]
@@ -3002,6 +3380,12 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         image_type = section.get("image_type") or "\u6b63\u6587\u63d2\u56fe"
         occurrence_index = type_occurrence.get(image_type, 0)
         variant = pick_layout_variant(image_type, occurrence_index, controls.get("layout_family", ""))
+        blocks = [block for block in (section.get("blocks") or []) if block.strip()]
+        placement_index = int(section.get("placement_block_index", 0) or 0)
+        anchor_index = 0
+        if blocks:
+            anchor_index = max(0, min(placement_index, len(blocks) - 1))
+        anchor_excerpt = extract_summary(blocks[anchor_index], 220) if blocks else section.get("excerpt", "")
         items.append(
             {
                 "id": f"inline-{index:02d}",
@@ -3011,6 +3395,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
                 "insert_strategy": "section_middle",
                 "placement_block_index": section["placement_block_index"],
                 "placement_reason": section["placement_reason"],
+                "anchor_block_excerpt": anchor_excerpt,
                 "section_weight": section["section_weight"],
                 "alt": f"{section['heading']} {image_type}",
                 "aspect_ratio": "16:9",
@@ -3025,6 +3410,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
 
     for item in items:
         item["provider"] = provider
+        item.update(visual_profile_for_item(controls, item))
         item["prompt"] = compose_prompt(title, summary, controls, item, audience)
         item["revised_prompt"] = item["prompt"]
         item["asset_path"] = None
@@ -3037,7 +3423,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         "article_char_count": cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
         "planned_inline_count": len(inline_sections),
         "requested_inline_count": inline_limit,
-        "density_mode": controls.get("density", "rich"),
+        "density_mode": controls.get("density", "balanced"),
         "layout_family": controls.get("layout_family", ""),
         "planning_shortfall_reason": diagnostics["planning_shortfall_reason"],
         "skipped_sections": diagnostics["skipped_sections"],

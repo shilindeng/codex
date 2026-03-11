@@ -948,7 +948,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     assert_publish_request_ready(args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
-        return legacy.cmd_discover_topics(argparse.Namespace(workspace=str(workspace), window_hours=24, limit=legacy.DISCOVERY_TOPIC_LIMIT))
+        return legacy.cmd_discover_topics(
+            argparse.Namespace(
+                workspace=str(workspace),
+                window_hours=24,
+                limit=legacy.DISCOVERY_TOPIC_LIMIT,
+                provider="auto",
+            )
+        )
     require_live_text_provider("run")
     topic = raw_topic or "未命名主题"
     if not (workspace / "research.json").exists():
@@ -1032,7 +1039,14 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     assert_publish_request_ready(args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
-        return legacy.cmd_discover_topics(argparse.Namespace(workspace=str(workspace), window_hours=24, limit=legacy.DISCOVERY_TOPIC_LIMIT))
+        return legacy.cmd_discover_topics(
+            argparse.Namespace(
+                workspace=str(workspace),
+                window_hours=24,
+                limit=legacy.DISCOVERY_TOPIC_LIMIT,
+                provider="auto",
+            )
+        )
     topic = raw_topic or "未命名主题"
     angle = args.angle or manifest.get("direction") or ""
     audience = args.audience or manifest.get("audience") or "大众读者"
@@ -1104,6 +1118,10 @@ def cmd_all(args: argparse.Namespace) -> int:
             title_count=3,
             image_provider=args.provider,
             image_preset=args.image_preset,
+            image_style_mode=getattr(args, "image_style_mode", None),
+            image_preset_cover=getattr(args, "image_preset_cover", None),
+            image_preset_infographic=getattr(args, "image_preset_infographic", None),
+            image_preset_inline=getattr(args, "image_preset_inline", None),
             image_density=args.image_density,
             image_layout_family=args.image_layout_family,
             image_theme=args.image_theme,
@@ -1172,7 +1190,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--to", choices=["render", "publish"], default="render")
     run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
     run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
+    run.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
+    run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    run.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    run.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
     run.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     run.add_argument("--image-theme")
     run.add_argument("--image-style")
@@ -1192,6 +1214,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover_topics.add_argument("--workspace", required=True)
     discover_topics.add_argument("--window-hours", type=int, choices=[12, 24], default=24)
     discover_topics.add_argument("--limit", type=int, default=legacy.DISCOVERY_TOPIC_LIMIT)
+    discover_topics.add_argument("--provider", choices=legacy.DISCOVERY_PROVIDER_CHOICES, default="auto")
     discover_topics.set_defaults(func=cmd_discover_topics)
 
     hosted_run = subparsers.add_parser("hosted-run", help="由宿主 agent 负责文本生成，再继续评分、配图、渲染与发布")
@@ -1207,7 +1230,11 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
     hosted_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
     hosted_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    hosted_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
+    hosted_run.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
+    hosted_run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    hosted_run.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    hosted_run.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    hosted_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
     hosted_run.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     hosted_run.add_argument("--image-theme")
     hosted_run.add_argument("--image-style")
@@ -1235,7 +1262,11 @@ def build_parser() -> argparse.ArgumentParser:
     ideate.add_argument("--selected-title")
     ideate.add_argument("--outline-file")
     ideate.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    ideate.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
+    ideate.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
+    ideate.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    ideate.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    ideate.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    ideate.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
     ideate.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     ideate.add_argument("--image-theme")
     ideate.add_argument("--image-style")
@@ -1266,7 +1297,11 @@ def build_parser() -> argparse.ArgumentParser:
     plan_images.add_argument("--workspace", required=True)
     plan_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
     plan_images.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    plan_images.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
+    plan_images.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
+    plan_images.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    plan_images.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    plan_images.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    plan_images.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
     plan_images.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     plan_images.add_argument("--image-theme")
     plan_images.add_argument("--image-style")
@@ -1323,7 +1358,11 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--workspace", required=True)
     all_cmd.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
     all_cmd.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    all_cmd.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="rich")
+    all_cmd.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
+    all_cmd.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    all_cmd.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    all_cmd.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    all_cmd.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
     all_cmd.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     all_cmd.add_argument("--image-theme")
     all_cmd.add_argument("--image-style")

@@ -80,13 +80,17 @@
 
 ## `discover-topics`
 
-- 输入：`--workspace [--window-hours 12|24] [--limit 8]`
-- 依赖：可联网访问新闻 RSS
+- 输入：`--workspace [--window-hours 12|24] [--limit 8] [--provider auto|google-news-rss|tavily]`
+- 依赖：
+  - `google-news-rss`：可联网访问 Google News RSS
+  - `tavily/auto`：若需 Tavily 回退，配置环境变量 `TAVILY_API_KEY`
 - 输出：
   - `topic-discovery.json`
   - `topic-discovery.md`
-- 失败条件：新闻源不可用或返回为空
-- 说明：用于“无主题启动”，抓最近 12/24 小时热点新闻并给出可写角度与观点提示
+- 失败条件：数据源不可用或返回为空
+- 说明：
+  - 用于“无主题启动”，抓最近 12/24 小时热点新闻并给出可写角度、观点提示与标题传播力评分
+  - `--provider auto` 默认先用 RSS；RSS 不可用或无结果时，若检测到 `TAVILY_API_KEY` 则自动回退 Tavily
 
 ## `plan-images`
 

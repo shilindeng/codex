@@ -1,4 +1,5 @@
 runs/
+jobs/
 __pycache__/
 *.pyc
 *.pyo
