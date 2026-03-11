@@ -38,7 +38,8 @@
 无配置时要求：
 
 - 在宿主 agent 场景，优先走 `hosted-run`
-- 在纯 CLI 场景，命令可以明确提示缺配置，但不允许静默跳过
+- 在纯 CLI 场景，`research / titles / outline / write / review / run` 缺配置时必须直接失败，不允许静默产出 placeholder 稿
+- `hosted-run` 只有在宿主已提供 `article.md` / `--article-file` 时才允许无文本 API 继续；若要自动补正文，仍必须有可用文本 API
 
 ## 图片 provider
 
@@ -59,6 +60,9 @@
   - `publish_intent=true`
   - `--confirmed-publish`
   - `article.wechat.html`
+  - `score-report.json.passed=true`
+  - “可信度与检索支撑”维度达到最小阈值
+  - 当前工作目录不存在 placeholder research / review / article 回退痕迹
 
 ## OpenCode 兼容约定
 

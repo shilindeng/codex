@@ -125,6 +125,12 @@ TITLE_SCORE_THRESHOLD = 56
 DISCOVERY_TOPIC_LIMIT = 8
 DISCOVERY_FEED_LIMIT = 20
 START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动"}
+GEMINI_WEB_NO_IMAGE_MARKER = "No image returned in response."
+GEMINI_WEB_IMAGE_MODEL_CANDIDATES = [
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-image-preview",
+    "gemini-3-pro-image-preview",
+]
 AI_STYLE_PHRASES = [
     "首先",
     "其次",
@@ -1726,6 +1732,15 @@ def image_provider_from_env(explicit: str | None) -> str:
     raise SystemExit("未检测到稳定图片后端。默认仅自动选择 gemini-api 或 openai-image；如需 gemini-web，请显式传 --provider gemini-web。")
 
 
+def fallback_image_provider(preferred: str) -> str | None:
+    if preferred == "gemini-web":
+        if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+            return "gemini-api"
+        if os.getenv("OPENAI_API_KEY"):
+            return "openai-image"
+    return None
+
+
 def consent_dir() -> Path:
     if os.name == "nt":
         base = Path(os.getenv("APPDATA") or Path.home() / "AppData" / "Roaming")
@@ -1738,6 +1753,23 @@ def consent_dir() -> Path:
 
 def consent_path() -> Path:
     return consent_dir() / "consent.json"
+
+
+def local_chrome_user_data_root() -> Path | None:
+    candidates = []
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "Google" / "Chrome" / "User Data")
+        candidates.append(Path(local_app_data) / "Microsoft" / "Edge" / "User Data")
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    return None
+
+
+def gemini_web_cookie_file() -> Path:
+    base = Path(os.getenv("APPDATA") or Path.home() / "AppData" / "Roaming")
+    return base / "baoyu-skills" / "gemini-web" / "cookies.json"
 
 
 def ensure_gemini_web_consent() -> dict[str, Any]:
@@ -1934,12 +1966,26 @@ def generate_gemini_api_image(prompt: str, output_path: Path, model: str, aspect
     }
 
 
-def generate_gemini_web_image(prompt: str, output_path: Path) -> dict[str, Any]:
+def normalize_gemini_web_model(requested: str | None) -> str:
+    value = (requested or "").strip()
+    if value and value.startswith("gemini-3."):
+        return value
+    return GEMINI_WEB_IMAGE_MODEL_CANDIDATES[0]
+
+
+def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None = None) -> dict[str, Any]:
     ensure_gemini_web_consent()
     bun = resolve_bun_command()
     root = ensure_gemini_web_vendor()
     cookie_temp: Path | None = None
     env = os.environ.copy()
+    detected_cookie = gemini_web_cookie_file()
+    if not env.get("GEMINI_WEB_COOKIE_PATH") and detected_cookie.exists():
+        env["GEMINI_WEB_COOKIE_PATH"] = str(detected_cookie)
+    if not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and not env.get("GEMINI_WEB_COOKIE_PATH"):
+        detected_profile_root = local_chrome_user_data_root()
+        if detected_profile_root is not None:
+            env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(detected_profile_root)
     raw_cookie = env.get("GEMINI_WEB_COOKIE")
     if raw_cookie:
         cookie_map = parse_cookie_string(raw_cookie)
@@ -1950,48 +1996,73 @@ def generate_gemini_web_image(prompt: str, output_path: Path) -> dict[str, Any]:
         cookie_temp = Path(handle.name)
         write_cookie_payload(cookie_temp, cookie_map)
         env["GEMINI_WEB_COOKIE_PATH"] = str(cookie_temp)
-    command = bun + [str(root / "main.ts"), "--prompt", prompt, "--image", str(output_path), "--json"]
-    if env.get("GEMINI_WEB_COOKIE_PATH"):
-        command.extend(["--cookie-path", env["GEMINI_WEB_COOKIE_PATH"]])
-    if env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
-        command.extend(["--profile-dir", env["GEMINI_WEB_CHROME_PROFILE_DIR"]])
+    completed: subprocess.CompletedProcess[str] | None = None
+    tried_models: list[str] = []
+    last_error: str = ""
     try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-            check=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        stdout = (exc.stdout or "").strip()
-        stderr = (exc.stderr or "").strip()
-        combined = "\n".join(part for part in [stdout, stderr] if part).lower()
-        auth_markers = [
-            "autherror",
-            "unauthorized",
-            "login",
-            "sign in",
-            "signin",
-            "__secure-1psid",
-            "__secure-1psidts",
-            "cookie",
-            "refresh cookies",
-            "failed to refresh cookies",
-        ]
-        if any(marker in combined for marker in auth_markers):
-            raise SystemExit(
-                "Gemini 登录态可能已失效，请重新登录 Gemini 后再试。"
-                " 如果你使用的是 cookie 文件，请刷新 cookie；"
-                " 如果你使用的是浏览器 Profile，请先在对应浏览器里确认 Gemini 已登录。"
-            ) from exc
-        detail = "\n".join(part for part in [stdout, stderr] if part)
-        raise SystemExit(f"gemini-web 图片生成失败：{detail or str(exc)}") from exc
+        for candidate in [normalize_gemini_web_model(model)] + [name for name in GEMINI_WEB_IMAGE_MODEL_CANDIDATES if name != normalize_gemini_web_model(model)]:
+            if candidate in tried_models:
+                continue
+            tried_models.append(candidate)
+            command = bun + [str(root / "main.ts"), "--prompt", prompt, "--image", str(output_path), "--json", "--model", candidate]
+            if env.get("GEMINI_WEB_COOKIE_PATH"):
+                command.extend(["--cookie-path", env["GEMINI_WEB_COOKIE_PATH"]])
+            if env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
+                command.extend(["--profile-dir", env["GEMINI_WEB_CHROME_PROFILE_DIR"]])
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                check=True,
+                timeout=12,
+            )
+                break
+            except subprocess.CalledProcessError as exc:
+                stdout = (exc.stdout or "").strip()
+                stderr = (exc.stderr or "").strip()
+                detail = "\n".join(part for part in [stdout, stderr] if part)
+                combined = "\n".join(part for part in [stdout, stderr] if part).lower()
+                auth_markers = [
+                    "autherror",
+                    "unauthorized",
+                    "login",
+                    "sign in",
+                    "signin",
+                    "__secure-1psid",
+                    "__secure-1psidts",
+                    "cookie",
+                    "refresh cookies",
+                    "failed to refresh cookies",
+                ]
+                if any(marker in combined for marker in auth_markers):
+                    raise SystemExit(
+                        "Gemini 登录态可能已失效，请重新登录 Gemini 后再试。"
+                        " 如果你使用的是 cookie 文件，请刷新 cookie；"
+                        " 如果你使用的是浏览器 Profile，请先在对应浏览器里确认 Gemini 已登录。"
+                    ) from exc
+                last_error = detail or str(exc)
+                if GEMINI_WEB_NO_IMAGE_MARKER.lower() in combined:
+                    continue
+                if "Unknown model name" in last_error:
+                    continue
+                raise SystemExit(f"gemini-web 图片生成失败：{last_error}") from exc
+            except subprocess.TimeoutExpired:
+                last_error = f"模型 {candidate} 调用超时"
+                continue
     finally:
         if cookie_temp and cookie_temp.exists():
             cookie_temp.unlink(missing_ok=True)
+    if completed is None:
+        raise SystemExit(
+            "gemini-web 当前返回了文本响应，但没有返回图片。"
+            " 已尝试图片模型："
+            + ", ".join(tried_models)
+            + "。这通常意味着 Gemini Web 图片能力或非官方接口已发生兼容变化。"
+        )
     stdout = (completed.stdout or "").strip()
     try:
         payload = json.loads(stdout) if stdout else {}
@@ -2004,7 +2075,12 @@ def generate_gemini_web_image(prompt: str, output_path: Path) -> dict[str, Any]:
         "revised_prompt": payload.get("text") or prompt,
         "width": width,
         "height": height,
-        "source_meta": {"sessionId": payload.get("sessionId"), "model": payload.get("model")},
+        "source_meta": {
+            "sessionId": payload.get("sessionId"),
+            "model": payload.get("model"),
+            "tried_models": tried_models,
+            "profile_dir": env.get("GEMINI_WEB_CHROME_PROFILE_DIR", ""),
+        },
     }
 
 
@@ -2988,7 +3064,8 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
     plan = read_json(plan_path, default=None)
     if not plan:
         raise SystemExit("缺少 image-plan.json，请先运行 plan-images。")
-    provider = image_provider_from_env(args.provider or plan.get("provider"))
+    requested_provider = args.provider or plan.get("provider")
+    provider = image_provider_from_env(requested_provider)
     images_dir = ensure_dir(workspace / "assets" / "images")
     generated = {}
     for item in plan.get("items") or []:
@@ -3011,7 +3088,24 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                 "source_meta": {"dry_run": True, "prompt_source": "prompt-file" if prompt_override else "plan"},
             }
         elif provider == "gemini-web":
-            result = generate_gemini_web_image(effective_prompt, output_path)
+            try:
+                result = generate_gemini_web_image(effective_prompt, output_path)
+            except SystemExit as exc:
+                fallback = fallback_image_provider(provider)
+                message = str(exc)
+                if fallback and ("没有返回图片" in message or GEMINI_WEB_NO_IMAGE_MARKER in message):
+                    if fallback == "gemini-api":
+                        result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
+                    else:
+                        result = generate_openai_image(effective_prompt, output_path, args.openai_model, aspect)
+                    result["source_meta"] = {
+                        **result.get("source_meta", {}),
+                        "fallback_from": "gemini-web",
+                        "fallback_reason": message,
+                    }
+                    provider = fallback
+                else:
+                    raise
         elif provider == "gemini-api":
             result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
         elif provider == "openai-image":
@@ -3849,7 +3943,15 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
             "notes": ["官方 OpenAI 图片接口，推荐作为稳定路径。"],
         }
     vendor_missing = [relative for relative in IMAGE_PROVIDER_FILES if not (vendor_root() / relative).exists()]
-    cookie_ready = bool(os.getenv("GEMINI_WEB_COOKIE") or os.getenv("GEMINI_WEB_COOKIE_PATH") or os.getenv("GEMINI_WEB_CHROME_PROFILE_DIR"))
+    detected_cookie_file = gemini_web_cookie_file()
+    detected_profile_root = local_chrome_user_data_root()
+    cookie_ready = bool(
+        os.getenv("GEMINI_WEB_COOKIE")
+        or os.getenv("GEMINI_WEB_COOKIE_PATH")
+        or os.getenv("GEMINI_WEB_CHROME_PROFILE_DIR")
+        or detected_cookie_file.exists()
+        or detected_profile_root
+    )
     bun_ready = shutil.which("bun") is not None
     npx_ready = shutil.which("npx") is not None
     ok = cookie_ready and (bun_ready or npx_ready) and not vendor_missing
@@ -3863,10 +3965,15 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
     return {
         "ok": ok,
         "missing": missing,
-        "notes": ["非官方 best-effort 路径，仅在显式指定 --provider gemini-web 时启用。"],
+        "notes": [
+            "非官方 best-effort 路径，仅在显式指定 --provider gemini-web 时启用。",
+            "当前若仅文本能返回、图片不返回，通常是 Gemini Web 上游图片能力或非官方接口发生兼容变化。",
+        ],
         "bun_available": bun_ready,
         "npx_available": npx_ready,
         "vendor_missing_count": len(vendor_missing),
+        "detected_cookie_file": str(detected_cookie_file) if detected_cookie_file.exists() else "",
+        "detected_profile_root": str(detected_profile_root) if detected_profile_root else "",
     }
 
 

@@ -73,7 +73,7 @@ Multi-turn conversation (agent generates unique sessionId):
 Options:
   -p, --prompt <text>       Prompt text
   --promptfiles <files...>  Read prompt from one or more files (concatenated in order)
-  -m, --model <id>          gemini-3-pro | gemini-3-flash | gemini-3-flash-thinking | gemini-3.1-pro-preview (default: gemini-3-pro)
+  -m, --model <id>          gemini-3-pro | gemini-3-flash | gemini-3-flash-thinking | gemini-3.1-pro-preview | gemini-3.1-flash-image | gemini-3.1-flash-image-preview | gemini-3-pro-image-preview (default: gemini-3.1-flash-image)
   --json                    Output JSON
   --image [path]            Generate an image and save it (default: ./generated.png)
   --reference <files...>    Reference images for vision input
@@ -93,7 +93,7 @@ function parseArgs(argv: string[]): CliArgs {
   const out: CliArgs = {
     prompt: null,
     promptFiles: [],
-    modelId: 'gemini-3-pro',
+    modelId: 'gemini-3.1-flash-image',
     json: false,
     imagePath: null,
     referenceImages: [],
@@ -232,6 +232,9 @@ function resolveModel(id: string): Model {
   if (k === 'gemini-3-flash-thinking') return Model.G_3_0_FLASH_THINKING;
   if (k === 'gemini-3.0-flash-thinking') return Model.G_3_0_FLASH_THINKING;
   if (k === 'gemini-3.1-pro-preview') return Model.G_3_1_PRO_PREVIEW;
+  if (k === 'gemini-3.1-flash-image') return Model.G_3_1_FLASH_IMAGE;
+  if (k === 'gemini-3.1-flash-image-preview') return Model.G_3_1_FLASH_IMAGE_PREVIEW;
+  if (k === 'gemini-3-pro-image-preview') return Model.G_3_PRO_IMAGE_PREVIEW;
   return Model.from_name(k);
 }
 

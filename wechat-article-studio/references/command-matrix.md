@@ -3,7 +3,7 @@
 ## `research`
 
 - 输入：`--workspace --topic [--angle] [--audience] [--source-url ...]`
-- 依赖：可选文本 provider；无 provider 时产出占位研究包
+- 依赖：文本 provider（纯 CLI 场景缺配置会直接失败；宿主模式请改用 `hosted-run` 并由宿主写入 research）
 - 输出：`research.json`
 - 失败条件：缺 `--topic`
 
@@ -53,7 +53,7 @@
 ## `run`
 
 - 输入：`--workspace [--topic] [--to render|publish]`
-- 依赖：工作目录可写；发布时需要微信凭证
+- 依赖：工作目录可写；需要已配置文本 provider；发布时需要微信凭证
 - 输出：从 `research.json` 到 `article.wechat.html`，必要时追加发布产物
 - 失败条件：发布前置条件不满足
 - 常用图片参数：
@@ -66,7 +66,7 @@
 ## `hosted-run`
 
 - 输入：`--workspace --topic [--article-file] [--title] [--outline-file] [--to render|publish]`
-- 依赖：优先使用宿主 agent 已生成正文；若缺失则回退到当前 provider 自动补全；发布时需要微信凭证
+- 依赖：优先使用宿主 agent 已生成正文；若缺失且需要自动补全正文，则必须已配置文本 provider；发布时需要微信凭证
 - 输出：写入 research/ideation/article/review/score/image/render/publish 相关产物
 - 失败条件：发布前置条件不满足，或自动补全过程失败
 - 常用图片参数：
