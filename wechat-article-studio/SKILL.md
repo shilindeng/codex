@@ -57,8 +57,26 @@ python {SKILL_DIR}/scripts/studio.py discover-topics \
 
 说明：
 
-- `--provider auto` 默认先用 Google News RSS；RSS 不可用或返回为空时，若检测到环境变量 `TAVILY_API_KEY` 则自动回退 Tavily。
+- `--provider auto` 回退顺序：Google News RSS -> Custom RSS -> Tavily（如有 `TAVILY_API_KEY`）。
+- `custom-rss` 可用 `--rss-url ...` 或环境变量 `DISCOVERY_RSS_URLS`（逗号分隔）配置 RSS/Atom 源。
 - `--focus ai-tech`（默认）只关注 AI/科技互联网热点；如需全量热点，用 `--focus all`。
+
+选中候选后继续（写入 `manifest.json`，后续 `hosted-run/run` 会沿用）：
+
+```bash
+python {SKILL_DIR}/scripts/studio.py select-topic \
+  --workspace <job-dir> \
+  --index 1 \
+  --angle-index 1
+```
+
+如需补强“可信度与检索支撑”，可运行：
+
+```bash
+python {SKILL_DIR}/scripts/studio.py evidence \
+  --workspace <job-dir> \
+  --auto-search
+```
 
 如果宿主 agent 已经写好了正文，也可以显式导入：
 
@@ -104,7 +122,9 @@ python {SKILL_DIR}/scripts/studio.py run \
 - `review`：生成 `review-report.json` 和 `review-report.md`
 - `score`：运行启发式 lint + heuristic score
 - `revise`：生成 `article-rewrite.md` 候选稿
+- `select-topic`：从 `topic-discovery.json` 选择候选编号并写入 `manifest.json`
 - `discover-topics`：联网发现最近 12/24 小时热点新闻与可写选题
+- `evidence`：抽取/补齐来源证据句，生成 `evidence-report.json` 与 `evidence.md`
 - `hosted-run`：宿主 agent 直出正文，再自动继续评分、改写、配图、排版、发布
 - `run`：从 research 串到 render，必要时再进入 publish
 - `publish` / `verify-draft`：微信草稿箱发布与回读验收

@@ -23,7 +23,7 @@ from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
 from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
-from core.manifest import ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
+from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.render import cmd_render as legacy_render
 from core.rewrite import generate_revision_candidate
 from providers.text.gemini_web import GeminiWebTextProvider
@@ -297,7 +297,16 @@ def cmd_titles(args: argparse.Namespace) -> int:
         }
     )
     ideation = load_ideation(workspace)
-    titles = result.payload[:count] if isinstance(result.payload, list) else result.payload.get("titles", [])
+    payload = result.payload
+    if isinstance(payload, list):
+        titles = payload
+    elif isinstance(payload, dict):
+        titles = payload.get("candidates") or payload.get("titles") or []
+    else:
+        titles = []
+    if not isinstance(titles, list):
+        titles = []
+    titles = titles[:count]
     ideation.update(
         {
             "topic": topic,
@@ -526,7 +535,8 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest["score_report_path"] = "score-report.json"
     manifest["score_total"] = report["total_score"]
     manifest["score_passed"] = report["passed"]
-    rewrite = generate_revision_candidate(workspace, title, meta, body, report, manifest)
+    mode = getattr(args, "mode", None) or "improve-score"
+    rewrite = generate_revision_candidate(workspace, title, meta, body, report, manifest, mode=mode)
     manifest["rewrite_path"] = rewrite["output_path"]
     manifest["rewrite_preview_score"] = rewrite.get("preview_score")
     manifest["rewrite_preview_passed"] = rewrite.get("preview_passed")
@@ -606,6 +616,203 @@ def cmd_consent(args: argparse.Namespace) -> int:
 
 def cmd_discover_topics(args: argparse.Namespace) -> int:
     return legacy.cmd_discover_topics(args)
+
+
+def _reset_manifest_progress(manifest: dict[str, Any]) -> None:
+    manifest["stage"] = "initialized"
+    for key in MANIFEST_STATUS_DEFAULTS:
+        if key == "stage":
+            continue
+        manifest[key] = "not_started"
+
+
+def cmd_select_topic(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+
+    discovery_rel = str(manifest.get("topic_discovery_path") or "topic-discovery.json")
+    discovery_path = workspace / discovery_rel
+    if not discovery_path.exists():
+        raise SystemExit(f"找不到热点选题发现结果：{discovery_path}")
+    discovery = read_json(discovery_path, default={}) or {}
+    candidates = list(discovery.get("candidates") or [])
+    if not candidates:
+        raise SystemExit("topic-discovery.json 中没有 candidates，无法选择。请先运行 discover-topics。")
+
+    index = int(args.index or 0)
+    if index < 1 or index > len(candidates):
+        raise SystemExit(f"--index 超出范围：{index}（可选 1~{len(candidates)}）")
+
+    candidate = candidates[index - 1] or {}
+    new_topic = str(candidate.get("recommended_topic") or candidate.get("hot_title") or "").strip()
+    if not new_topic:
+        raise SystemExit("候选条目缺少 recommended_topic/hot_title，无法写入 manifest。")
+
+    angles = list(candidate.get("angles") or [])
+    angle = str(getattr(args, "angle", "") or "").strip()
+    if not angle:
+        angle_index = int(getattr(args, "angle_index", 1) or 1)
+        if angle_index < 1:
+            angle_index = 1
+        if angles and 1 <= angle_index <= len(angles):
+            angle = str(angles[angle_index - 1] or "").strip()
+        else:
+            angle = str(manifest.get("direction") or "").strip()
+
+    audience = str(getattr(args, "audience", "") or "").strip() or str(manifest.get("audience") or "大众读者")
+    selected_title = str(candidate.get("recommended_title") or candidate.get("hot_title") or new_topic).strip()
+    source_url = str(candidate.get("source_url") or "").strip()
+    source_urls = [source_url] if source_url else []
+
+    previous_topic = str(manifest.get("topic") or "").strip()
+    research = read_json(workspace / "research.json", default={}) or {}
+    research_topic = str(research.get("topic") or "").strip()
+    mismatch = (previous_topic and previous_topic != new_topic) or (research_topic and research_topic != new_topic)
+    if mismatch:
+        _reset_manifest_progress(manifest)
+
+    manifest.update(
+        {
+            "topic": new_topic,
+            "direction": angle,
+            "audience": audience,
+            "selected_title": selected_title,
+            "source_urls": source_urls,
+            "topic_selected_from": discovery_rel,
+            "topic_selected_index": index,
+            "topic_selected_at": now_iso(),
+        }
+    )
+
+    ideation = read_json(workspace / "ideation.json", default={}) or {}
+    ideation.update(
+        {
+            "topic": new_topic,
+            "direction": angle,
+            "selected_title": selected_title,
+            "updated_at": now_iso(),
+        }
+    )
+    write_json(workspace / "ideation.json", ideation)
+    save_manifest(workspace, manifest)
+    print(
+        json.dumps(
+            {
+                "workspace": str(workspace),
+                "selected_index": index,
+                "topic": new_topic,
+                "direction": angle,
+                "selected_title": selected_title,
+                "source_urls": source_urls,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _merge_url_list(base: list[str], extra: list[str]) -> list[str]:
+    merged = normalize_urls([*base, *extra])
+    return merged
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+
+    max_urls = int(getattr(args, "limit", 6) or 6)
+    max_items = int(getattr(args, "max_items", 6) or 6)
+    auto_search = bool(getattr(args, "auto_search", False))
+
+    source_urls = _merge_url_list(list(manifest.get("source_urls") or []), list(getattr(args, "source_url", []) or []))
+
+    if auto_search and legacy.tavily_api_key():
+        topic = str(manifest.get("topic") or "").strip()
+        angle = str(manifest.get("direction") or "").strip()
+        seed = " ".join(part for part in [topic, angle] if part).strip() or "AI 科技 热点"
+        query = f"{seed} 官方 文档 开源"
+        try:
+            discovered = legacy.tavily_search_urls(query, max_results=max_urls)
+        except Exception as exc:
+            discovered = []
+            print(f"evidence 自动搜索失败（已忽略，继续用现有来源）：{exc}")
+        source_urls = _merge_url_list(source_urls, discovered)
+
+    source_urls = source_urls[:max_urls]
+
+    article_path = workspace / (manifest.get("article_path") or "article.md")
+    if article_path.exists():
+        meta, body = split_frontmatter(read_text(article_path))
+        body = legacy.strip_image_directives(body)
+        title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
+    else:
+        title = str(manifest.get("selected_title") or manifest.get("topic") or "未命名标题")
+        body = ""
+
+    if not source_urls:
+        raise SystemExit("当前未提供任何 source_url。请先传入 --source-url 或先选中热点条目后再运行 evidence。")
+
+    report = legacy.collect_online_evidence(title, body, source_urls, workspace, max_items=max_items)
+
+    evidence_lines = [f"# 证据与来源（最多 {max_items} 条证据句）", "", f"- 来源数：`{len(source_urls)}`", ""]
+    for item in report.get("items") or []:
+        evidence_lines.append(f"- 《{item.get('page_title') or ''}》：{item.get('sentence') or ''}")
+        evidence_lines.append(f"  - {item.get('url') or ''}")
+    if not (report.get("items") or []):
+        evidence_lines.append("- 未能从来源中抽取到可用证据句；建议更换为官方发布、文档或权威媒体来源。")
+    evidence_md_path = workspace / "evidence.md"
+    write_text(evidence_md_path, "\n".join(evidence_lines).rstrip() + "\n")
+
+    # Update manifest source urls + evidence pointers (best-effort; does not gate publish by itself).
+    manifest["source_urls"] = source_urls
+    manifest["evidence_report_path"] = "evidence-report.json"
+    manifest["evidence_used_count"] = len(report.get("items") or [])
+    save_manifest(workspace, manifest)
+
+    # Merge into research.json (create stub if missing).
+    research_path = workspace / "research.json"
+    research = read_json(research_path, default={}) or {}
+    research.setdefault("topic", manifest.get("topic") or title)
+    research.setdefault("angle", manifest.get("direction") or "")
+    research.setdefault("audience", manifest.get("audience") or "大众读者")
+    existing_sources = research.get("sources") or []
+    if isinstance(existing_sources, list) and existing_sources and isinstance(existing_sources[0], dict):
+        seen = {str(item.get("url") or "").strip() for item in existing_sources if str(item.get("url") or "").strip()}
+        for url in source_urls:
+            if url not in seen:
+                existing_sources.append({"url": url, "credibility": "evidence"})
+                seen.add(url)
+        research["sources"] = existing_sources
+    else:
+        research["sources"] = _merge_url_list([str(item).strip() for item in existing_sources if str(item).strip()], source_urls)
+    research["evidence_items"] = report.get("items") or []
+    research.setdefault("information_gaps", [])
+    research.setdefault("forbidden_claims", ["不要把未验证信息写成确定事实。"])
+    research["updated_at"] = now_iso()
+    if "provider" not in research:
+        research["provider"] = "evidence"
+    if "model" not in research:
+        research["model"] = "session"
+    if "placeholder" not in research:
+        research["placeholder"] = True
+    write_json(research_path, research)
+
+    print(
+        json.dumps(
+            {
+                "workspace": str(workspace),
+                "source_urls": source_urls,
+                "evidence_report_path": "evidence-report.json",
+                "evidence_md_path": "evidence.md",
+                "evidence_items": len(report.get("items") or []),
+                "auto_search": auto_search,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
 
 
 def _run_score(workspace: str) -> dict[str, Any]:
@@ -923,7 +1130,7 @@ def cmd_score(args: argparse.Namespace) -> int:
                 rewrite_path = workspace / rewrite_path
         else:
             rewrite_path = workspace / "article-rewrite.md"
-        rewrite = generate_revision_candidate(workspace, title, meta, body, report, manifest, rewrite_path.name)
+        rewrite = generate_revision_candidate(workspace, title, meta, body, report, manifest, rewrite_path.name, mode="improve-score")
         report["rewrite"] = rewrite
         manifest["rewrite_path"] = rewrite["output_path"]
         manifest["rewrite_preview_score"] = rewrite.get("preview_score")
@@ -956,6 +1163,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 limit=legacy.DISCOVERY_TOPIC_LIMIT,
                 provider="auto",
                 focus="ai-tech",
+                rss_url=[],
             )
         )
     require_live_text_provider("run")
@@ -987,7 +1195,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     manifest["stage"] = "score"
     save_manifest(workspace, manifest)
     if score_report and not score_report.get("passed", False):
-        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True))
+        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True, mode="improve-score"))
         score_report = _run_score(str(workspace))
         manifest = load_manifest(workspace)
         manifest["score_status"] = "done"
@@ -1057,6 +1265,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
                 limit=legacy.DISCOVERY_TOPIC_LIMIT,
                 provider="auto",
                 focus="ai-tech",
+                rss_url=[],
             )
         )
     topic = raw_topic or "未命名主题"
@@ -1074,7 +1283,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     score_report = _run_score(str(workspace))
     manifest = load_manifest(workspace)
     if score_report and not score_report.get("passed", False):
-        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True))
+        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True, mode="improve-score"))
         score_report = _run_score(str(workspace))
         manifest = load_manifest(workspace)
     _finalize_after_score(workspace, manifest, title, score_report)
@@ -1200,6 +1409,7 @@ def build_parser() -> argparse.ArgumentParser:
     revise = subparsers.add_parser("revise", help="基于 score/report 生成 article-rewrite.md 候选稿")
     revise.add_argument("--workspace", required=True)
     revise.add_argument("--promote", action="store_true", help="将改写稿切换为后续流程默认正文")
+    revise.add_argument("--mode", choices=["improve-score", "de-ai"], default="improve-score", help="改写模式：提分改写或去 AI 味")
     revise.set_defaults(func=cmd_revise)
 
     run = subparsers.add_parser("run", help="从 research 串到 render；显式要求时才继续 publish")
@@ -1240,8 +1450,25 @@ def build_parser() -> argparse.ArgumentParser:
     discover_topics.add_argument("--window-hours", type=int, choices=[12, 24], default=24)
     discover_topics.add_argument("--limit", type=int, default=legacy.DISCOVERY_TOPIC_LIMIT)
     discover_topics.add_argument("--provider", choices=legacy.DISCOVERY_PROVIDER_CHOICES, default="auto")
+    discover_topics.add_argument("--rss-url", action="append", default=[], help="自定义 RSS 源（可重复；用于 provider=custom-rss 或 auto 回退）")
     discover_topics.add_argument("--focus", choices=["ai-tech", "all"], default="ai-tech")
     discover_topics.set_defaults(func=cmd_discover_topics)
+
+    select_topic = subparsers.add_parser("select-topic", help="从 topic-discovery.json 选择候选方向并写入 manifest")
+    select_topic.add_argument("--workspace", required=True)
+    select_topic.add_argument("--index", type=int, required=True, help="候选编号（1-based）")
+    select_topic.add_argument("--angle-index", type=int, default=1, help="角度编号（1-based；默认 1）")
+    select_topic.add_argument("--angle", help="显式指定切入角度（优先级高于 --angle-index）")
+    select_topic.add_argument("--audience", help="显式指定读者画像（缺省沿用 manifest）")
+    select_topic.set_defaults(func=cmd_select_topic)
+
+    evidence = subparsers.add_parser("evidence", help="抽取/补齐来源证据句并回写 research.json/source_urls（默认不联网）")
+    evidence.add_argument("--workspace", required=True)
+    evidence.add_argument("--source-url", action="append", default=[], help="补充来源 URL（可重复）")
+    evidence.add_argument("--limit", type=int, default=6, help="最多保留的来源 URL 数")
+    evidence.add_argument("--max-items", type=int, default=6, help="最多抽取的证据句条数")
+    evidence.add_argument("--auto-search", action="store_true", help="启用 Tavily 自动搜索补来源（需要 TAVILY_API_KEY）")
+    evidence.set_defaults(func=cmd_evidence)
 
     hosted_run = subparsers.add_parser("hosted-run", help="由宿主 agent 负责文本生成，再继续评分、配图、渲染与发布")
     hosted_run.add_argument("--workspace", required=True)

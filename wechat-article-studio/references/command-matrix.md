@@ -45,9 +45,9 @@
 
 ## `revise`
 
-- 输入：`--workspace`
+- 输入：`--workspace [--mode improve-score|de-ai]`
 - 依赖：`article.md`，推荐先有 `score-report.json`
-- 输出：`article-rewrite.md`
+- 输出：`article-rewrite.md`、`article-rewrite.report.md`、`article-rewrite.rewrite.json`
 - 失败条件：找不到文章
 
 ## `run`
@@ -96,9 +96,10 @@
 
 ## `discover-topics`
 
-- 输入：`--workspace [--window-hours 12|24] [--limit 8] [--provider auto|google-news-rss|tavily] [--focus ai-tech|all]`
+- 输入：`--workspace [--window-hours 12|24] [--limit 8] [--provider auto|google-news-rss|custom-rss|tavily] [--rss-url ...] [--focus ai-tech|all]`
 - 依赖：
   - `google-news-rss`：可联网访问 Google News RSS
+  - `custom-rss`：读取 RSS/Atom 源（可用 `--rss-url` 或环境变量 `DISCOVERY_RSS_URLS` 配置）
   - `tavily/auto`：若需 Tavily 回退，配置环境变量 `TAVILY_API_KEY`
 - 输出：
   - `topic-discovery.json`
@@ -106,8 +107,30 @@
 - 失败条件：数据源不可用或返回为空
 - 说明：
   - 用于“无主题启动”，抓最近 12/24 小时热点新闻并给出可写角度、观点提示与标题传播力评分
-  - `--provider auto` 默认先用 RSS；RSS 不可用或无结果时，若检测到 `TAVILY_API_KEY` 则自动回退 Tavily
+  - `--provider auto` 回退顺序：Google RSS -> Custom RSS -> Tavily（如有 `TAVILY_API_KEY`）
   - `--focus ai-tech`（默认）只输出 AI/科技互联网领域；`--focus all` 恢复全量热点
+
+## `select-topic`
+
+- 输入：`--workspace --index [--angle-index] [--angle] [--audience]`
+- 依赖：`topic-discovery.json`
+- 输出：更新 `manifest.json`、`ideation.json`
+- 失败条件：找不到 `topic-discovery.json` 或编号越界
+- 说明：
+  - 用于“无主题启动”后选择候选编号，并把 `topic/direction/selected_title/source_urls` 写入工作目录
+  - 若新选题与旧产物不一致，会重置 `*_status`，避免后续 `run/hosted-run` 因文件存在跳过阶段
+
+## `evidence`
+
+- 输入：`--workspace [--source-url ...] [--limit 6] [--max-items 6] [--auto-search]`
+- 依赖：
+  - 默认仅基于已有 `manifest.source_urls` 与显式 `--source-url` 抽取证据句
+  - `--auto-search`：需要 `TAVILY_API_KEY`，用于自动搜索补齐来源
+- 输出：
+  - `evidence-report.json`
+  - `evidence.md`
+  - 回写 `manifest.json/source_urls` 与 `research.json`（补齐 sources/evidence_items）
+- 失败条件：无任何来源 URL
 
 ## `plan-images`
 
