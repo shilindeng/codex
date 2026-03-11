@@ -37,10 +37,10 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 
 - Codex / ClaudeCode / OpenClaw：默认由宿主 agent 直接生成 research、标题、大纲、正文，不要求用户额外填写文本模型配置
 - 只提供主题也能跑通：`hosted-run` 会优先使用现成 `article.md` / `--article-file`；只有当前已配置可用文本 API 时，才允许自动补全正文
-- 无主题启动也支持：当用户只说“开始”或不提供 topic 时，可先运行 `discover-topics` 联网发现最近 12/24 小时热点，再从建议里二次创作
+- 无主题启动也支持：当用户只说“开始 / 开启公众号创作”或不提供 topic 时，可先运行 `discover-topics --provider auto` 联网发现最近 12/24 小时热点并输出标题传播力评分；RSS 不可用或无结果时，若检测到 `TAVILY_API_KEY` 则自动回退 Tavily
 - 图片生成：提供 Gemini API Key 或 Gemini Web Cookie，或显式改用 OpenAI 图片接口
 - 统一图片风格：可选 `--image-preset`，当前内置 `cute / fresh / warm / bold / minimal / retro / pop / notion / chalkboard / editorial-grain / organic-natural / scientific-blueprint / professional-corporate / abstract-geometric / luxury-minimal / illustrated-handdrawn / photoreal-sketch`
-- 图片密度模式：支持 `--image-density minimal|balanced|per-section|rich`，默认 `rich`
+- 图片密度模式：支持 `--image-density minimal|balanced|per-section|rich`，默认 `balanced`
 - 章节级配图控制：支持在正文中写 `<!-- image:force -->`、`<!-- image:skip -->`、`<!-- image:type=流程图 -->`、`<!-- image:count=2 -->`
 - 微信发布：提供 `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET`
 - 只有脱离宿主、单独运行 CLI 的场景，才需要配置 `OPENAI_API_KEY` 和 `ARTICLE_STUDIO_TEXT_MODEL`；未配置时 `run` 等文本命令会直接失败，不再静默生成 placeholder 稿
@@ -64,7 +64,7 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 ### 文本与工作流
 
 - `--workspace`：工作目录。所有中间产物、图片、HTML、发布结果都会写到这里。
-- `--topic`：文章主题。`hosted-run` 推荐传入；不传或传“开始”时会走热点发现。
+- `--topic`：文章主题。`hosted-run` 推荐传入；不传或传“开始 / 开启公众号创作”时会走热点发现。
 - `--angle`：切入角度或文章方向。
 - `--audience`：目标读者画像，影响写作语气和配图表达。
 - `--source-url`：可重复传入，用于补充研究来源。
@@ -78,7 +78,9 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 
 - `--image-provider`：图片后端，可选 `gemini-web / gemini-api / openai-image`。
 - `--image-preset`：统一视觉主题预设。
-- `--image-density`：配图密度，支持 `minimal / balanced / per-section / rich`，默认 `rich`。
+- `--image-style-mode`：风格模式：`uniform`（统一）或 `mixed-by-type`（按类型混合）。
+- `--image-preset-cover / --image-preset-infographic / --image-preset-inline`：仅在 `mixed-by-type` 下生效，分别控制封面/信息图/正文插图的风格预设。
+- `--image-density`：配图密度，支持 `minimal / balanced / per-section / rich`，默认 `balanced`。
 - `--image-layout-family`：布局家族偏好，支持 `editorial / process / comparison / timeline / hierarchy / dashboard / map / radial / list`。
 - `--image-theme`：覆盖默认主题领域。
 - `--image-style`：覆盖默认视觉风格。
@@ -122,7 +124,7 @@ python wechat-article-studio/scripts/studio.py hosted-run `
   --topic "AI 时代的个人品牌写作" `
   --article-file runs/demo/source.md `
   --image-preset notion `
-  --image-density rich `
+  --image-density balanced `
   --to render
 ```
 
@@ -133,7 +135,7 @@ python wechat-article-studio/scripts/studio.py hosted-run `
   --workspace runs/demo `
   --topic "如何搭建个人知识管理系统" `
   --image-preset fresh `
-  --image-density rich `
+  --image-density balanced `
   --dry-run-images `
   --to render
 ```
@@ -146,7 +148,7 @@ python wechat-article-studio/scripts/studio.py plan-images `
   --provider openai-image `
   --image-preset chalkboard `
   --image-layout-family process `
-  --image-density rich
+  --image-density balanced
 
 python wechat-article-studio/scripts/studio.py generate-images `
   --workspace runs/demo `
@@ -189,7 +191,8 @@ python wechat-article-studio/scripts/studio.py doctor
 python wechat-article-studio/scripts/studio.py discover-topics `
   --workspace runs/demo `
   --window-hours 24 `
-  --limit 8
+  --limit 8 `
+  --provider auto
 ```
 
 ## 标题系统怎么工作

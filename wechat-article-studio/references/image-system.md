@@ -31,6 +31,21 @@
 
 预设一旦指定，会统一覆盖整篇文章的默认 `theme/style/mood/custom_visual_brief`，从而让封面图、信息图、正文插图保持同一视觉语言。仍可用 `--image-theme`、`--image-style`、`--image-mood`、`--custom-visual-brief` 做少量覆盖。
 
+## 风格模式
+
+支持 `--image-style-mode`：
+
+- `uniform`：整篇统一风格（默认）
+- `mixed-by-type`：按图片类型混合风格（封面/信息图/正文插图），但保持整篇配色与母题一致
+
+当 `--image-style-mode mixed-by-type` 时，可额外指定：
+
+- `--image-preset-cover`：封面图预设
+- `--image-preset-infographic`：信息图预设
+- `--image-preset-inline`：正文插图预设（包含流程图/对比图/分隔图等正文内图片）
+
+默认映射：`cover=bold`、`infographic=notion`、`inline=editorial-grain`。无主题启动（`discover-topics`）会默认写入该配置到工作目录 `manifest.json`，后续流程会自动沿用，除非显式覆盖。
+
 ## 密度模式
 
 支持 `--image-density`：
@@ -38,9 +53,9 @@
 - `minimal`：少量关键图
 - `balanced`：均衡配图
 - `per-section`：尽量按章节分布
-- `rich`：更丰富的插图覆盖，默认值
+- `rich`：更丰富的插图覆盖
 
-当前 skill 默认使用 `rich`，但仍会结合章节类型、信息密度和文内标记，避免无意义堆图。
+当前默认使用 `balanced`，但仍会结合章节类型、信息密度和文内标记，避免无意义堆图。
 
 ## 布局家族
 
