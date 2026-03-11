@@ -135,3 +135,4 @@
 - 自动默认只选官方图片后端：`gemini-api`、`openai-image`
 - `gemini-web` 只在显式传入 `--provider gemini-web` 时启用
 - 启用 `gemini-web` 之前必须先完成同意检查
+- `gemini-web` 会优先尝试当前已知的 Gemini Web 图片模型；如果上游只返回文本、不返回图片，而本机又配置了 `gemini-api` 或 `openai-image`，系统会自动降级到官方图片接口

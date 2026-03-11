@@ -30,6 +30,8 @@ from providers.text.openai_compatible import OpenAICompatibleTextProvider, place
 from publishers.wechat import cmd_publish as wechat_publish
 from publishers.wechat import cmd_verify_draft as wechat_verify_draft
 
+PUBLISH_MIN_CREDIBILITY_SCORE = 5
+
 
 def active_text_provider():
     provider_name = (legacy.os.getenv("ARTICLE_STUDIO_TEXT_PROVIDER") or "openai-compatible").strip().lower()
@@ -38,6 +40,58 @@ def active_text_provider():
     if provider_name not in {"openai-compatible", "openai_compatible", ""}:
         raise SystemExit(f"暂不支持的文本 provider：{provider_name}")
     return OpenAICompatibleTextProvider()
+
+
+def require_live_text_provider(command_name: str):
+    provider = active_text_provider()
+    if provider.configured():
+        return provider
+    raise SystemExit(
+        f"{command_name} 需要已配置的文本 provider。"
+        " 请设置 OPENAI_API_KEY 和 ARTICLE_STUDIO_TEXT_MODEL，"
+        " 或改用 hosted-run 并先提供 article.md / --article-file。"
+    )
+
+
+def score_dimension_value(report: dict[str, Any], dimension: str) -> int:
+    for item in report.get("score_breakdown", []):
+        if item.get("dimension") == dimension:
+            return int(item.get("score") or 0)
+    return 0
+
+
+def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    if str(manifest.get("text_model") or "").strip().lower() == "placeholder":
+        reasons.append("当前正文仍来自 placeholder 文本回退")
+    research = load_research(workspace)
+    if research.get("placeholder"):
+        reasons.append("research.json 仍是 placeholder 调研结果")
+    review = read_json(workspace / "review-report.json", default={}) or {}
+    if review.get("placeholder"):
+        reasons.append("review-report.json 仍是 placeholder 评审结果")
+    return reasons
+
+
+def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
+    blockers = placeholder_reasons(workspace, manifest)
+    report = read_json(workspace / "score-report.json", default={}) or {}
+    if not report:
+        blockers.append("缺少 score-report.json，无法确认是否可发布")
+        return blockers
+    if not bool(report.get("passed", manifest.get("score_passed"))):
+        blockers.append("当前稿件评分未达发布阈值")
+    credibility_score = score_dimension_value(report, "可信度与检索支撑")
+    if credibility_score < PUBLISH_MIN_CREDIBILITY_SCORE:
+        blockers.append(f"可信度与检索支撑得分过低（{credibility_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
+    return blockers
+
+
+def assert_publish_request_ready(args: argparse.Namespace) -> None:
+    if getattr(args, "to", None) != "publish":
+        return
+    if not getattr(args, "dry_run_publish", False) and not getattr(args, "confirmed_publish", False):
+        raise SystemExit("进入正式发布前必须显式传入 --confirmed-publish；未确认时不会写入 publish_intent。")
 
 
 def normalize_urls(values: list[str]) -> list[str]:
@@ -186,7 +240,7 @@ def apply_research_credibility_boost(report: dict[str, Any], research: dict[str,
 def cmd_research(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    provider = active_text_provider()
+    provider = require_live_text_provider("research")
     source_urls = normalize_urls(args.source_url or manifest.get("source_urls") or [])
     topic = args.topic or manifest.get("topic") or "未命名主题"
     audience = args.audience or manifest.get("audience") or "大众读者"
@@ -227,7 +281,7 @@ def cmd_research(args: argparse.Namespace) -> int:
 def cmd_titles(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    provider = active_text_provider()
+    provider = require_live_text_provider("titles")
     research = load_research(workspace)
     topic = manifest.get("topic") or research.get("topic") or "未命名主题"
     audience = manifest.get("audience") or research.get("audience") or "大众读者"
@@ -274,7 +328,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
 def cmd_outline(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    provider = active_text_provider()
+    provider = require_live_text_provider("outline")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
@@ -306,7 +360,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
 def cmd_write(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    provider = active_text_provider()
+    provider = require_live_text_provider("write")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
     outline_meta = dict(ideation.get("outline_meta") or {})
@@ -349,7 +403,7 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    provider = active_text_provider()
+    provider = require_live_text_provider("review")
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待评审文章：{article_path}")
@@ -492,6 +546,16 @@ def cmd_draft(args: argparse.Namespace) -> int:
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    if not getattr(args, "dry_run", False):
+        if not getattr(args, "confirmed_publish", False):
+            raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
+        blockers = collect_publish_blockers(workspace, manifest)
+        if blockers:
+            detail = "\n".join(f"- {item}" for item in blockers)
+            raise SystemExit(f"当前稿件不满足正式发布条件：\n{detail}")
+        _mark_publish_intent(workspace)
     return wechat_publish(args)
 
 
@@ -515,10 +579,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "api_provider": provider.provider_name,
             "api_configured": provider.configured(),
             "model": getattr(provider, "model", ""),
-            "required_env": [] if not provider.configured() else ["ARTICLE_STUDIO_TEXT_MODEL", "OPENAI_API_KEY"],
+            "required_env": ["ARTICLE_STUDIO_TEXT_MODEL", "OPENAI_API_KEY"],
             "notes": [
                 "在 Codex / ClaudeCode / OpenClaw 中默认不要求文本环境变量，由宿主 agent 负责文本生成。",
-                "只有脱离宿主、单独运行 run 子命令时，才需要配置文本 API。",
+                "只有脱离宿主、单独运行 run / research / titles / outline / write / review 等文本命令时，才需要配置文本 API。",
             ],
         },
         "image_providers": {
@@ -643,32 +707,44 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
     if not ideation.get("titles"):
         provider = active_text_provider()
         research = load_research(workspace)
-        result = provider.generate_titles(
-            {
-                "topic": topic,
-                "audience": audience,
-                "angle": angle,
-                "count": 4,
-                "research": research,
-            }
-        )
-        titles = result.payload[:4] if isinstance(result.payload, list) else result.payload.get("titles", [])
-        ideation.update(
-            {
-                "topic": topic,
-                "direction": angle,
-                "titles": titles,
-                "updated_at": now_iso(),
-                "provider": result.provider,
-                "model": result.model,
-            }
-        )
+        if provider.configured():
+            result = provider.generate_titles(
+                {
+                    "topic": topic,
+                    "audience": audience,
+                    "angle": angle,
+                    "count": 4,
+                    "research": research,
+                }
+            )
+            titles = result.payload[:4] if isinstance(result.payload, list) else result.payload.get("titles", [])
+            ideation.update(
+                {
+                    "topic": topic,
+                    "direction": angle,
+                    "titles": titles,
+                    "updated_at": now_iso(),
+                    "provider": result.provider,
+                    "model": result.model,
+                }
+            )
+        else:
+            ideation.update(
+                {
+                    "topic": topic,
+                    "direction": angle,
+                    "titles": legacy.generate_hot_title_variants(topic, angle, audience),
+                    "updated_at": now_iso(),
+                    "provider": "local-heuristic",
+                    "model": "builtin",
+                }
+            )
     ideation, _ = select_scored_title(workspace, manifest, ideation, topic, audience, angle, requested_title)
     write_json(workspace / "ideation.json", ideation)
 
 
 def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: str, title: str, angle: str, audience: str) -> str:
-    provider = active_text_provider()
+    provider = require_live_text_provider("hosted-run 自动补正文")
     source_urls = normalize_urls(manifest.get("source_urls") or [])
     research = load_research(workspace)
     if not research:
@@ -869,9 +945,11 @@ def cmd_score(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    assert_publish_request_ready(args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
         return legacy.cmd_discover_topics(argparse.Namespace(workspace=str(workspace), window_hours=24, limit=legacy.DISCOVERY_TOPIC_LIMIT))
+    require_live_text_provider("run")
     topic = raw_topic or "未命名主题"
     if not (workspace / "research.json").exists():
         cmd_research(
@@ -932,7 +1010,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     manifest["stage"] = "render"
     save_manifest(workspace, manifest)
     if args.to == "publish":
-        _mark_publish_intent(workspace)
         cmd_publish(
             argparse.Namespace(
                 workspace=str(workspace),
@@ -952,6 +1029,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_hosted_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    assert_publish_request_ready(args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
         return legacy.cmd_discover_topics(argparse.Namespace(workspace=str(workspace), window_hours=24, limit=legacy.DISCOVERY_TOPIC_LIMIT))
@@ -998,7 +1076,6 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     manifest["stage"] = "render"
     save_manifest(workspace, manifest)
     if args.to == "publish":
-        _mark_publish_intent(workspace)
         cmd_publish(
             argparse.Namespace(
                 workspace=str(workspace),

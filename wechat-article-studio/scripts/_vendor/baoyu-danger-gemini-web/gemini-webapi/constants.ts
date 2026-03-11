@@ -65,6 +65,21 @@ export class Model {
     {},
     false,
   );
+  static readonly G_3_1_FLASH_IMAGE = new Model(
+    'gemini-3.1-flash-image',
+    {},
+    false,
+  );
+  static readonly G_3_1_FLASH_IMAGE_PREVIEW = new Model(
+    'gemini-3.1-flash-image-preview',
+    {},
+    false,
+  );
+  static readonly G_3_PRO_IMAGE_PREVIEW = new Model(
+    'gemini-3-pro-image-preview',
+    {},
+    false,
+  );
 
   constructor(
     public readonly model_name: string,
@@ -73,12 +88,30 @@ export class Model {
   ) {}
 
   static from_name(name: string): Model {
-    for (const model of [Model.UNSPECIFIED, Model.G_3_0_PRO, Model.G_3_0_FLASH, Model.G_3_0_FLASH_THINKING, Model.G_3_1_PRO_PREVIEW]) {
+    for (const model of [
+      Model.UNSPECIFIED,
+      Model.G_3_0_PRO,
+      Model.G_3_0_FLASH,
+      Model.G_3_0_FLASH_THINKING,
+      Model.G_3_1_PRO_PREVIEW,
+      Model.G_3_1_FLASH_IMAGE,
+      Model.G_3_1_FLASH_IMAGE_PREVIEW,
+      Model.G_3_PRO_IMAGE_PREVIEW,
+    ]) {
       if (model.model_name === name) return model;
     }
 
     throw new Error(
-      `Unknown model name: ${name}. Available models: ${[Model.UNSPECIFIED, Model.G_3_0_PRO, Model.G_3_0_FLASH, Model.G_3_0_FLASH_THINKING, Model.G_3_1_PRO_PREVIEW]
+      `Unknown model name: ${name}. Available models: ${[
+        Model.UNSPECIFIED,
+        Model.G_3_0_PRO,
+        Model.G_3_0_FLASH,
+        Model.G_3_0_FLASH_THINKING,
+        Model.G_3_1_PRO_PREVIEW,
+        Model.G_3_1_FLASH_IMAGE,
+        Model.G_3_1_FLASH_IMAGE_PREVIEW,
+        Model.G_3_PRO_IMAGE_PREVIEW,
+      ]
         .map((m) => m.model_name)
         .join(', ')}`,
     );
@@ -109,4 +142,3 @@ export class Model {
     return new Model(model_dict.model_name, header, false);
   }
 }
-

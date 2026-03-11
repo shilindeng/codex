@@ -36,14 +36,28 @@ python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/dem
 ## 默认接入方式
 
 - Codex / ClaudeCode / OpenClaw：默认由宿主 agent 直接生成 research、标题、大纲、正文，不要求用户额外填写文本模型配置
-- 只提供主题也能跑通：`hosted-run` 会优先使用现成 `article.md` / `--article-file`，缺失时再从当前 provider 能力自动补全正文
+- 只提供主题也能跑通：`hosted-run` 会优先使用现成 `article.md` / `--article-file`；只有当前已配置可用文本 API 时，才允许自动补全正文
 - 无主题启动也支持：当用户只说“开始”或不提供 topic 时，可先运行 `discover-topics` 联网发现最近 12/24 小时热点，再从建议里二次创作
 - 图片生成：提供 Gemini API Key 或 Gemini Web Cookie，或显式改用 OpenAI 图片接口
 - 统一图片风格：可选 `--image-preset`，当前内置 `cute / fresh / warm / bold / minimal / retro / pop / notion / chalkboard / editorial-grain / organic-natural / scientific-blueprint / professional-corporate / abstract-geometric / luxury-minimal / illustrated-handdrawn / photoreal-sketch`
 - 图片密度模式：支持 `--image-density minimal|balanced|per-section|rich`，默认 `rich`
 - 章节级配图控制：支持在正文中写 `<!-- image:force -->`、`<!-- image:skip -->`、`<!-- image:type=流程图 -->`、`<!-- image:count=2 -->`
 - 微信发布：提供 `WECHAT_APP_ID` 和 `WECHAT_APP_SECRET`
-- 只有脱离宿主、单独运行 CLI 的场景，才推荐配置 `OPENAI_API_KEY` 和 `ARTICLE_STUDIO_TEXT_MODEL`
+- 只有脱离宿主、单独运行 CLI 的场景，才需要配置 `OPENAI_API_KEY` 和 `ARTICLE_STUDIO_TEXT_MODEL`；未配置时 `run` 等文本命令会直接失败，不再静默生成 placeholder 稿
+
+## 首次使用最少信息
+
+- 宿主 agent 模式：至少提供 `--workspace`、`--topic`；更稳妥的是再提供 `--article-file`
+- 纯 CLI 文本生成：必须提供 `OPENAI_API_KEY`、`ARTICLE_STUDIO_TEXT_MODEL`，再执行 `run`
+- 图片生成：至少提供一类图片能力，`GEMINI_API_KEY/GOOGLE_API_KEY`、`OPENAI_API_KEY`、或显式启用并同意 `gemini-web`
+- 正式发布：必须提供 `WECHAT_APP_ID`、`WECHAT_APP_SECRET`，并显式传入 `--confirmed-publish`
+
+## 正式发布硬条件
+
+- 不允许 placeholder research / review / article 回退结果进入正式发布
+- `score-report.json` 必须过线
+- “可信度与检索支撑”维度必须达到最低阈值
+- 未显式传入 `--confirmed-publish` 前，不会写入 `publish_intent=true`
 
 ## 常用参数说明
 
@@ -112,7 +126,7 @@ python wechat-article-studio/scripts/studio.py hosted-run `
   --to render
 ```
 
-### 2. 只给主题，让系统自动补正文并继续出图
+### 2. 只给主题，让系统自动补正文并继续出图（前提：已配置文本 API）
 
 ```powershell
 python wechat-article-studio/scripts/studio.py hosted-run `
