@@ -10,16 +10,17 @@ from core.artifacts import extract_summary, read_text, split_frontmatter, strip_
 from core.layout import (
     DEFAULT_ACCENT_COLOR,
     THEMES,
+    apply_callout_blocks,
     analyze_content_signals,
     choose_accent_color,
     choose_layout_style,
     detect_input_format,
     markdown_to_html,
     preview_css,
-    sanitize_and_style_for_wechat,
     sanitize_html_fragment,
 )
 from core.manifest import ensure_workspace, load_manifest, relative_posix, save_manifest, workspace_path
+from core.wechat_fragment import render_wechat_fragment
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -62,7 +63,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         cleaned = re.sub(r"\\s+", " ", cleaned).strip()
         return cleaned
 
-    safe_preview_html = sanitize_html_fragment(content_html)
+    preview_html = apply_callout_blocks(content_html)
+    safe_preview_html = sanitize_html_fragment(preview_html)
     summary_source = body if fmt == "md" else plain_text_from_html(safe_preview_html)
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(summary_source)
 
@@ -88,36 +90,13 @@ def cmd_render(args: argparse.Namespace) -> int:
     write_text(output_path, rendered)
 
     # WeChat fragment uses full inline styles and a safe tag whitelist.
-    styled_body = sanitize_and_style_for_wechat(content_html, theme=theme, accent=accent_decision.accent)
-    title_style = f"margin:0 0 14px;font-size:28px;line-height:1.35;color:{theme.heading};letter-spacing:0.2px;font-weight:800;"
-    if chosen_style == "magazine":
-        title_style = f"margin:0 0 14px;font-size:30px;line-height:1.28;color:{theme.heading};letter-spacing:0.2px;font-weight:800;"
-    if chosen_style == "poster":
-        title_style = f"margin:0 0 14px;font-size:30px;line-height:1.22;color:{theme.heading};letter-spacing:0.3px;font-weight:900;"
-    summary_style = (
-        f"margin:0 0 20px;padding:12px 14px;border-radius:{theme.radius};"
-        f"background:{theme.soft};color:{theme.muted};font-size:14px;line-height:1.8;border:1px solid {theme.line};"
-    )
-    header = (
-        '<section style="margin:0 0 12px;padding:0 0 4px 0;">'
-        f'<h1 style="{title_style}">{html.escape(title)}</h1>'
-        f'<p style="{summary_style}">{html.escape(summary)}</p>'
-        "</section>"
-    )
-    wechat_outer_style = f"box-sizing:border-box;background:{theme.soft2};padding:18px 12px 28px;"
-    wechat_inner_style = (
-        "box-sizing:border-box;max-width:720px;margin:0 auto;"
-        f"background:#ffffff;border:1px solid {theme.line};border-radius:{theme.radius};"
-        "padding:16px 14px 28px;"
-        "font-family:PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif;"
-        f"color:{theme.text};"
-    )
-    wechat_fragment = (
-        f'<section style="{wechat_outer_style}">'
-        f'<section style="{wechat_inner_style}">'
-        + header
-        + styled_body
-        + "</section></section>"
+    wechat_fragment = render_wechat_fragment(
+        content_html,
+        title=title,
+        summary=summary,
+        theme=theme,
+        accent=accent_decision.accent,
+        chosen_style=chosen_style,
     )
 
     wechat_output = workspace / (Path(output_path.name).stem + ".wechat.html")

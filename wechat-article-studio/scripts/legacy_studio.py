@@ -4584,10 +4584,34 @@ def cmd_publish(args: argparse.Namespace) -> int:
         meta, body = split_frontmatter(read_text(article_source))
         title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名文章"
         digest_preview = meta.get("summary") or manifest.get("summary") or extract_summary(body)
-        fragment = build_wechat_fragment(markdown_to_html(strip_leading_h1(body, title)), title, digest_preview, "#0F766E")
+        # Keep legacy publish path consistent with core renderer output.
+        from core.layout import DEFAULT_ACCENT_COLOR, THEMES, analyze_content_signals, choose_accent_color, choose_layout_style, markdown_to_html
+        from core.wechat_fragment import render_wechat_fragment
+
+        content_md = strip_leading_h1(body, title)
+        signals = analyze_content_signals(content_md, "md")
+        requested_style = str(manifest.get("layout_style") or "auto")
+        layout_decision = choose_layout_style(requested_style, signals, manifest)
+        chosen_style = layout_decision.style
+        accent_arg = str(manifest.get("accent_color") or DEFAULT_ACCENT_COLOR)
+        accent_decision = choose_accent_color(chosen_style, accent_arg, manifest)
+        theme = THEMES.get(chosen_style, THEMES["clean"])
+        content_html = markdown_to_html(content_md)
+        fragment = render_wechat_fragment(
+            content_html,
+            title=title,
+            summary=digest_preview,
+            theme=theme,
+            accent=accent_decision.accent,
+            chosen_style=chosen_style,
+        )
         html_path = workspace / "article.wechat.html"
         write_text(html_path, fragment)
         manifest["wechat_html_path"] = relative_posix(html_path, workspace)
+        manifest["layout_style"] = chosen_style
+        manifest["layout_style_reason"] = layout_decision.reason
+        manifest["accent_color"] = accent_decision.accent
+        manifest["accent_color_reason"] = accent_decision.reason
         save_manifest(workspace, manifest)
     meta, body = split_frontmatter(read_text(article_source))
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名文章"
