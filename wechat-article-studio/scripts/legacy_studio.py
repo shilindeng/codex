@@ -145,10 +145,20 @@ AI_STYLE_PHRASES = [
     "最后",
     "综上所述",
     "总的来说",
+    "总而言之",
+    "简而言之",
     "值得注意的是",
+    "需要指出的是",
+    "不可否认",
+    "显而易见",
     "不难发现",
     "由此可见",
     "此外",
+    "与此同时",
+    "换句话说",
+    "从某种意义上说",
+    "值得一提的是",
+    "归根结底",
     "在当今社会",
 ]
 
@@ -689,7 +699,9 @@ def fetch_google_news_items(query: str, window_hours: int, limit: int) -> list[d
 
 
 TAVILY_SEARCH_ENDPOINT = "https://api.tavily.com/search"
-DISCOVERY_QUERIES = ["", "热点", "科技", "AI", "财经", "就业", "教育"]
+DISCOVERY_FOCUS_CHOICES = ("ai-tech", "all")
+DISCOVERY_QUERIES_ALL = ["", "热点", "科技", "AI", "财经", "就业", "教育"]
+DISCOVERY_QUERIES_AI_TECH = ["AI", "人工智能", "大模型", "OpenAI", "Agent", "RAG", "芯片 算力", "互联网 平台"]
 
 
 def tavily_api_key() -> str:
@@ -707,6 +719,20 @@ def normalize_discovery_provider(value: str | None) -> str:
     }
     normalized = aliases.get(raw, raw)
     return normalized if normalized in DISCOVERY_PROVIDER_CHOICES else "auto"
+
+
+def normalize_discovery_focus(value: str | None) -> str:
+    raw = (value or "ai-tech").strip().lower().replace("_", "-")
+    aliases = {
+        "ai": "ai-tech",
+        "tech": "ai-tech",
+        "ai/tech": "ai-tech",
+        "ai-tech": "ai-tech",
+        "all": "all",
+        "full": "all",
+    }
+    normalized = aliases.get(raw, raw)
+    return normalized if normalized in DISCOVERY_FOCUS_CHOICES else "ai-tech"
 
 
 def tavily_query_text(query: str, window_hours: int) -> str:
@@ -766,11 +792,25 @@ def fetch_tavily_news_items(query: str, window_hours: int, limit: int) -> list[d
 
 def classify_news_topic(title: str) -> dict[str, Any]:
     value = (title or "").strip()
-    if re.search(r"AI|人工智能|模型|芯片|OpenAI|Google|Meta|算力|机器人", value, flags=re.I):
+    if re.search(
+        r"AI|人工智能|大模型|模型|LLM|GPT|Claude|Gemini|DeepSeek|RAG|Agent|MCP|多模态|推理|训练|对齐|算力|芯片|GPU|CUDA|英伟达|NVIDIA|OpenAI|Anthropic|Google|Meta|xAI|机器人",
+        value,
+        flags=re.I,
+    ):
         return {
             "topic_type": "科技/AI",
             "angles": ["这条新闻背后的行业信号是什么", "普通人/从业者会受到什么影响", "下一步产品与商业机会在哪里"],
             "viewpoints": ["不要只盯着发布本身，更要看背后能力边界有没有变化。", "热点的价值在于判断它会不会从新闻变成基础设施。"],
+        }
+    if re.search(
+        r"开源|GitHub|API|SDK|云|Cloud|AWS|Azure|GCP|阿里云|腾讯云|华为云|字节|抖音|小红书|微博|微信|B站|淘宝|京东|拼多多|美团|滴滴|平台|互联网|App|iOS|Android|浏览器|Chrome|Edge|安全|漏洞|数据泄露|隐私|SaaS|数据库|Linux|Windows|macOS",
+        value,
+        flags=re.I,
+    ):
+        return {
+            "topic_type": "科技/互联网",
+            "angles": ["变化真正影响了谁、影响路径是什么", "这次更新/事件背后的平台规则或产品信号", "普通人/从业者该怎么调整自己的动作"],
+            "viewpoints": ["平台和产品的变化，往往比新闻本身更值得解读。", "别只复述更新内容，关键是解释它改变了什么成本结构。"],
         }
     if re.search(r"股|融资|并购|财报|经济|关税|出口|消费|楼市|房价|就业|失业", value):
         return {
@@ -813,6 +853,14 @@ def evaluate_discovery_topic(title: str, audience: str = "大众读者") -> dict
 def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int, audience: str = "大众读者") -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    hit_queries: dict[str, set[str]] = {}
+    for item in items:
+        title = (item.get("title") or "").strip()
+        normalized = re.sub(r"\s+", "", title)
+        if not title or not normalized:
+            continue
+        query = (item.get("query") or "").strip() or "top"
+        hit_queries.setdefault(normalized, set()).add(query)
     for item in items:
         title = (item.get("title") or "").strip()
         normalized = re.sub(r"\s+", "", title)
@@ -821,6 +869,11 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int, au
         seen.add(normalized)
         classification = classify_news_topic(title)
         evaluation = evaluate_discovery_topic(title, audience=audience)
+        hit_count = len(hit_queries.get(normalized) or set()) or 1
+        query_label = (item.get("query") or "").strip() or "top"
+        why_now = f"该话题出现在最近 {query_label} 的新闻流中，具备时效与讨论度。"
+        if hit_count >= 2:
+            why_now = f"该话题在多个关键词新闻流中重复出现（{hit_count} 个流），具备更高讨论度与时效。"
         candidates.append(
             {
                 "hot_title": title,
@@ -828,12 +881,13 @@ def build_topic_candidates_from_news(items: list[dict[str, Any]], limit: int, au
                 "published_at": item.get("published_at", ""),
                 "source_url": item.get("link", ""),
                 "query": item.get("query", ""),
+                "hit_count": hit_count,
                 "topic_type": classification["topic_type"],
                 "recommended_topic": title,
                 **evaluation,
                 "angles": classification["angles"],
                 "viewpoints": classification["viewpoints"],
-                "why_now": f"该话题出现在最近 {item.get('query') or 'top'} 的新闻流中，具备时效与讨论度。",
+                "why_now": why_now,
             }
         )
         if len(candidates) >= limit:
@@ -863,17 +917,23 @@ def collect_tavily_news_items(queries: list[str], window_hours: int, limit: int)
     return collected, errors
 
 
-def discover_recent_topics(window_hours: int = 24, limit: int = DISCOVERY_TOPIC_LIMIT, provider: str | None = None) -> dict[str, Any]:
+def discover_recent_topics(
+    window_hours: int = 24, limit: int = DISCOVERY_TOPIC_LIMIT, provider: str | None = None, focus: str | None = None
+) -> dict[str, Any]:
     chosen = normalize_discovery_provider(provider)
-    queries = list(DISCOVERY_QUERIES)
+    chosen_focus = normalize_discovery_focus(focus)
+    queries = list(DISCOVERY_QUERIES_AI_TECH if chosen_focus == "ai-tech" else DISCOVERY_QUERIES_ALL)
     candidate_seed_limit = max(int(limit) * 4, int(limit))
 
     def finalize(collected: list[dict[str, Any]], used_provider: str) -> dict[str, Any]:
         collected.sort(key=lambda item: item.get("published_at", ""), reverse=True)
         candidates = build_topic_candidates_from_news(collected, candidate_seed_limit, audience="大众读者")
+        if chosen_focus == "ai-tech":
+            candidates = [item for item in candidates if item.get("topic_type") in {"科技/AI", "科技/互联网"}]
         candidates.sort(
             key=lambda item: (
                 bool(item.get("recommended_title_gate_passed", False)),
+                int(item.get("hit_count") or 0),
                 int(item.get("recommended_title_score") or 0),
                 item.get("published_at", ""),
             ),
@@ -881,6 +941,7 @@ def discover_recent_topics(window_hours: int = 24, limit: int = DISCOVERY_TOPIC_
         )
         return {
             "provider": used_provider,
+            "focus": chosen_focus,
             "window_hours": window_hours,
             "generated_at": now_iso(),
             "sources": collected[:candidate_seed_limit * 2],
@@ -1532,11 +1593,27 @@ def cleanup_rewrite_text(text: str) -> str:
         r"^首先[，,：:]?": "先看最关键的一点，",
         r"^其次[，,：:]?": "再往下看，",
         r"^最后[，,：:]?": "最后要提醒的是，",
+        r"^在本文中[，,：:]?": "",
+        r"^本文将[，,：:]?": "这篇文章会",
+        r"^这篇文章将[，,：:]?": "这篇文章会",
+        r"^我们将[，,：:]?": "下面我会",
+        r"^下面我们将[，,：:]?": "下面我会",
+        r"^接下来[，,：:]?": "下面",
         r"综上所述": "说到底",
+        r"总而言之": "说到底",
         r"总的来说": "说到底",
+        r"归根结底": "说到底",
+        r"简而言之": "一句话总结：",
         r"值得注意的是": "更关键的是",
+        r"需要指出的是": "先把话说清楚，",
+        r"不可否认": "先别急着反驳，",
+        r"显而易见": "很直观，",
         r"不难发现": "你会发现",
         r"由此可见": "这也说明",
+        r"换句话说": "说得更直白点",
+        r"从某种意义上说": "更准确地说",
+        r"值得一提的是": "顺带一提",
+        r"与此同时": "同时",
         r"在当今社会": "放在今天的环境里",
     }
     cleaned = text.strip()
@@ -1544,6 +1621,24 @@ def cleanup_rewrite_text(text: str) -> str:
         cleaned = re.sub(pattern, replacement, cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip()
+
+
+def cleanup_rewrite_markdown(body: str) -> str:
+    blocks = [block.strip() for block in re.split(r"\n\s*\n", body or "") if block and block.strip()]
+    cleaned_blocks: list[str] = []
+    for block in blocks:
+        # Avoid breaking markdown structure.
+        if re.match(r"^#{1,6}\s+", block):
+            cleaned_blocks.append(block)
+            continue
+        if block.startswith(("```", ">")):
+            cleaned_blocks.append(block)
+            continue
+        if re.match(r"^[-*]\s+", block) or re.match(r"^\d+\.\s+", block):
+            cleaned_blocks.append(block)
+            continue
+        cleaned_blocks.append(cleanup_rewrite_text(block))
+    return ("\n\n".join(cleaned_blocks).strip() + "\n") if cleaned_blocks else ""
 
 
 def make_section_opener(heading: str, first_block: str, title: str) -> str:
@@ -1878,6 +1973,7 @@ def auto_rewrite_article(title: str, meta: dict[str, str], body: str, report: di
         applied_actions.append("清理了模板化连接词并统一语气")
 
     rewritten_body = "\n\n".join(part.strip() for part in rewritten_parts if part.strip()).strip() + "\n"
+    rewritten_body = cleanup_rewrite_markdown(rewritten_body) or rewritten_body
     rewrite_meta = dict(meta)
     rewrite_meta["title"] = title
     rewrite_meta["summary"] = meta.get("summary") or manifest.get("summary") or extract_summary(rewritten_body)
@@ -2685,10 +2781,13 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
 
 def write_topic_discovery_artifacts(workspace: Path, payload: dict[str, Any]) -> None:
     write_json(workspace / "topic-discovery.json", payload)
+    focus = str(payload.get("focus") or "all").strip().lower()
+    scope_label = "AI/科技互联网（focus=ai-tech）" if focus == "ai-tech" else "全量热点（focus=all）"
     lines = [
         f"# 热点选题发现（最近 {payload.get('window_hours', 24)} 小时）",
         "",
         f"- 数据源：`{payload.get('provider', 'google-news-rss')}`",
+        f"- 选题范围：{scope_label}",
         "",
     ]
     for index, item in enumerate(payload.get("candidates") or [], start=1):
@@ -2703,6 +2802,8 @@ def write_topic_discovery_artifacts(workspace: Path, payload: dict[str, Any]) ->
         lines.append(f"- 来源：{item['source']}")
         if item.get("published_at"):
             lines.append(f"- 时间：{item['published_at']}")
+        hit_count = int(item.get("hit_count") or 1)
+        lines.append(f"- 热度信号：在 {hit_count} 个关键词流中出现")
         lines.append(f"- 类型：{item['topic_type']}")
         lines.append(f"- 为什么值得写：{item['why_now']}")
         lines.append(f"- 建议角度：{' / '.join(item.get('angles') or [])}")
@@ -2718,10 +2819,12 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     window_hours = int(args.window_hours or 24)
     limit = int(args.limit or DISCOVERY_TOPIC_LIMIT)
     provider = getattr(args, "provider", None)
-    payload = discover_recent_topics(window_hours=window_hours, limit=limit, provider=provider)
+    focus = normalize_discovery_focus(getattr(args, "focus", None))
+    payload = discover_recent_topics(window_hours=window_hours, limit=limit, provider=provider, focus=focus)
     write_topic_discovery_artifacts(workspace, payload)
     manifest["topic_discovery_path"] = "topic-discovery.json"
     manifest["topic_discovery_provider"] = payload.get("provider") or normalize_discovery_provider(provider)
+    manifest["topic_discovery_focus"] = payload.get("focus") or focus
     controls = dict(manifest.get("image_controls") or {})
     # 无主题启动链路默认：balanced + mixed-by-type（不覆盖用户已有配置）。
     controls.setdefault("density", "balanced")

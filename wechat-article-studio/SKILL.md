@@ -51,12 +51,14 @@ python {SKILL_DIR}/scripts/studio.py discover-topics \
   --workspace <job-dir> \
   --window-hours 24 \
   --limit 8 \
-  --provider auto
+  --provider auto \
+  --focus ai-tech
 ```
 
 说明：
 
 - `--provider auto` 默认先用 Google News RSS；RSS 不可用或返回为空时，若检测到环境变量 `TAVILY_API_KEY` 则自动回退 Tavily。
+- `--focus ai-tech`（默认）只关注 AI/科技互联网热点；如需全量热点，用 `--focus all`。
 
 如果宿主 agent 已经写好了正文，也可以显式导入：
 
@@ -123,6 +125,7 @@ python {SKILL_DIR}/scripts/studio.py run \
 
 - `--layout-style`：排版主题：`auto|clean|cards|magazine|business|warm|poster|tech|blueprint`（默认 `auto`，会参考文章结构与 `manifest.image_controls` 自动选型）。
 - `--input-format`：输入格式：`auto|md|html`（默认 `auto`；HTML 会抽取 `<body>` 并净化后再排版）。
+- 主题排版在 `article.html` 与 `article.wechat.html` 均表现为外层底色 + 内层白卡（更接近流行公众号阅读体验）。
 
 ## 推荐操作习惯
 

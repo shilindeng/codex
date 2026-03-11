@@ -884,7 +884,7 @@ def preview_css(style: str) -> str:
     theme = THEMES.get(style, THEMES["clean"])
     # Use CSS variables to keep theme changes compact and consistent with WeChat inline styles.
     return (
-        f".wx-article.wx-theme-{style}{{"
+        f"body.wx-theme-{style},.wx-article.wx-theme-{style}{{"
         f"--accent:{theme.accent};--text:{theme.text};--heading:{theme.heading};--muted:{theme.muted};"
         f"--line:{theme.line};--soft:{theme.soft};--soft-2:{theme.soft2};"
         f"--code-bg:{theme.code_bg};--code-border:{theme.code_border};"

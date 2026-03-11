@@ -955,6 +955,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                 window_hours=24,
                 limit=legacy.DISCOVERY_TOPIC_LIMIT,
                 provider="auto",
+                focus="ai-tech",
             )
         )
     require_live_text_provider("run")
@@ -1055,6 +1056,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
                 window_hours=24,
                 limit=legacy.DISCOVERY_TOPIC_LIMIT,
                 provider="auto",
+                focus="ai-tech",
             )
         )
     topic = raw_topic or "未命名主题"
@@ -1238,6 +1240,7 @@ def build_parser() -> argparse.ArgumentParser:
     discover_topics.add_argument("--window-hours", type=int, choices=[12, 24], default=24)
     discover_topics.add_argument("--limit", type=int, default=legacy.DISCOVERY_TOPIC_LIMIT)
     discover_topics.add_argument("--provider", choices=legacy.DISCOVERY_PROVIDER_CHOICES, default="auto")
+    discover_topics.add_argument("--focus", choices=["ai-tech", "all"], default="ai-tech")
     discover_topics.set_defaults(func=cmd_discover_topics)
 
     hosted_run = subparsers.add_parser("hosted-run", help="由宿主 agent 负责文本生成，再继续评分、配图、渲染与发布")

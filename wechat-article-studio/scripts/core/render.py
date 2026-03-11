@@ -99,17 +99,26 @@ def cmd_render(args: argparse.Namespace) -> int:
         f"background:{theme.soft};color:{theme.muted};font-size:14px;line-height:1.8;border:1px solid {theme.line};"
     )
     header = (
-        '<section style="max-width:720px;margin:0 auto 12px;padding:0 0 4px 0;">'
+        '<section style="margin:0 0 12px;padding:0 0 4px 0;">'
         f'<h1 style="{title_style}">{html.escape(title)}</h1>'
         f'<p style="{summary_style}">{html.escape(summary)}</p>'
         "</section>"
     )
-    wechat_wrapper_style = (
-        "max-width:720px;margin:0 auto;padding:8px 0 28px;"
+    wechat_outer_style = f"box-sizing:border-box;background:{theme.soft2};padding:18px 12px 28px;"
+    wechat_inner_style = (
+        "box-sizing:border-box;max-width:720px;margin:0 auto;"
+        f"background:#ffffff;border:1px solid {theme.line};border-radius:{theme.radius};"
+        "padding:16px 14px 28px;"
         "font-family:PingFang SC,Microsoft YaHei,Noto Sans CJK SC,sans-serif;"
         f"color:{theme.text};"
     )
-    wechat_fragment = f'<section style="{wechat_wrapper_style}">' + header + styled_body + "</section>"
+    wechat_fragment = (
+        f'<section style="{wechat_outer_style}">'
+        f'<section style="{wechat_inner_style}">'
+        + header
+        + styled_body
+        + "</section></section>"
+    )
 
     wechat_output = workspace / (Path(output_path.name).stem + ".wechat.html")
     write_text(wechat_output, wechat_fragment)
