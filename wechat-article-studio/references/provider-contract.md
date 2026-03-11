@@ -29,6 +29,10 @@
 - `review_article(context) -> dict`
 - `revise_article(context) -> str`
 
+说明：
+
+- 为了兼容 JSON 模式，部分 provider 的 `generate_titles` 可能返回 `{"candidates":[...]}`；CLI 会自动归一化为候选列表。
+
 标题生成要求：
 
 - `topic` 不等于最终标题

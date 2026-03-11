@@ -9,6 +9,30 @@ from typing import Any
 from providers.text.base import ProviderResult, TextProvider
 
 
+def _strip_fences(text: str) -> str:
+    value = (text or "").strip()
+    if value.startswith("```"):
+        lines = value.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            return "\n".join(lines[1:-1]).strip()
+    return value
+
+
+def _extract_json_substring(text: str) -> str:
+    value = (text or "").strip()
+    if not value:
+        return value
+    first_obj = value.find("{")
+    last_obj = value.rfind("}")
+    if 0 <= first_obj < last_obj:
+        return value[first_obj : last_obj + 1]
+    first_arr = value.find("[")
+    last_arr = value.rfind("]")
+    if 0 <= first_arr < last_arr:
+        return value[first_arr : last_arr + 1]
+    return value
+
+
 def placeholder_titles(topic: str, audience: str, count: int) -> list[dict[str, str]]:
     titles = []
     for index in range(count):
@@ -103,32 +127,55 @@ class OpenAICompatibleTextProvider(TextProvider):
         }
         if response_format:
             payload["response_format"] = response_format
-        body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self.base_url.rstrip('/')}/chat/completions",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
+
+        def do_request(request_payload: dict[str, Any]) -> dict[str, Any]:
+            body = json.dumps(request_payload).encode("utf-8")
+            request = urllib.request.Request(
+                f"{self.base_url.rstrip('/')}/chat/completions",
+                data=body,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
             with urllib.request.urlopen(request, timeout=60) as response:
-                raw = json.loads(response.read().decode("utf-8"))
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            raw = do_request(payload)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise SystemExit(f"文本模型调用失败：{detail}") from exc
+            # Some OpenAI-compatible gateways don't support response_format on /chat/completions.
+            if response_format and exc.code in {400, 422}:
+                lowered = detail.lower()
+                if "response_format" in lowered or "json_object" in lowered or "unsupported" in lowered or "invalid" in lowered:
+                    fallback_payload = dict(payload)
+                    fallback_payload.pop("response_format", None)
+                    try:
+                        raw = do_request(fallback_payload)
+                    except urllib.error.HTTPError as fallback_exc:
+                        fallback_detail = fallback_exc.read().decode("utf-8", errors="replace")
+                        raise SystemExit(f"文本模型调用失败：{fallback_detail}") from fallback_exc
+                else:
+                    raise SystemExit(f"文本模型调用失败：{detail}") from exc
+            else:
+                raise SystemExit(f"文本模型调用失败：{detail}") from exc
         content = (((raw.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
         if not content:
             raise SystemExit(f"文本模型未返回内容：{json.dumps(raw, ensure_ascii=False)}")
         return content
 
     def _json_result(self, content: str) -> Any:
+        value = _strip_fences(content)
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise SystemExit(f"文本模型返回的 JSON 无法解析：{content}") from exc
+            return json.loads(value)
+        except json.JSONDecodeError:
+            extracted = _extract_json_substring(value)
+            try:
+                return json.loads(extracted)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"文本模型返回的 JSON 无法解析：{value}") from exc
 
     def generate_research_pack(self, context: dict[str, Any]) -> ProviderResult:
         if not self.configured():
@@ -165,12 +212,21 @@ class OpenAICompatibleTextProvider(TextProvider):
         prompt = [
             {
                 "role": "system",
-                "content": "你是微信公众号标题编辑。只输出 JSON 数组，每项包含 title, strategy, audience_fit, risk_note。",
+                "content": "你是微信公众号标题编辑。只输出 JSON 对象，字段 candidates 为数组；每项包含 title, strategy, audience_fit, risk_note。",
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]
-        content = self._request(prompt)
-        return ProviderResult(payload=self._json_result(content), provider=self.provider_name, model=self.model)
+        content = self._request(prompt, {"type": "json_object"})
+        payload = self._json_result(content)
+        candidates: Any = []
+        if isinstance(payload, list):
+            candidates = payload
+        elif isinstance(payload, dict):
+            if isinstance(payload.get("candidates"), list):
+                candidates = payload["candidates"]
+            elif isinstance(payload.get("titles"), list):
+                candidates = payload["titles"]
+        return ProviderResult(payload=candidates, provider=self.provider_name, model=self.model)
 
     def generate_outline(self, context: dict[str, Any]) -> ProviderResult:
         title = context.get("selected_title") or context.get("title") or context.get("topic") or "未命名标题"
