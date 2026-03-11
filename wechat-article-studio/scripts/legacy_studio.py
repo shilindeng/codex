@@ -3841,10 +3841,14 @@ def cmd_render(args: argparse.Namespace) -> int:
     content_html = content_html.replace('<blockquote>', '<blockquote class="insight-card">')
     style = read_text(ASSETS_DIR / "wechat-style.css").replace("{{accent_color}}", args.accent_color)
     template = read_text(ASSETS_DIR / "wechat-template.html")
+    theme_class = "wx-theme-clean"
+    article_style = f"--accent:{args.accent_color};"
     rendered = (
         template.replace("{{title}}", html.escape(title))
         .replace("{{summary}}", html.escape(summary))
         .replace("{{style}}", style)
+        .replace("{{theme_class}}", theme_class)
+        .replace("{{article_style}}", article_style)
         .replace("{{content}}", textwrap.indent(content_html, "      ").strip())
     )
     output_path = workspace / args.output

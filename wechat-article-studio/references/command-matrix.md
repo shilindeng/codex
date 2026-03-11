@@ -62,6 +62,9 @@
   - `--image-layout-family`
   - `--inline-count`
   - `--dry-run-images`
+- 常用排版参数：
+  - `--layout-style auto|clean|cards|magazine|business|warm|poster|tech|blueprint`
+  - `--input-format auto|md|html`
 
 ## `hosted-run`
 
@@ -75,8 +78,21 @@
   - `--image-layout-family`
   - `--inline-count`
   - `--dry-run-images`
+- 常用排版参数：
+  - `--layout-style auto|clean|cards|magazine|business|warm|poster|tech|blueprint`
+  - `--input-format auto|md|html`
 - 特殊行为：
   - 若 `--topic` 为空或为“开始”，会先走热点发现并输出选题建议
+
+## `render`
+
+- 输入：`--workspace [--input] [--output article.html] [--accent-color] [--layout-style] [--input-format]`
+- 说明：
+  - `--layout-style auto` 会根据文章结构（代码/表格/列表等）与 `manifest.image_controls` 自动选型。
+  - `--input-format auto` 会按后缀或内容特征识别 Markdown/HTML；HTML 会抽取 `<body>` 后净化再套用主题。
+- 输出：
+  - `article.html`
+  - `article.wechat.html`（公众号发布用，内联样式）
 
 ## `discover-topics`
 

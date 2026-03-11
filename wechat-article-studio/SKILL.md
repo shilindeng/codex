@@ -119,6 +119,11 @@ python {SKILL_DIR}/scripts/studio.py run \
 - `--custom-visual-brief`：补充额外视觉要求。
 - `--inline-count`：显式要求正文插图数量。
 
+## 排版参数速查
+
+- `--layout-style`：排版主题：`auto|clean|cards|magazine|business|warm|poster|tech|blueprint`（默认 `auto`，会参考文章结构与 `manifest.image_controls` 自动选型）。
+- `--input-format`：输入格式：`auto|md|html`（默认 `auto`；HTML 会抽取 `<body>` 并净化后再排版）。
+
 ## 推荐操作习惯
 
 1. 先用 `hosted-run --to render --dry-run-images` 验证整条链路。

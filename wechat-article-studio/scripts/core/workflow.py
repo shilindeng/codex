@@ -22,6 +22,7 @@ from core.artifacts import (
 from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
+from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
 from core.manifest import ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.render import cmd_render as legacy_render
 from core.rewrite import generate_revision_candidate
@@ -1010,7 +1011,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     )
     legacy_assemble(argparse.Namespace(workspace=str(workspace)))
-    legacy_render(argparse.Namespace(workspace=str(workspace), input=None, output="article.html", accent_color=args.accent_color))
+    legacy_render(
+        argparse.Namespace(
+            workspace=str(workspace),
+            input=None,
+            output="article.html",
+            accent_color=args.accent_color,
+            layout_style=getattr(args, "layout_style", "auto"),
+            input_format=getattr(args, "input_format", "auto"),
+        )
+    )
     manifest = load_manifest(workspace)
     manifest["image_status"] = "done"
     manifest["render_status"] = "done"
@@ -1083,7 +1093,16 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
         )
     )
     legacy_assemble(argparse.Namespace(workspace=str(workspace)))
-    legacy_render(argparse.Namespace(workspace=str(workspace), input=None, output="article.html", accent_color=args.accent_color))
+    legacy_render(
+        argparse.Namespace(
+            workspace=str(workspace),
+            input=None,
+            output="article.html",
+            accent_color=args.accent_color,
+            layout_style=getattr(args, "layout_style", "auto"),
+            input_format=getattr(args, "input_format", "auto"),
+        )
+    )
     manifest = load_manifest(workspace)
     manifest["image_status"] = "done"
     manifest["render_status"] = "done"
@@ -1136,6 +1155,8 @@ def cmd_all(args: argparse.Namespace) -> int:
             gemini_model=args.gemini_model,
             openai_model=args.openai_model,
             accent_color=args.accent_color,
+            layout_style=getattr(args, "layout_style", "auto"),
+            input_format=getattr(args, "input_format", "auto"),
             to="publish" if args.publish else "render",
         )
     )
@@ -1208,6 +1229,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     run.add_argument("--openai-model", default="gpt-image-1")
     run.add_argument("--accent-color", default="#0F766E")
+    run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    run.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     run.set_defaults(func=cmd_run)
 
     discover_topics = subparsers.add_parser("discover-topics", help="联网发现最近 12/24 小时的热点新闻与可写选题")
@@ -1248,6 +1271,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     hosted_run.add_argument("--openai-model", default="gpt-image-1")
     hosted_run.add_argument("--accent-color", default="#0F766E")
+    hosted_run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    hosted_run.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     hosted_run.set_defaults(func=cmd_hosted_run)
 
     ideate = subparsers.add_parser("ideate", help="兼容模式入口：保存选题元信息到工作目录")
@@ -1328,6 +1353,8 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--input")
     render.add_argument("--output", default="article.html")
     render.add_argument("--accent-color", default="#0F766E")
+    render.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    render.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     render.set_defaults(func=legacy_render)
 
     publish = subparsers.add_parser("publish", help="发布到微信公众号草稿箱；正式发布需显式确认")
@@ -1378,6 +1405,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     all_cmd.add_argument("--openai-model", default="gpt-image-1")
     all_cmd.add_argument("--accent-color", default="#0F766E")
+    all_cmd.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    all_cmd.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     all_cmd.set_defaults(func=cmd_all)
 
     return parser
