@@ -147,6 +147,23 @@ python {SKILL_DIR}/scripts/studio.py run \
 - `--input-format`：输入格式：`auto|md|html`（默认 `auto`；HTML 会抽取 `<body>` 并净化后再排版）。
 - 主题排版在 `article.html` 与 `article.wechat.html` 均表现为外层底色 + 内层白卡（更接近流行公众号阅读体验）。
 
+## 排版组件（可选）
+
+在 Markdown 中用引用块标记信息卡片（更像公众号编辑稿），示例：
+
+```md
+> [!TAKEAWAY] 一句话结论
+> 结论内容尽量短、可截图。
+
+> [!TIP] 实操提示
+> 给读者一个马上能做的动作。
+
+> [!WARNING] 常见坑
+> 提醒读者别踩坑。
+```
+
+支持标签：`TIP`、`TAKEAWAY`、`WARNING`、`CHECKLIST`、`MYTHFACT`（大小写不敏感）。
+
 ## 推荐操作习惯
 
 1. 先用 `hosted-run --to render --dry-run-images` 验证整条链路。

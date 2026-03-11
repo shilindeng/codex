@@ -636,6 +636,61 @@ _ALLOWED_TAGS = {
 }
 
 
+_CALLOUT_TAG_MAP = {
+    "TIP": "tip",
+    "NOTE": "tip",
+    "TAKEAWAY": "takeaway",
+    "IMPORTANT": "takeaway",
+    "WARNING": "warning",
+    "CAUTION": "warning",
+    "CHECKLIST": "checklist",
+    "MYTHFACT": "mythfact",
+}
+
+_CALLOUT_LABELS = {
+    "tip": "提示",
+    "takeaway": "结论",
+    "warning": "注意",
+    "checklist": "清单",
+    "mythfact": "误区/真相",
+}
+
+_BLOCKQUOTE_RE = re.compile(r"(?is)<blockquote(?P<attrs>[^>]*)>(?P<inner>.*?)</blockquote>")
+
+
+def apply_callout_blocks(text: str) -> str:
+    """Convert markdown-style callouts into styled blockquotes.
+
+    Supported markers (case-insensitive) in the first <p> of a <blockquote>:
+    - [!TIP], [!TAKEAWAY], [!WARNING], [!CHECKLIST], [!MYTHFACT]
+    """
+    raw = text or ""
+
+    def replacer(match: re.Match[str]) -> str:
+        attrs = match.group("attrs") or ""
+        inner = match.group("inner") or ""
+        first = re.match(r"(?is)\s*<p>\s*\[!\s*(?P<tag>[A-Za-z]+)\s*\]\s*(?P<title>.*?)\s*</p>(?P<rest>.*)\Z", inner)
+        if not first:
+            return match.group(0)
+        tag = (first.group("tag") or "").strip().upper()
+        tone = _CALLOUT_TAG_MAP.get(tag)
+        if not tone:
+            return match.group(0)
+        label = _CALLOUT_LABELS.get(tone, "提示")
+        title_html = (first.group("title") or "").strip()
+        rest = first.group("rest") or ""
+        header = f"<p><strong>{html.escape(label)}</strong>"
+        if title_html:
+            header += " " + title_html
+        header += "</p>"
+        new_attrs = attrs
+        if not re.search(r"(?i)\bdata-wx-tone\s*=", attrs):
+            new_attrs = (attrs + f' data-wx-tone="{tone}"') if attrs.strip() else f' data-wx-tone="{tone}"'
+        return f"<blockquote{new_attrs}>{header}{rest}</blockquote>"
+
+    return _BLOCKQUOTE_RE.sub(replacer, raw)
+
+
 def sanitize_html_fragment(text: str) -> str:
     parser = _Sanitizer(mode="sanitize")
     parser.feed(_strip_outer_html_body(text))
@@ -681,6 +736,8 @@ class _Sanitizer(HTMLParser):
             style = self._style_for_tag(tag_name, attr_map)
             if style:
                 attr_map["style"] = style
+            # tone is only for internal styling; do not output it in WeChat HTML
+            attr_map.pop("data-wx-tone", None)
         if tag_name in _VOID_TAGS:
             self._out.append("<" + tag_name + self._format_attrs(attr_map) + " />")
             return
@@ -742,6 +799,10 @@ class _Sanitizer(HTMLParser):
                     lang = match.group(1)
             if lang:
                 keep["data-lang"] = lang
+        elif tag == "blockquote":
+            tone = (raw.get("data-wx-tone") or "").strip().lower()
+            if tone in {"tip", "takeaway", "warning", "checklist", "mythfact"}:
+                keep["data-wx-tone"] = tone
         return keep
 
     def _format_attrs(self, attrs: dict[str, str]) -> str:
@@ -817,11 +878,29 @@ class _Sanitizer(HTMLParser):
         if tag == "li":
             return "margin:8px 0;line-height:1.9;"
         if tag == "blockquote":
-            return (
+            tone = (attrs.get("data-wx-tone") or "").strip().lower()
+            bg = t.quote_bg
+            border = t.quote_border
+            if tone == "takeaway":
+                bg = t.soft2
+                border = t.line
+            elif tone == "warning":
+                bg = "#fff7ed"
+                border = "#fed7aa"
+            elif tone == "checklist":
+                bg = "#f0fdf4"
+                border = "#bbf7d0"
+            elif tone == "mythfact":
+                bg = "#fdf2f8"
+                border = "#fbcfe8"
+            base = (
                 f"margin:18px 0;padding:16px 18px;border-radius:{t.radius};"
-                f"background:{t.quote_bg};border:1px solid {t.quote_border};color:{t.text};"
+                f"background:{bg};border:1px solid {border};color:{t.text};"
                 "box-shadow:0 8px 24px rgba(15,23,42,0.04);"
             )
+            if tone:
+                base += f"border-left:4px solid {self._accent};"
+            return base
         if tag == "a":
             return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(15,23,42,0.12);"
         if tag == "strong":

@@ -90,6 +90,7 @@
 - 说明：
   - `--layout-style auto` 会根据文章结构（代码/表格/列表等）与 `manifest.image_controls` 自动选型。
   - `--input-format auto` 会按后缀或内容特征识别 Markdown/HTML；HTML 会抽取 `<body>` 后净化再套用主题。
+  - 支持信息卡片标记（Markdown 引用块）：`> [!TIP]`、`> [!TAKEAWAY]`、`> [!WARNING]`、`> [!CHECKLIST]`、`> [!MYTHFACT]`。
 - 输出：
   - `article.html`
   - `article.wechat.html`（公众号发布用，内联样式）

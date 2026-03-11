@@ -136,6 +136,38 @@ body {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
 }
 
+.wx-content blockquote[data-wx-tone] {
+  border-left: 4px solid var(--accent);
+}
+
+.wx-content blockquote[data-wx-tone="takeaway"] {
+  background: var(--soft-2);
+  border-color: var(--line);
+}
+
+.wx-content blockquote[data-wx-tone="warning"] {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.wx-content blockquote[data-wx-tone="checklist"] {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.wx-content blockquote[data-wx-tone="mythfact"] {
+  background: #fdf2f8;
+  border-color: #fbcfe8;
+}
+
+.wx-content blockquote[data-wx-tone] > p:first-child {
+  margin-top: 0;
+}
+
+.wx-content blockquote[data-wx-tone] > p:last-child {
+  margin-bottom: 0;
+}
+
 .wx-content figure {
   margin: 22px 0 18px;
 }
