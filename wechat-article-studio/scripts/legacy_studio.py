@@ -458,6 +458,22 @@ def write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def safe_print(text: str) -> None:
+    """Write text to stdout without crashing on Windows console encodings (e.g. GBK)."""
+    value = (text or "")
+    if not value.endswith("\n"):
+        value += "\n"
+    try:
+        sys.stdout.write(value)
+    except UnicodeEncodeError:
+        sys.stdout.buffer.write(value.encode("utf-8", errors="replace"))
+        sys.stdout.flush()
+
+
+def safe_print_json(data: Any) -> None:
+    safe_print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
 def slugify(text: str) -> str:
     safe = re.sub(r"[^\w\u4e00-\u9fff]+", "-", text.strip().lower())
     safe = safe.strip("-")
@@ -3141,7 +3157,7 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     controls.setdefault("preset_inline", "editorial-grain")
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    safe_print_json(payload)
     return 0
 
 
@@ -3302,7 +3318,7 @@ def cmd_ideate(args: argparse.Namespace) -> int:
         manifest["outline"] = ideation["outline"]
     write_json(workspace / "ideation.json", ideation)
     save_manifest(workspace, manifest)
-    print(json.dumps({"workspace": str(workspace), "manifest": str(workspace / 'manifest.json')}, ensure_ascii=False, indent=2))
+    safe_print_json({"workspace": str(workspace), "manifest": str(workspace / "manifest.json")})
     return 0
 
 
@@ -3374,7 +3390,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest["score_total"] = report["total_score"]
     manifest["score_passed"] = report["passed"]
     save_manifest(workspace, manifest)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    safe_print_json(report)
     if args.fail_below and report["total_score"] < threshold:
         return 2
     return 0
@@ -3849,7 +3865,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     manifest["image_outline_markdown_path"] = "image-outline.md"
     manifest["image_prompt_dir"] = "prompts/images"
     save_manifest(workspace, manifest)
-    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    safe_print_json(plan)
     return 0
 
 def cmd_generate_images(args: argparse.Namespace) -> int:
@@ -3919,7 +3935,7 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
     manifest["image_provider"] = provider
     manifest.setdefault("asset_paths", {}).update(generated)
     save_manifest(workspace, manifest)
-    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    safe_print_json(plan)
     return 0
 
 
@@ -4652,7 +4668,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         manifest["expected_inline_count"] = expected_inline_count
         write_json(workspace / "publish-result.json", result)
         save_manifest(workspace, manifest)
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        safe_print_json(result)
         return 0
     if not getattr(args, "confirmed_publish", False):
         raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
@@ -4714,7 +4730,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
     manifest["verify_errors"] = verify_report["verify_errors"]
     manifest["publish_status"] = "verified" if verify_report["verify_status"] == "passed" else "draft_verify_failed"
     save_manifest(workspace, manifest)
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    safe_print_json(result)
     return 0 if verify_report["verify_status"] == "passed" else 2
 
 
@@ -4735,7 +4751,7 @@ def cmd_verify_draft(args: argparse.Namespace) -> int:
     manifest["verify_errors"] = report["verify_errors"]
     manifest["publish_status"] = "verified" if report["verify_status"] == "passed" else manifest.get("publish_status") or "draft_verify_failed"
     save_manifest(workspace, manifest)
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    safe_print_json(report)
     return 0 if report["verify_status"] == "passed" else 2
 
 
@@ -4835,7 +4851,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "gemini-web": doctor_provider_status("gemini-web"),
         },
     }
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    safe_print_json(report)
     return 0
 
 def cmd_consent(args: argparse.Namespace) -> int:
@@ -4852,7 +4868,7 @@ def cmd_consent(args: argparse.Namespace) -> int:
         print(str(path))
         return 0
     payload = read_json(path, default={}) or {}
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    safe_print_json(payload)
     return 0
 
 
