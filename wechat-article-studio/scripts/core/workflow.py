@@ -540,6 +540,9 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest["rewrite_path"] = rewrite["output_path"]
     manifest["rewrite_preview_score"] = rewrite.get("preview_score")
     manifest["rewrite_preview_passed"] = rewrite.get("preview_passed")
+    if rewrite.get("evidence_report_path"):
+        manifest["evidence_report_path"] = rewrite["evidence_report_path"]
+        manifest["evidence_used_count"] = rewrite.get("evidence_used_count", 0)
     if getattr(args, "promote", False):
         _maybe_promote_rewrite(manifest, rewrite)
     update_stage(manifest, "revise", "draft_status")
@@ -1135,6 +1138,9 @@ def cmd_score(args: argparse.Namespace) -> int:
         manifest["rewrite_path"] = rewrite["output_path"]
         manifest["rewrite_preview_score"] = rewrite.get("preview_score")
         manifest["rewrite_preview_passed"] = rewrite.get("preview_passed")
+        if rewrite.get("evidence_report_path"):
+            manifest["evidence_report_path"] = rewrite["evidence_report_path"]
+            manifest["evidence_used_count"] = rewrite.get("evidence_used_count", 0)
 
     write_json(workspace / "score-report.json", report)
     legacy.write_text(workspace / "score-report.md", legacy.markdown_report(report))

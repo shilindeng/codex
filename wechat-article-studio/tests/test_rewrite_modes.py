@@ -57,8 +57,13 @@ class RewriteModeTests(unittest.TestCase):
             workspace = Path(tmp)
             title = "测试标题"
             meta = {"title": title, "summary": "摘要"}
+            sample_source = workspace / "source.html"
+            sample_source.write_text(
+                "<html><head><title>官方说明</title></head><body><p>根据 2026 年官方文档：这个功能已经发布。</p></body></html>",
+                encoding="utf-8",
+            )
             body = "首先，我们来看看。其次，这很重要。最后，综上所述。"
-            manifest = {"source_urls": [], "audience": "大众读者", "direction": ""}
+            manifest = {"source_urls": [sample_source.resolve().as_uri()], "audience": "大众读者", "direction": ""}
             report = legacy.build_score_report(title, body, manifest, threshold=85)
 
             rewrite = generate_revision_candidate(
@@ -73,8 +78,9 @@ class RewriteModeTests(unittest.TestCase):
             )
             self.assertEqual(rewrite.get("mode"), "improve-score")
             self.assertTrue((workspace / "article-rewrite.report.md").exists())
+            self.assertEqual(rewrite.get("evidence_report_path"), "evidence-report.json")
+            self.assertGreaterEqual(int(rewrite.get("evidence_used_count") or 0), 0)
 
 
 if __name__ == "__main__":
     unittest.main()
-

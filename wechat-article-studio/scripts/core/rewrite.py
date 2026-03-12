@@ -125,6 +125,7 @@ def generate_revision_candidate(
     rewritten_body = ""
     provider_name = ""
     provider_model = ""
+    legacy_rewrite: dict[str, Any] | None = None
 
     if provider.configured():
         if mode == "de-ai":
@@ -172,11 +173,11 @@ def generate_revision_candidate(
             rewrite_meta["rewrite_from"] = meta.get("title") or title
             write_text(output_path, join_frontmatter(rewrite_meta, rewritten_body))
         else:
-            rewrite = legacy.auto_rewrite_article(title, meta, before_body, report, manifest, output_path)
+            legacy_rewrite = legacy.auto_rewrite_article(title, meta, before_body, report, manifest, output_path)
             # Legacy already wrote files; we will augment the rewrite.json below for consistency.
             _, rewritten_body = legacy.split_frontmatter(read_text(output_path))
             rewritten_body = strip_leading_h1(rewritten_body, title).strip() + "\n"
-            applied_actions.extend(list(rewrite.get("applied_actions") or []) or ["规则改写：按评分短板提分"])
+            applied_actions.extend(list(legacy_rewrite.get("applied_actions") or []) or ["规则改写：按评分短板提分"])
 
     threshold = int(report.get("threshold") or legacy.DEFAULT_THRESHOLD)
     preview_report = legacy.build_score_report(title, rewritten_body, manifest, threshold)
@@ -215,6 +216,10 @@ def generate_revision_candidate(
     if provider_name:
         rewrite_payload["provider"] = provider_name
         rewrite_payload["model"] = provider_model
+    elif legacy_rewrite:
+        # Preserve legacy evidence metadata on the rule-based improve-score path.
+        rewrite_payload["evidence_report_path"] = legacy_rewrite.get("evidence_report_path")
+        rewrite_payload["evidence_used_count"] = legacy_rewrite.get("evidence_used_count", 0)
 
     write_json(output_path.with_suffix(".rewrite.json"), rewrite_payload)
     return rewrite_payload
