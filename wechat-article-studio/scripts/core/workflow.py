@@ -775,6 +775,7 @@ def cmd_evidence(args: argparse.Namespace) -> int:
 
     # Merge into research.json (create stub if missing).
     research_path = workspace / "research.json"
+    research_exists = research_path.exists()
     research = read_json(research_path, default={}) or {}
     research.setdefault("topic", manifest.get("topic") or title)
     research.setdefault("angle", manifest.get("direction") or "")
@@ -797,8 +798,10 @@ def cmd_evidence(args: argparse.Namespace) -> int:
         research["provider"] = "evidence"
     if "model" not in research:
         research["model"] = "session"
-    if "placeholder" not in research:
-        research["placeholder"] = True
+    if research_exists and (research.get("sources") or research.get("evidence_items")):
+        research["placeholder"] = False
+    elif "placeholder" not in research:
+        research["placeholder"] = False if research_exists else True
     write_json(research_path, research)
 
     print(
