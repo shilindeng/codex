@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from core.viral import default_viral_blueprint, normalize_outline_payload, normalize_review_payload
 from providers.text.base import ProviderResult, TextProvider
 
 
@@ -48,28 +49,49 @@ def placeholder_titles(topic: str, audience: str, count: int) -> list[dict[str, 
 
 
 def placeholder_outline(title: str) -> dict[str, Any]:
-    return {
-        "title": title,
-        "angle": "从问题、误区、方法、行动四段展开",
-        "sections": [
-            {"heading": "为什么这个问题现在必须重视", "goal": "建立阅读动机", "evidence_need": "趋势或场景证据"},
-            {"heading": "大多数人真正卡住的地方", "goal": "拆解常见误区", "evidence_need": "案例或对比"},
-            {"heading": "一套可复用的执行框架", "goal": "给出方法论", "evidence_need": "步骤或清单"},
-            {"heading": "把方法变成接下来 7 天的动作", "goal": "收束并行动引导", "evidence_need": "行动建议"},
-        ],
-    }
+    context = {"topic": title, "selected_title": title, "title": title, "audience": "大众读者", "direction": ""}
+    return normalize_outline_payload(
+        {
+            "title": title,
+            "angle": "从问题、误区、方法、行动四段展开",
+            "sections": [
+                {"heading": "为什么这个问题现在必须重视", "goal": "建立阅读动机", "evidence_need": "趋势或场景证据"},
+                {"heading": "大多数人真正卡住的地方", "goal": "拆解常见误区", "evidence_need": "案例或对比"},
+                {"heading": "一套可复用的执行框架", "goal": "给出方法论", "evidence_need": "步骤或清单"},
+                {"heading": "把方法变成接下来 7 天的动作", "goal": "收束并行动引导", "evidence_need": "行动建议"},
+            ],
+            "viral_blueprint": default_viral_blueprint(
+                topic=title,
+                title=title,
+                angle="从问题、误区、方法、行动四段展开",
+                audience="大众读者",
+                research={},
+                style_signals=[],
+            ),
+        },
+        context,
+    )
 
 
 def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> str:
+    normalized_outline = normalize_outline_payload(
+        outline if isinstance(outline, dict) else {"title": title},
+        {"topic": title, "selected_title": title, "title": title, "audience": audience or "公众号读者", "direction": ""},
+    )
+    blueprint = normalized_outline.get("viral_blueprint", {})
     lines = [
         f"# {title}",
         "",
-        f"写给{audience or '公众号读者'}的一篇骨架稿。当前环境未配置文本模型，因此这里先产出可继续编辑的结构化初稿。",
+        f"写给{audience or '公众号读者'}的一篇骨架稿。当前环境未配置文本模型，因此这里先产出可继续编辑、带爆款蓝图的结构化初稿。",
         "",
-        "如果你要把这篇文章真正写出传播力，重点不是把信息堆满，而是先把读者为什么要继续看下去这件事讲清楚。",
+        f"先说结论：{blueprint.get('core_viewpoint') or '真正决定传播效果的，不是信息堆积，而是判断、刺痛和行动感同时到位。'}",
+        "",
+        "很多人写公众号文章时，明明信息不少，却还是没人转发。问题通常不在信息量，而在于没有把读者真正卡住的地方说透，也没有让读者觉得“这说的就是我”。",
+        "",
+        "> 你不是内容不够多，而是还没有把真正能打到人心里的那句话说出来。",
         "",
     ]
-    for section in outline.get("sections") or []:
+    for section in (normalized_outline.get("sections") or []):
         lines.extend(
             [
                 f"## {section.get('heading') or '未命名章节'}",
@@ -80,6 +102,8 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
                 "",
                 "把这一段写实，写到读者能立刻理解问题、判断代价、看到可执行动作。",
                 "",
+                "写这一节时，至少补一处对比、一处读者视角、一句能让人截图的判断。",
+                "",
             ]
         )
     lines.extend(
@@ -87,25 +111,38 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
             "## 结尾",
             "",
             "真正有传播力的公众号文章，结尾不会停在观点，而会停在一个读者愿意马上保存或转发的动作上。",
+            "",
+            "- 先复述一句核心判断。",
+            "- 再给读者一个今天就能做的动作。",
+            "- 最后留下一句能被带走的金句。",
         ]
     )
     return "\n".join(lines).strip() + "\n"
 
 
 def placeholder_review(title: str) -> dict[str, Any]:
-    return {
-        "summary": f"《{title}》当前为骨架稿，结构完整但仍需补充事实支撑和更强的传播表达。",
-        "findings": [
-            "开头需要更强的结果预期或反差钩子。",
-            "中段需要至少 1 组案例、数据或对比支撑。",
-            "结尾需要更明确的行动建议或收藏点。",
-        ],
-        "platform_notes": [
-            "微信公众号更适合短段落、加粗重点和 2~4 个清晰小标题。",
-            "事实型内容发布前应补齐来源区。",
-        ],
-        "placeholder": True,
-    }
+    base = normalize_review_payload(
+        {
+            "summary": f"《{title}》当前为骨架稿，结构完整，但离真正的爆款稿还差情绪价值、刺痛句和更强的传播表达。",
+            "findings": [
+                "开头需要更强的结果预期或反差钩子。",
+                "中段需要至少 1 组案例、数据或对比支撑。",
+                "结尾需要更明确的行动建议或收藏点。",
+            ],
+            "platform_notes": [
+                "微信公众号更适合短段落、加粗重点和 2~4 个清晰小标题。",
+                "事实型内容发布前应补齐来源区。",
+            ],
+        },
+        title=title,
+        body=placeholder_article(title, placeholder_outline(title), "公众号读者"),
+        manifest={"topic": title, "audience": "公众号读者", "direction": ""},
+        blueprint=default_viral_blueprint(topic=title, title=title, angle="", audience="公众号读者", research={}, style_signals=[]),
+        revision_round=1,
+        review_source="placeholder",
+    )
+    base["placeholder"] = True
+    return base
 
 
 class OpenAICompatibleTextProvider(TextProvider):
@@ -240,12 +277,20 @@ class OpenAICompatibleTextProvider(TextProvider):
         prompt = [
             {
                 "role": "system",
-                "content": "你是微信公众号大纲编辑。只输出 JSON，字段为 title, angle, sections，sections 每项包含 heading, goal, evidence_need。",
+                "content": (
+                    "你是微信公众号爆款文章总编。只输出 JSON。"
+                    "字段必须包含 title, angle, sections, viral_blueprint。"
+                    "sections 每项包含 heading, goal, evidence_need。"
+                    "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
+                    "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals。"
+                ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]
         content = self._request(prompt, {"type": "json_object"})
-        return ProviderResult(payload=self._json_result(content), provider=self.provider_name, model=self.model)
+        payload = self._json_result(content)
+        normalized = normalize_outline_payload(payload, context)
+        return ProviderResult(payload=normalized, provider=self.provider_name, model=self.model)
 
     def generate_article(self, context: dict[str, Any]) -> ProviderResult:
         title = context.get("title") or context.get("selected_title") or context.get("topic") or "未命名标题"
@@ -259,7 +304,13 @@ class OpenAICompatibleTextProvider(TextProvider):
         prompt = [
             {
                 "role": "system",
-                "content": "你是微信公众号写作编辑。输出 Markdown 正文，包含 H2/H3 结构、短段落、明确开头钩子、结尾行动建议。",
+                "content": (
+                    "你是微信公众号爆款写作编辑。输出 Markdown 正文，不要解释。"
+                    "必须消费输入里的 viral_blueprint。"
+                    "要求：1 个主观点、2~4 个副观点、至少 3 种论证方式、至少 2 次视角切换、至少 3 句可截图金句、"
+                    "段落短、句长有波动、禁用首先/其次/最后/综上所述等模板连接词。"
+                    "开头先制造刺痛感和结果预期，结尾必须给读者可执行动作。"
+                ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]
@@ -278,12 +329,34 @@ class OpenAICompatibleTextProvider(TextProvider):
         prompt = [
             {
                 "role": "system",
-                "content": "你是微信公众号资深编辑。只输出 JSON，字段为 summary, findings, platform_notes。",
+                "content": (
+                    "你是微信公众号爆款编辑。只输出 JSON，不要解释。"
+                    "字段必须包含 summary, findings, strengths, issues, platform_notes, viral_analysis, "
+                    "emotion_value_sentences, pain_point_sentences, ai_smell_findings, revision_priorities。"
+                    "viral_analysis 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
+                    "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits。"
+                    "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
+                ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]
         content = self._request(prompt, {"type": "json_object"})
-        return ProviderResult(payload=self._json_result(content), provider=self.provider_name, model=self.model)
+        payload = self._json_result(content)
+        normalized = normalize_review_payload(
+            payload,
+            title=title,
+            body=str(context.get("article_body") or ""),
+            manifest={
+                "topic": context.get("topic") or title,
+                "audience": context.get("audience") or "大众读者",
+                "direction": context.get("direction") or "",
+                "viral_blueprint": context.get("viral_blueprint"),
+            },
+            blueprint=context.get("viral_blueprint"),
+            revision_round=int(context.get("revision_round") or 1),
+            review_source=self.provider_name,
+        )
+        return ProviderResult(payload=normalized, provider=self.provider_name, model=self.model)
 
     def revise_article(self, context: dict[str, Any]) -> ProviderResult:
         if not self.configured():
@@ -294,7 +367,11 @@ class OpenAICompatibleTextProvider(TextProvider):
         prompt = [
             {
                 "role": "system",
-                "content": "你是微信公众号改稿编辑。输出修订后的 Markdown 正文，不要输出解释。",
+                "content": (
+                    "你是微信公众号爆款改稿编辑。输出修订后的 Markdown 正文，不要输出解释。"
+                    "改稿优先级固定为：补开头爆点 -> 补情绪价值和刺痛句 -> 补论证多样性 -> 补视角切换 -> 补金句 -> 去模板腔。"
+                    "必须保留原文事实边界，不要编造数据。"
+                ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]

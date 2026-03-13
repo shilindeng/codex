@@ -34,7 +34,7 @@ from typing import Any, Iterable
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 ASSETS_DIR = SKILL_DIR / "assets"
-DEFAULT_THRESHOLD = 85
+DEFAULT_THRESHOLD = 88
 DISCLAIMER_VERSION = "1.0"
 MANIFEST_VERSION = 2
 DEFAULT_COVER_POLICY = "thumb_only"
@@ -53,17 +53,16 @@ TRANSPARENT_PNG = base64.b64decode(
 )
 
 WEIGHTS: list[tuple[str, int]] = [
-    ("标题传播力", 8),
-    ("开头吸引力", 12),
-    ("钩子设计", 10),
-    ("金句质量", 10),
-    ("文风适配度", 10),
-    ("结构清晰度", 10),
-    ("内容深度", 15),
-    ("可信度与检索支撑", 8),
-    ("可读性与节奏", 7),
-    ("情绪共鸣", 5),
-    ("收藏/转发潜力", 5),
+    ("标题与开头爆点", 12),
+    ("核心观点与副观点", 10),
+    ("说服策略与论证多样性", 12),
+    ("情绪触发与刺痛感", 12),
+    ("金句与传播句密度", 10),
+    ("情感曲线与节奏", 8),
+    ("情感层次与共鸣", 8),
+    ("视角转化与认知增量", 8),
+    ("语言风格自然度", 10),
+    ("可信度与检索支撑", 10),
 ]
 
 TITLE_POWER_WORDS = [
@@ -1809,69 +1808,31 @@ def rewrite_actions(breakdown: list[dict[str, Any]], title: str, body: str) -> t
 
 
 def markdown_report(report: dict[str, Any]) -> str:
-    lines = [
-        f"# 文章评分报告：{report['title']}",
-        "",
-        f"- 总分：`{report['total_score']}` / 100",
-        f"- 阈值：`{report['threshold']}`",
-        f"- 结果：`{'通过' if report['passed'] else '未通过'}`",
-        "",
-        "## 分项得分",
-        "",
-    ]
-    for item in report["score_breakdown"]:
-        lines.append(f"- {item['dimension']}：`{item['score']}` / `{item['weight']}` - {item['note']}")
-    lines.extend(["", "## 核心优点", ""])
-    for item in report["strengths"] or ["暂无明显高分项。"]:
-        lines.append(f"- {item}")
-    lines.extend(["", "## 核心短板", ""])
-    for item in report["weaknesses"] or ["暂无明显短板。"]:
-        lines.append(f"- {item}")
-    lines.extend(["", "## 必须修改项", ""])
-    for item in report["mandatory_revisions"] or ["当前版本已达阈值，可进入下一步。"]:
-        lines.append(f"- {item}")
-    lines.extend(["", "## 建议补强", ""])
-    lines.append(f"- 替换钩子：{report['suggestions']['replacement_hook']}")
-    for quote in report["suggestions"]["sample_gold_quotes"]:
-        lines.append(f"- 备选金句：{quote}")
-    for item in report["suggestions"]["style_adjustments"]:
-        lines.append(f"- 文风建议：{item}")
-    if report["candidate_quotes"]:
-        lines.extend(["", "## 文中已识别金句", ""])
-        for quote in report["candidate_quotes"]:
-            lines.append(f"> {quote}")
-    if report.get("rewrite"):
-        rewrite = report["rewrite"]
-        lines.extend(["", "## 自动改写稿", ""])
-        lines.append(f"- 改写稿：`{rewrite['output_path']}`")
-        lines.append(f"- 触发维度：`{'、'.join(rewrite['triggered_dimensions'])}`")
-        lines.append(f"- 预评分：`{rewrite['preview_score']}` / 100")
-        lines.append(f"- 预评分是否过线：`{'是' if rewrite['preview_passed'] else '否'}`")
-        for action in rewrite.get("applied_actions") or []:
-            lines.append(f"- 已应用：{action}")
-    return "\n".join(lines).rstrip() + "\n"
+    from core.viral import markdown_score_report
+
+    return markdown_score_report(report)
 
 
-def build_score_report(title: str, body: str, manifest: dict[str, Any], threshold: int) -> dict[str, Any]:
-    headings = extract_headings(body)
-    source_urls = manifest.get("source_urls") or []
-    breakdown, quotes = build_breakdown(title, body, headings, source_urls)
-    total = sum(item["score"] for item in breakdown)
-    strengths, weaknesses = strongest_and_weakest(breakdown)
-    mandatory_revisions, suggestions = rewrite_actions(breakdown, title, body)
-    return {
-        "title": title,
-        "threshold": threshold,
-        "total_score": total,
-        "passed": total >= threshold,
-        "score_breakdown": breakdown,
-        "strengths": strengths,
-        "weaknesses": weaknesses,
-        "mandatory_revisions": mandatory_revisions,
-        "suggestions": suggestions,
-        "candidate_quotes": quotes,
-        "generated_at": now_iso(),
-    }
+def build_score_report(
+    title: str,
+    body: str,
+    manifest: dict[str, Any],
+    threshold: int,
+    review: dict[str, Any] | None = None,
+    revision_rounds: list[dict[str, Any]] | None = None,
+    stop_reason: str = "",
+) -> dict[str, Any]:
+    from core.viral import build_score_report as build_viral_score_report
+
+    return build_viral_score_report(
+        title=title,
+        body=body,
+        manifest=manifest,
+        threshold=threshold,
+        review=review,
+        revision_rounds=revision_rounds,
+        stop_reason=stop_reason,
+    )
 
 
 def split_sections(body: str) -> tuple[list[str], list[dict[str, Any]]]:

@@ -17,45 +17,47 @@
 
 ## `outline`
 
-- 输入：`--workspace [--title "..."]`
+- 输入：`--workspace [--title "..."] [--style-sample ...]`
 - 依赖：`research.json`、`ideation.json`
-- 输出：更新 `ideation.json`
+- 输出：更新 `ideation.json`（包含 `outline_meta.viral_blueprint` 与 `viral_blueprint`）
 - 失败条件：工作目录不可写
 
 ## `write`
 
-- 输入：`--workspace [--title "..."] [--outline-file ...]`
+- 输入：`--workspace [--title "..."] [--outline-file ...] [--style-sample ...]`
 - 依赖：`research.json`、`ideation.json`
 - 输出：`article.md`
 - 失败条件：工作目录不可写
 
 ## `review`
 
-- 输入：`--workspace`
+- 输入：`--workspace [--style-sample ...]`
 - 依赖：`article.md`
 - 输出：`review-report.json`、`review-report.md`
 - 失败条件：找不到文章
 
 ## `score`
 
-- 输入：`--workspace [--input ...]`
+- 输入：`--workspace [--input ...] [--style-sample ...]`
 - 依赖：`article.md` 或指定输入
 - 输出：`score-report.json`、`score-report.md`
 - 失败条件：找不到文章
 
 ## `revise`
 
-- 输入：`--workspace [--mode improve-score|de-ai]`
+- 输入：`--workspace [--mode improve-score|explosive-score|de-ai] [--style-sample ...]`
 - 依赖：`article.md`，推荐先有 `score-report.json`
-- 输出：`article-rewrite.md`、`article-rewrite.report.md`、`article-rewrite.rewrite.json`
+- 输出：多轮回炉时会生成 `article-rewrite-rN.md`（并保持 `article-rewrite.md` 指向最新一版），同时生成对应的 `.report.md/.rewrite.json`
 - 失败条件：找不到文章
 
 ## `run`
 
-- 输入：`--workspace [--topic] [--to render|publish]`
+- 输入：`--workspace [--topic] [--max-revision-rounds 3] [--style-sample ...] [--to render|publish]`
 - 依赖：工作目录可写；需要已配置文本 provider；发布时需要微信凭证
 - 输出：从 `research.json` 到 `article.wechat.html`，必要时追加发布产物
 - 失败条件：发布前置条件不满足
+- 特殊行为：
+  - 默认进入“多轮回炉”：每轮 `review -> score -> revise(promote) -> 再 review/score`，最多 `--max-revision-rounds` 轮；最终保留最佳稿并在 `score-report` 中记录 `revision_rounds/best_round/stop_reason`
 - 常用图片参数：
   - `--image-preset`
   - `--image-density`
@@ -68,7 +70,7 @@
 
 ## `hosted-run`
 
-- 输入：`--workspace --topic [--article-file] [--title] [--outline-file] [--to render|publish]`
+- 输入：`--workspace --topic [--article-file] [--title] [--outline-file] [--max-revision-rounds 3] [--style-sample ...] [--to render|publish]`
 - 依赖：优先使用宿主 agent 已生成正文；若缺失且需要自动补全正文，则必须已配置文本 provider；发布时需要微信凭证
 - 输出：写入 research/ideation/article/review/score/image/render/publish 相关产物
 - 失败条件：发布前置条件不满足，或自动补全过程失败

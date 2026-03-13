@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.viral import normalize_outline_payload, normalize_review_payload
 from providers.text.base import ProviderResult, TextProvider
 
 
@@ -129,20 +130,25 @@ class GeminiWebTextProvider(TextProvider):
 
     def generate_outline(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号大纲编辑。只输出 JSON 对象，不要解释。"
-            "字段必须是 title, angle, sections，sections 每项包含 heading, goal, evidence_need。"
+            "你是微信公众号爆款文章总编。只输出 JSON 对象，不要解释。"
+            "字段必须是 title, angle, sections, viral_blueprint。"
+            "sections 每项包含 heading, goal, evidence_need。"
+            "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
+            "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=True)
         payload = self._parse_json(text)
         if isinstance(payload, dict) and "text" in payload and isinstance(payload["text"], str):
             payload = self._parse_json(payload["text"])
-        return ProviderResult(payload=payload, provider=self.provider_name, model=self.model)
+        return ProviderResult(payload=normalize_outline_payload(payload, context), provider=self.provider_name, model=self.model)
 
     def generate_article(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号写作编辑。输出 Markdown 正文，不要解释。"
-            "要求：强开头、短段落、清晰 H2/H3、小标题自然、结尾有行动建议。"
+            "你是微信公众号爆款写作编辑。输出 Markdown 正文，不要解释。"
+            "必须消费输入里的 viral_blueprint。"
+            "要求：1 个主观点、2~4 个副观点、至少 3 种论证方式、至少 2 次视角切换、至少 3 句可截图金句、"
+            "段落短、句长有波动、禁用首先/其次/最后/综上所述等模板连接词。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=False)
@@ -150,19 +156,38 @@ class GeminiWebTextProvider(TextProvider):
 
     def review_article(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号资深编辑。只输出 JSON 对象，不要解释。"
-            "字段必须是 summary, findings, platform_notes。"
+            "你是微信公众号爆款编辑。只输出 JSON 对象，不要解释。"
+            "字段必须包含 summary, findings, strengths, issues, platform_notes, viral_analysis, "
+            "emotion_value_sentences, pain_point_sentences, ai_smell_findings, revision_priorities。"
+            "viral_analysis 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
+            "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits。"
+            "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=True)
         payload = self._parse_json(text)
         if isinstance(payload, dict) and "text" in payload and isinstance(payload["text"], str):
             payload = self._parse_json(payload["text"])
-        return ProviderResult(payload=payload, provider=self.provider_name, model=self.model)
+        normalized = normalize_review_payload(
+            payload,
+            title=str(context.get("title") or "未命名标题"),
+            body=str(context.get("article_body") or ""),
+            manifest={
+                "topic": context.get("topic") or context.get("title") or "",
+                "audience": context.get("audience") or "大众读者",
+                "direction": context.get("direction") or "",
+                "viral_blueprint": context.get("viral_blueprint"),
+            },
+            blueprint=context.get("viral_blueprint"),
+            revision_round=int(context.get("revision_round") or 1),
+            review_source=self.provider_name,
+        )
+        return ProviderResult(payload=normalized, provider=self.provider_name, model=self.model)
 
     def revise_article(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号改稿编辑。只输出修订后的 Markdown 正文，不要解释。"
+            "你是微信公众号爆款改稿编辑。只输出修订后的 Markdown 正文，不要解释。"
+            "改稿优先级固定为：补开头爆点 -> 补情绪价值和刺痛句 -> 补论证多样性 -> 补视角切换 -> 补金句 -> 去模板腔。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=False)
