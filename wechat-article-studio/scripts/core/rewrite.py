@@ -139,10 +139,14 @@ def generate_revision_candidate(
             applied_actions.append("模型改写：去 AI 味与节奏优化")
         else:
             rewrite_goal = (
-                "提分改写：\n"
-                "- 优先修开头吸引力与钩子；其次补证据与内容深度；再补金句与可收藏点。\n"
-                "- 统一文风与节奏，但不要编造事实或来源。\n"
-                "- 保持 Markdown 结构（H2/H3、列表、引用、代码块），不要输出解释。\n"
+                "爆款提分改写：\n"
+                "- 优先补开头爆点（首屏刺痛 + 结果预期 + 反差判断）。\n"
+                "- 其次补情绪价值句和刺痛句，让读者感到被理解但又被推动。\n"
+                "- 再补论证多样性（至少 3 种：对比/案例/步骤/数据/场景）。\n"
+                "- 再补视角切换（至少 2 次），避免全文一个角度平铺。\n"
+                "- 再补 3 句可截图金句（短、准、可复述）。\n"
+                "- 最后继续去 AI 味（避免首先/其次/最后/综上所述等模板腔）。\n"
+                "- 不要编造事实、数据和来源；保持 Markdown 结构；不要输出解释。\n"
             )
             applied_actions.append("模型改写：按评分短板提分优化")
 
@@ -158,6 +162,14 @@ def generate_revision_candidate(
             "weaknesses": report.get("weaknesses") or [],
             "suggestions": report.get("suggestions") or {},
             "score_breakdown": report.get("score_breakdown") or [],
+            "viral_blueprint": report.get("viral_blueprint") or manifest.get("viral_blueprint") or {},
+            "viral_analysis": report.get("viral_analysis") or {},
+            "emotion_value_sentences": report.get("emotion_value_sentences") or [],
+            "pain_point_sentences": report.get("pain_point_sentences") or [],
+            "ai_smell_findings": report.get("ai_smell_findings") or [],
+            "quality_gates": report.get("quality_gates") or {},
+            "style_samples": manifest.get("style_sample_paths") or [],
+            "style_signals": manifest.get("style_signals") or [],
         }
         result = provider.revise_article(context)
         provider_name = result.provider

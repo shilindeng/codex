@@ -6,11 +6,11 @@
 0. `hosted-run`：宿主 agent 生成 research / 标题 / 大纲 / 正文后，继续自动跑后链路
 1. `research`：收集主题、来源、信息缺口
 2. `titles`：生成 3 个左右标题候选，并做标题准入评分
-3. `outline`：生成文章大纲与证据需求
-4. `write`：写出 `article.md`
-5. `review`：生成编辑评审报告
-6. `score`：运行启发式评分与低分改写候选
-7. `revise`：在低分时生成 `article-rewrite.md`
+3. `outline`：生成文章大纲与证据需求，并产出爆款策略蓝图 `viral_blueprint`
+4. `write`：写出 `article.md`（必须消费 `viral_blueprint`）
+5. `review`：生成结构化编辑拆解（爆款拆解 + 句式提炼 + AI 味问题 + 改稿优先级）
+6. `score`：运行启发式评分 + `quality_gates`（硬门槛）
+7. `revise`：低分时按“爆款提分改写”生成候选稿（多轮回炉，默认最多 3 轮）
 8. `plan-images` / `generate-images`
 9. `assemble` / `render`
 10. `publish` / `verify-draft`
@@ -20,6 +20,7 @@
 - `discover-topics` 产出的候选方向未经用户确认前，不进入正式正文生成
 - 标题与方向未确认前，不进入正式发布
 - `score` 未达阈值时，不进入正式发布；最多只允许 `--dry-run-publish` 做链路检查
+- 未通过 `quality_gates`（含“情绪价值/刺痛/金句/去 AI 味/可信度”等硬门槛）时，不进入正式发布
 - “可信度与检索支撑”过低，或工作目录里仍存在 placeholder 回退结果时，不进入正式发布
 - 启用 `gemini-web` 前，必须先有用户同意
 - 进入 `publish` 前，必须确认用户已明确要求发布到草稿箱
@@ -35,6 +36,11 @@ python {SKILL_DIR}/scripts/studio.py hosted-run \
 ```
 
 如果宿主已经生成好正文，也可额外传入 `--article-file <agent-generated-markdown>`。
+
+如需控制回炉轮次或注入风格样本：
+
+- `--max-revision-rounds 3`（默认）
+- `--style-sample path/to/sample.md`（可重复）
 
 如果已经配置文本 provider，也可继续使用：
 

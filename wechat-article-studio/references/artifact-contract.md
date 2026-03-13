@@ -46,6 +46,13 @@
 - `title_gate_passed`
 - `source_urls`
 - `article_path`
+- `viral_blueprint`
+- `style_sample_paths`
+- `style_signals`
+- `revision_round`
+- `revision_rounds`
+- `best_round`
+- `stop_reason`
 - `image_outline_path`
 - `image_outline_markdown_path`
 - `image_prompt_dir`
@@ -59,6 +66,31 @@
 - `strengths`
 - `issues`
 - `platform_notes`
+- `viral_analysis`
+- `emotion_value_sentences`
+- `pain_point_sentences`
+- `ai_smell_findings`
+- `revision_priorities`
+- `revision_round`
+- `review_source`
+- `confidence`
+
+## `score-report.json` 关键字段
+
+- `total_score`
+- `passed`
+- `score_breakdown`
+- `quality_gates`
+- `mandatory_revisions`
+- `suggestions`
+- `viral_blueprint`
+- `viral_analysis`
+- `emotion_value_sentences`
+- `pain_point_sentences`
+- `ai_smell_hits`
+- `revision_rounds`
+- `best_round`
+- `stop_reason`
 
 ## 设计约束
 

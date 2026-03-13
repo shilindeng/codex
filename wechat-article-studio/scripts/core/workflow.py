@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +27,22 @@ from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.render import cmd_render as legacy_render
 from core.rewrite import generate_revision_candidate
+from core.viral import (
+    DEFAULT_THRESHOLD as VIRAL_SCORE_THRESHOLD,
+    build_heuristic_review,
+    blueprint_complete,
+    default_viral_blueprint,
+    markdown_review_report,
+    normalize_outline_payload,
+    normalize_review_payload,
+    normalize_viral_blueprint,
+)
 from providers.text.gemini_web import GeminiWebTextProvider
 from providers.text.openai_compatible import OpenAICompatibleTextProvider, placeholder_article, placeholder_outline
 from publishers.wechat import cmd_publish as wechat_publish
 from publishers.wechat import cmd_verify_draft as wechat_verify_draft
 
-PUBLISH_MIN_CREDIBILITY_SCORE = 5
+PUBLISH_MIN_CREDIBILITY_SCORE = 6
 
 
 def active_text_provider():
@@ -82,6 +93,10 @@ def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[
         return blockers
     if not bool(report.get("passed", manifest.get("score_passed"))):
         blockers.append("当前稿件评分未达发布阈值")
+    quality_gates = report.get("quality_gates") or {}
+    failed_gates = [name for name, ok in quality_gates.items() if not ok]
+    if failed_gates:
+        blockers.append(f"质量门槛未通过：{'、'.join(failed_gates)}")
     credibility_score = score_dimension_value(report, "可信度与检索支撑")
     if credibility_score < PUBLISH_MIN_CREDIBILITY_SCORE:
         blockers.append(f"可信度与检索支撑得分过低（{credibility_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
@@ -107,12 +122,85 @@ def normalize_urls(values: list[str]) -> list[str]:
     return urls
 
 
+def normalize_style_samples(values: list[str], workspace: Path | None = None) -> list[str]:
+    seen: set[str] = set()
+    samples: list[str] = []
+    for raw in values:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        path = Path(value)
+        if not path.is_absolute() and workspace is not None:
+            path = (workspace / path).resolve()
+        else:
+            path = path.resolve()
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        samples.append(key)
+    return samples
+
+
+def extract_style_signals(sample_paths: list[str]) -> list[str]:
+    signals: list[str] = []
+    for raw in sample_paths[:3]:
+        path = Path(raw)
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        paragraphs = [block.strip() for block in legacy.list_paragraphs(content)[:3] if block.strip()]
+        compact = "\n".join(paragraphs)
+        if not compact:
+            continue
+        if any(word in compact for word in ["你", "我们", "别急", "说白了"]):
+            signals.append("对话感")
+        if re.search(r"不是.+而是|但|却|反而", compact):
+            signals.append("强对比")
+        if len(paragraphs) >= 2:
+            signals.append("短段落")
+        if any(word in compact for word in ["案例", "比如", "例如", "故事"]):
+            signals.append("案例推进")
+        if any(word in compact for word in ["先说结论", "一句话", "核心"]):
+            signals.append("结论前置")
+    return list(dict.fromkeys(signals))
+
+
 def load_research(workspace: Path) -> dict[str, Any]:
     return read_json(workspace / "research.json", default={}) or {}
 
 
 def load_ideation(workspace: Path) -> dict[str, Any]:
     return read_json(workspace / "ideation.json", default={}) or {}
+
+
+def current_viral_blueprint(workspace: Path, manifest: dict[str, Any], ideation: dict[str, Any] | None = None) -> dict[str, Any]:
+    ideation = ideation or load_ideation(workspace)
+    outline_meta = ideation.get("outline_meta") or {}
+    blueprint = outline_meta.get("viral_blueprint") or ideation.get("viral_blueprint") or manifest.get("viral_blueprint")
+    return normalize_viral_blueprint(
+        blueprint,
+        {
+            "topic": manifest.get("topic") or ideation.get("topic") or manifest.get("selected_title") or "",
+            "selected_title": ideation.get("selected_title") or manifest.get("selected_title") or "",
+            "direction": manifest.get("direction") or ideation.get("direction") or "",
+            "audience": manifest.get("audience") or "大众读者",
+            "research": load_research(workspace),
+            "style_signals": manifest.get("style_signals") or [],
+        },
+    )
+
+
+def persist_style_samples(workspace: Path, manifest: dict[str, Any], sample_values: list[str] | None) -> dict[str, Any]:
+    merged = list(manifest.get("style_sample_paths") or [])
+    merged.extend(sample_values or [])
+    normalized = normalize_style_samples(merged, workspace)
+    manifest["style_sample_paths"] = normalized
+    manifest["style_signals"] = extract_style_signals(normalized)
+    return manifest
 
 
 def normalize_string_list(value: Any) -> list[str]:
@@ -227,10 +315,13 @@ def apply_research_credibility_boost(report: dict[str, Any], research: dict[str,
             break
     if target is None:
         return boosted
-    bonus = min(8, max(target.get("score", 0), min(4, len(sources)) + min(4, len(evidence_items))))
+    bonus = min(10, max(target.get("score", 0), min(5, len(sources)) + min(5, len(evidence_items))))
     target["score"] = bonus
     boosted["total_score"] = sum(item.get("score", 0) for item in boosted.get("score_breakdown", []))
-    boosted["passed"] = boosted["total_score"] >= boosted.get("threshold", legacy.DEFAULT_THRESHOLD)
+    quality_gates = boosted.get("quality_gates") or {}
+    quality_gates["credibility_passed"] = bonus >= PUBLISH_MIN_CREDIBILITY_SCORE
+    boosted["quality_gates"] = quality_gates
+    boosted["passed"] = boosted["total_score"] >= boosted.get("threshold", legacy.DEFAULT_THRESHOLD) and all(quality_gates.values())
     weaknesses = normalize_string_list(boosted.get("weaknesses"))
     if bonus >= 4:
         weaknesses = [item for item in weaknesses if not item.startswith("可信度与检索支撑")]
@@ -338,6 +429,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
 def cmd_outline(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     provider = require_live_text_provider("outline")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -350,17 +442,31 @@ def cmd_outline(args: argparse.Namespace) -> int:
             "direction": manifest.get("direction") or research.get("angle") or "",
             "research": research,
             "titles": ideation.get("titles") or [],
+            "style_samples": manifest.get("style_sample_paths") or [],
+            "style_signals": manifest.get("style_signals") or [],
         }
     )
-    outline = dict(result.payload)
+    outline = normalize_outline_payload(
+        dict(result.payload),
+        {
+            "topic": manifest.get("topic") or research.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "research": research,
+            "style_signals": manifest.get("style_signals") or [],
+        },
+    )
     outline.setdefault("title", selected_title)
     ideation["selected_title"] = selected_title
     ideation["outline"] = outline.get("sections") or []
     ideation["outline_meta"] = outline
+    ideation["viral_blueprint"] = outline.get("viral_blueprint") or {}
     ideation["updated_at"] = now_iso()
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = selected_title
     manifest["outline"] = [item.get("heading", "") for item in outline.get("sections") or []]
+    manifest["viral_blueprint"] = outline.get("viral_blueprint") or {}
     update_stage(manifest, "outline", "outline_status")
     save_manifest(workspace, manifest)
     print(json.dumps(outline, ensure_ascii=False, indent=2))
@@ -370,6 +476,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
 def cmd_write(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     provider = require_live_text_provider("write")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -378,6 +485,17 @@ def cmd_write(args: argparse.Namespace) -> int:
         outline_lines = [line.strip("- ").strip() for line in read_input_file(args.outline_file).splitlines() if line.strip()]
         outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
+    outline_meta = normalize_outline_payload(
+        outline_meta,
+        {
+            "topic": manifest.get("topic") or research.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "research": research,
+            "style_signals": manifest.get("style_signals") or [],
+        },
+    )
     result = provider.generate_article(
         {
             "topic": manifest.get("topic") or research.get("topic") or selected_title,
@@ -387,6 +505,9 @@ def cmd_write(args: argparse.Namespace) -> int:
             "direction": manifest.get("direction") or research.get("angle") or "",
             "research": research,
             "outline": outline_meta or {"sections": ideation.get("outline") or []},
+            "viral_blueprint": outline_meta.get("viral_blueprint") or current_viral_blueprint(workspace, manifest, ideation),
+            "style_samples": manifest.get("style_sample_paths") or [],
+            "style_signals": manifest.get("style_signals") or [],
         }
     )
     body = str(result.payload).strip()
@@ -400,6 +521,7 @@ def cmd_write(args: argparse.Namespace) -> int:
             "summary": summary,
             "article_path": "article.md",
             "outline": [item.get("heading", "") for item in (outline_meta.get("sections") or [])],
+            "viral_blueprint": outline_meta.get("viral_blueprint") or {},
             "text_provider": result.provider,
             "text_model": result.model,
         }
@@ -413,38 +535,64 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    provider = require_live_text_provider("review")
+    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待评审文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
     body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
-    result = provider.review_article(
-        {
-            "title": title,
-            "audience": manifest.get("audience") or "大众读者",
-            "direction": manifest.get("direction") or "",
-            "summary": meta.get("summary") or manifest.get("summary") or extract_summary(body),
-            "article_body": body,
-        }
+    blueprint = current_viral_blueprint(workspace, manifest)
+    provider = active_text_provider()
+    if provider.configured():
+        result = provider.review_article(
+            {
+                "title": title,
+                "audience": manifest.get("audience") or "大众读者",
+                "direction": manifest.get("direction") or "",
+                "summary": meta.get("summary") or manifest.get("summary") or extract_summary(body),
+                "article_body": body,
+                "viral_blueprint": blueprint,
+                "style_samples": manifest.get("style_sample_paths") or [],
+                "style_signals": manifest.get("style_signals") or [],
+                "revision_round": int(manifest.get("revision_round") or 1),
+            }
+        )
+        review_source = result.provider
+        model_name = result.model
+        raw_payload: Any = result.payload
+    else:
+        review_source = "local-heuristic"
+        model_name = "builtin"
+        raw_payload = build_heuristic_review(
+            title,
+            body,
+            manifest,
+            blueprint=blueprint,
+            revision_round=int(manifest.get("revision_round") or 1),
+            review_source=review_source,
+            confidence=0.58,
+        )
+    payload = normalize_review_payload(
+        raw_payload,
+        title=title,
+        body=body,
+        manifest=manifest,
+        blueprint=blueprint,
+        revision_round=int(manifest.get("revision_round") or 1),
+        review_source=review_source,
     )
-    payload = dict(result.payload)
     strengths, issues = split_review_points(payload.get("findings"))
     payload["findings"] = strengths + issues
-    payload["strengths"] = strengths
-    payload["issues"] = issues
+    payload["strengths"] = strengths or payload.get("strengths") or []
+    payload["issues"] = issues or payload.get("issues") or []
     payload["platform_notes"] = normalize_string_list(payload.get("platform_notes"))
     payload["title"] = title
-    payload["provider"] = result.provider
-    payload["model"] = result.model
+    payload["provider"] = review_source
+    payload["model"] = model_name
     payload["generated_at"] = now_iso()
     write_json(workspace / "review-report.json", payload)
-    lines = [payload.get("summary", "")]
-    lines.extend(f"亮点：{item}" for item in payload.get("strengths", []))
-    lines.extend(f"问题：{item}" for item in payload.get("issues", []))
-    lines.extend(f"平台建议：{item}" for item in payload.get("platform_notes", []))
-    ensure_text_report(workspace / "review-report.md", "编辑评审报告", lines)
+    write_text(workspace / "review-report.md", markdown_review_report(payload))
     manifest["review_report_path"] = "review-report.json"
     update_stage(manifest, "review", "review_status")
     save_manifest(workspace, manifest)
@@ -519,6 +667,7 @@ def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) ->
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待改写文章：{article_path}")
@@ -535,8 +684,27 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest["score_report_path"] = "score-report.json"
     manifest["score_total"] = report["total_score"]
     manifest["score_passed"] = report["passed"]
-    mode = getattr(args, "mode", None) or "improve-score"
-    rewrite = generate_revision_candidate(workspace, title, meta, body, report, manifest, mode=mode)
+    mode = (getattr(args, "mode", None) or "improve-score").strip().lower().replace("_", "-")
+    if mode == "explosive-score":
+        mode = "improve-score"
+    revision_round = int(manifest.get("revision_round") or 0)
+    output_name = f"article-rewrite-r{revision_round}.md" if revision_round >= 1 else "article-rewrite.md"
+    rewrite = generate_revision_candidate(
+        workspace,
+        title,
+        meta,
+        body,
+        report,
+        manifest,
+        output_name=output_name,
+        mode=mode,
+    )
+    # Keep a stable latest filename for humans while preserving per-round artifacts.
+    if output_name != "article-rewrite.md":
+        try:
+            write_text(workspace / "article-rewrite.md", read_text(workspace / output_name))
+        except OSError:
+            pass
     manifest["rewrite_path"] = rewrite["output_path"]
     manifest["rewrite_preview_score"] = rewrite.get("preview_score")
     manifest["rewrite_preview_passed"] = rewrite.get("preview_passed")
@@ -627,6 +795,9 @@ def _reset_manifest_progress(manifest: dict[str, Any]) -> None:
         if key == "stage":
             continue
         manifest[key] = "not_started"
+    # Reset revision-related state on topic change.
+    for key in ["revision_round", "revision_rounds", "stop_reason", "best_round", "viral_blueprint"]:
+        manifest.pop(key, None)
 
 
 def cmd_select_topic(args: argparse.Namespace) -> int:
@@ -903,11 +1074,36 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
         outline_items = [str(item).strip() for item in ideation.get("outline") if str(item).strip()]
     if outline_items:
         ideation["outline"] = outline_items
-        ideation["outline_meta"] = {
+        outline_meta = {
             "title": title,
             "angle": manifest.get("direction") or "",
             "sections": [{"heading": item, "goal": "宿主 agent 已生成正文", "evidence_need": "按需补充"} for item in outline_items],
         }
+        outline_meta = normalize_outline_payload(
+            outline_meta,
+            {
+                "topic": manifest.get("topic") or title,
+                "selected_title": title,
+                "audience": manifest.get("audience") or "大众读者",
+                "direction": manifest.get("direction") or "",
+                "research": load_research(workspace),
+                "style_signals": manifest.get("style_signals") or [],
+            },
+        )
+        ideation["outline_meta"] = outline_meta
+        ideation["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
+        manifest["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
+    elif not ideation.get("viral_blueprint") and not manifest.get("viral_blueprint"):
+        blueprint = default_viral_blueprint(
+            topic=str(manifest.get("topic") or title),
+            title=title,
+            angle=str(manifest.get("direction") or ""),
+            audience=str(manifest.get("audience") or "大众读者"),
+            research=load_research(workspace),
+            style_signals=manifest.get("style_signals") or [],
+        )
+        ideation["viral_blueprint"] = blueprint
+        manifest["viral_blueprint"] = blueprint
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = title
     if outline_items:
@@ -1022,19 +1218,33 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "direction": angle,
                 "research": research,
                 "titles": ideation.get("titles") or [],
+                "style_samples": manifest.get("style_sample_paths") or [],
+                "style_signals": manifest.get("style_signals") or [],
             }
         )
-        outline_meta = dict(outline_result.payload)
+        outline_meta = normalize_outline_payload(
+            dict(outline_result.payload),
+            {
+                "topic": topic,
+                "selected_title": title,
+                "audience": audience,
+                "direction": angle,
+                "research": research,
+                "style_signals": manifest.get("style_signals") or [],
+            },
+        )
         if not outline_meta.get("sections"):
             outline_meta = placeholder_outline(title)
         ideation["selected_title"] = title
         ideation["outline"] = outline_meta.get("sections") or []
         ideation["outline_meta"] = outline_meta
+        ideation["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
         ideation["updated_at"] = now_iso()
         ideation["provider"] = outline_result.provider
         ideation["model"] = outline_result.model
         write_json(workspace / "ideation.json", ideation)
         manifest["outline"] = [item.get("heading", "") for item in outline_meta.get("sections") or []]
+        manifest["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
         update_stage(manifest, "outline", "outline_status")
 
     article_result = provider.generate_article(
@@ -1046,6 +1256,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "direction": angle,
             "research": research,
             "outline": outline_meta or {"sections": ideation.get("outline") or []},
+            "viral_blueprint": outline_meta.get("viral_blueprint") or current_viral_blueprint(workspace, manifest, ideation),
+            "style_samples": manifest.get("style_sample_paths") or [],
+            "style_signals": manifest.get("style_signals") or [],
         }
     )
     body = str(article_result.payload).strip()
@@ -1110,8 +1323,11 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
     manifest["score_total"] = score_report.get("total_score")
     manifest["score_passed"] = score_report.get("passed")
     manifest["stage"] = "score"
-    review_payload = build_review_from_score(title, score_report, manifest)
-    write_review_report(workspace, manifest, review_payload)
+    review_payload = read_json(workspace / "review-report.json", default={}) or {}
+    # Prefer the structured, real review if present; only fall back to score-derived review when missing.
+    if not (isinstance(review_payload, dict) and review_payload.get("viral_analysis")):
+        review_payload = build_review_from_score(title, score_report, manifest)
+        write_review_report(workspace, manifest, review_payload)
     save_manifest(workspace, manifest)
     return review_payload
 
@@ -1119,17 +1335,36 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
 def cmd_score(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待评分文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
     body = legacy.strip_image_directives(body)
     title = legacy.infer_title(manifest, meta, body)
-    threshold = args.threshold or manifest.get("score_threshold") or legacy.DEFAULT_THRESHOLD
-    report = legacy.build_score_report(title, body, manifest, threshold)
+    threshold = args.threshold or manifest.get("score_threshold") or VIRAL_SCORE_THRESHOLD
+    review = read_json(workspace / "review-report.json", default={}) or {}
+    if not review:
+        blueprint = current_viral_blueprint(workspace, manifest)
+        review = build_heuristic_review(title, body, manifest, blueprint=blueprint, revision_round=int(manifest.get("revision_round") or 1))
+        write_json(workspace / "review-report.json", review)
+        write_text(workspace / "review-report.md", markdown_review_report(review))
+        manifest["review_report_path"] = "review-report.json"
+        update_stage(manifest, "review", "review_status")
+
+    revision_rounds = list(manifest.get("revision_rounds") or [])
+    report = legacy.build_score_report(
+        title,
+        body,
+        manifest,
+        int(threshold),
+        review=review,
+        revision_rounds=revision_rounds,
+        stop_reason=str(manifest.get("stop_reason") or ""),
+    )
     report = apply_research_credibility_boost(report, load_research(workspace))
 
-    if not report["passed"] and not args.no_rewrite:
+    if not report.get("passed") and not args.no_rewrite:
         if args.rewrite_output:
             rewrite_path = Path(args.rewrite_output)
             if not rewrite_path.is_absolute():
@@ -1159,9 +1394,115 @@ def cmd_score(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_score_only(workspace: Path, *, threshold: int | None = None, style_sample: list[str] | None = None) -> dict[str, Any]:
+    cmd_score(
+        argparse.Namespace(
+            workspace=str(workspace),
+            input=None,
+            threshold=threshold,
+            fail_below=False,
+            no_rewrite=True,
+            rewrite_output=None,
+            style_sample=style_sample or [],
+        )
+    )
+    return read_json(workspace / "score-report.json", default={}) or {}
+
+
+def _run_review_only(workspace: Path, *, style_sample: list[str] | None = None) -> dict[str, Any]:
+    cmd_review(argparse.Namespace(workspace=str(workspace), style_sample=style_sample or []))
+    return read_json(workspace / "review-report.json", default={}) or {}
+
+
+def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[str] | None = None) -> dict[str, Any]:
+    max_rounds = max(1, int(max_rounds or 1))
+    manifest = load_manifest(workspace)
+    manifest["revision_rounds"] = []
+    manifest["revision_round"] = 0
+    manifest["stop_reason"] = ""
+    manifest["best_round"] = 0
+    save_manifest(workspace, manifest)
+
+    best_score = -1
+    best_round = 0
+    best_article_path = str(manifest.get("article_path") or "article.md")
+    scores: list[int] = []
+    stop_reason = ""
+
+    for round_index in range(1, max_rounds + 1):
+        manifest = load_manifest(workspace)
+        manifest["revision_round"] = round_index
+        save_manifest(workspace, manifest)
+
+        _run_review_only(workspace, style_sample=style_sample)
+        score_report = _run_score_only(workspace, threshold=None, style_sample=style_sample)
+        manifest = load_manifest(workspace)
+
+        score_value = int(score_report.get("total_score") or 0)
+        passed = bool(score_report.get("passed"))
+        record = {
+            "round": round_index,
+            "score": score_value,
+            "passed": passed,
+            "article_path": str(manifest.get("article_path") or "article.md"),
+            "review_report_path": str(manifest.get("review_report_path") or "review-report.json"),
+            "score_report_path": str(manifest.get("score_report_path") or "score-report.json"),
+        }
+        revision_rounds = list(manifest.get("revision_rounds") or [])
+        revision_rounds.append(record)
+        manifest["revision_rounds"] = revision_rounds
+        save_manifest(workspace, manifest)
+
+        if score_value > best_score:
+            best_score = score_value
+            best_round = round_index
+            best_article_path = record["article_path"]
+
+        scores.append(score_value)
+        if passed:
+            stop_reason = "passed"
+            break
+        if round_index >= max_rounds:
+            stop_reason = "max_rounds_reached"
+            break
+        if len(scores) >= 3:
+            if (scores[-1] - scores[-2]) < 2 and (scores[-2] - scores[-3]) < 2:
+                stop_reason = "plateau"
+                break
+
+        # Next round rewrite: keep per-round artifact via revision_round in manifest.
+        cmd_revise(
+            argparse.Namespace(
+                workspace=str(workspace),
+                promote=True,
+                mode="explosive-score",
+                style_sample=style_sample or [],
+            )
+        )
+
+    # Switch to best-performing round before continuing.
+    manifest = load_manifest(workspace)
+    manifest["stop_reason"] = stop_reason or "unknown"
+    manifest["best_round"] = best_round
+    manifest["article_path"] = best_article_path
+    manifest["revision_round"] = best_round
+    save_manifest(workspace, manifest)
+
+    # Re-generate final review/score for the selected best variant, and stamp stop_reason in score report.
+    _run_review_only(workspace, style_sample=style_sample)
+    manifest = load_manifest(workspace)
+    manifest["stop_reason"] = stop_reason or "unknown"
+    manifest["best_round"] = best_round
+    save_manifest(workspace, manifest)
+    return _run_score_only(workspace, threshold=None, style_sample=style_sample)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    style_sample = list(getattr(args, "style_sample", []) or [])
+    manifest = persist_style_samples(workspace, manifest, style_sample)
+    save_manifest(workspace, manifest)
     assert_publish_request_ready(args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
@@ -1191,28 +1532,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         cmd_titles(argparse.Namespace(workspace=str(workspace), count=args.title_count, selected_title=None))
     ideation = load_ideation(workspace)
     if not ideation.get("outline"):
-        cmd_outline(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title")))
+        cmd_outline(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), style_sample=style_sample))
     if not (workspace / "article.md").exists():
-        cmd_write(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), outline_file=None))
-    cmd_review(argparse.Namespace(workspace=str(workspace)))
-    score_report = _run_score(str(workspace))
+        cmd_write(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), outline_file=None, style_sample=style_sample))
+    score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
     manifest = load_manifest(workspace)
-    manifest["score_status"] = "done"
-    manifest["score_report_path"] = "score-report.json"
-    manifest["score_total"] = score_report.get("total_score")
-    manifest["score_passed"] = score_report.get("passed")
-    manifest["stage"] = "score"
-    save_manifest(workspace, manifest)
-    if score_report and not score_report.get("passed", False):
-        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True, mode="improve-score"))
-        score_report = _run_score(str(workspace))
-        manifest = load_manifest(workspace)
-        manifest["score_status"] = "done"
-        manifest["score_report_path"] = "score-report.json"
-        manifest["score_total"] = score_report.get("total_score")
-        manifest["score_passed"] = score_report.get("passed")
-        manifest["stage"] = "score"
-        save_manifest(workspace, manifest)
+    _finalize_after_score(workspace, manifest, manifest.get("selected_title") or topic, score_report)
     _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)
     legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
@@ -1264,6 +1589,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_hosted_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    style_sample = list(getattr(args, "style_sample", []) or [])
+    manifest = persist_style_samples(workspace, manifest, style_sample)
+    save_manifest(workspace, manifest)
     assert_publish_request_ready(args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
@@ -1288,13 +1616,8 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     _write_hosted_ideation(workspace, manifest, title, args.outline_file)
     title = _import_hosted_article(workspace, manifest, args.article_file, title, args.summary, angle, audience)
     save_manifest(workspace, manifest)
-
-    score_report = _run_score(str(workspace))
+    score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
     manifest = load_manifest(workspace)
-    if score_report and not score_report.get("passed", False):
-        cmd_revise(argparse.Namespace(workspace=str(workspace), promote=True, mode="improve-score"))
-        score_report = _run_score(str(workspace))
-        manifest = load_manifest(workspace)
     _finalize_after_score(workspace, manifest, title, score_report)
 
     _sync_image_controls(workspace, args)
@@ -1403,22 +1726,31 @@ def build_parser() -> argparse.ArgumentParser:
     outline = subparsers.add_parser("outline", help="基于 research 和标题生成大纲")
     outline.add_argument("--workspace", required=True)
     outline.add_argument("--title")
+    outline.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     outline.set_defaults(func=cmd_outline)
 
     write = subparsers.add_parser("write", help="基于 research + ideation 产出 article.md 初稿")
     write.add_argument("--workspace", required=True)
     write.add_argument("--title")
     write.add_argument("--outline-file")
+    write.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     write.set_defaults(func=cmd_write)
 
     review = subparsers.add_parser("review", help="生成独立的编辑评审报告，不替代 score")
     review.add_argument("--workspace", required=True)
+    review.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     review.set_defaults(func=cmd_review)
 
     revise = subparsers.add_parser("revise", help="基于 score/report 生成 article-rewrite.md 候选稿")
     revise.add_argument("--workspace", required=True)
     revise.add_argument("--promote", action="store_true", help="将改写稿切换为后续流程默认正文")
-    revise.add_argument("--mode", choices=["improve-score", "de-ai"], default="improve-score", help="改写模式：提分改写或去 AI 味")
+    revise.add_argument(
+        "--mode",
+        choices=["improve-score", "explosive-score", "de-ai"],
+        default="improve-score",
+        help="改写模式：爆款提分改写（explosive-score/improve-score）或去 AI 味（de-ai）",
+    )
+    revise.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     revise.set_defaults(func=cmd_revise)
 
     run = subparsers.add_parser("run", help="从 research 串到 render；显式要求时才继续 publish")
@@ -1429,6 +1761,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--source-url", action="append", default=[])
     run.add_argument("--title")
     run.add_argument("--title-count", type=int, default=3)
+    run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")
+    run.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     run.add_argument("--to", choices=["render", "publish"], default="render")
     run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
     run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
@@ -1489,6 +1823,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--outline-file")
     hosted_run.add_argument("--article-file")
     hosted_run.add_argument("--summary")
+    hosted_run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")
+    hosted_run.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
     hosted_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
     hosted_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
@@ -1555,6 +1891,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--fail-below", action="store_true")
     score.add_argument("--no-rewrite", action="store_true")
     score.add_argument("--rewrite-output")
+    score.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     score.set_defaults(func=cmd_score)
 
     plan_images = subparsers.add_parser("plan-images", help="按章节权重生成 image-plan.json")
