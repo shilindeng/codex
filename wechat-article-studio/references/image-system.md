@@ -9,7 +9,7 @@
 
 ## 统一主题预设
 
-可通过 `--image-preset` 为整篇文章的封面图、信息图、正文插图指定统一视觉主题。当前内置预设：
+可通过 `--image-preset` 为整篇文章的封面图、信息图、正文插图指定统一视觉主题。若用户未显式指定，则系统会根据文章内容、分类和章节语义自动选择主题。当前内置预设：
 
 - `cute`：可爱手账
 - `fresh`：清新杂志
@@ -35,8 +35,10 @@
 
 支持 `--image-style-mode`：
 
-- `uniform`：整篇统一风格（默认）
+- `uniform`：整篇统一风格
 - `mixed-by-type`：按图片类型混合风格（封面/信息图/正文插图），但保持整篇配色与母题一致
+
+默认不再固定某一种模式；在用户未显式指定时，系统会根据文章内容和章节异质性自动决定。
 
 当 `--image-style-mode mixed-by-type` 时，可额外指定：
 
@@ -44,7 +46,7 @@
 - `--image-preset-infographic`：信息图预设
 - `--image-preset-inline`：正文插图预设（包含流程图/对比图/分隔图等正文内图片）
 
-默认映射：`cover=bold`、`infographic=notion`、`inline=editorial-grain`。无主题启动（`discover-topics`）会默认写入该配置到工作目录 `manifest.json`，后续流程会自动沿用，除非显式覆盖。
+若用户显式指定 `mixed-by-type`，但未单独传入 cover/infographic/inline 预设，则默认沿用文章级 preset，不再强行固定 `bold/notion/editorial-grain`。
 
 ## 密度模式
 
@@ -116,8 +118,8 @@
 
 ## 默认规划
 
-- `1` 张封面图：仅用于封面和 `thumb_media_id`
-- `1` 张信息图：优先放文末收束段
+- `1` 张封面图：仅用于封面和 `thumb_media_id`，默认 `3:2`
+- `1` 张信息图：优先放文末收束段，默认 `2:3` 竖版
 - 正文插图默认档位：
   - `< 1200` 字：`4` 张
   - `1200 - 2499` 字：`5` 张
@@ -143,6 +145,9 @@
 - 主题 / 风格 / 类型 / 氛围
 - 章节焦点
 - 目标章节真实正文片段
+- 语义焦点 `semantic_focus`
+- 关键词词表 `keyword_glossary`
+- 安全裁切策略 `safe_crop_policy`
 - 禁止事项：过多小字、水印、无关 logo、无请求的人脸
 
 ## Provider 规则
@@ -151,3 +156,23 @@
 - `gemini-web` 只在显式传入 `--provider gemini-web` 时启用
 - 启用 `gemini-web` 之前必须先完成同意检查
 - `gemini-web` 会优先尝试当前已知的 Gemini Web 图片模型；如果上游只返回文本、不返回图片，而本机又配置了 `gemini-api` 或 `openai-image`，系统会自动降级到官方图片接口
+## 自动内容分类
+
+在没有显式 `--image-*` 参数时，系统会先按文章内容自动分类：
+
+- 教程实操
+- 技术解析
+- 行业观察
+- 观点评论
+- 案例复盘
+- 生活叙事
+
+再根据分类选择主题候选和布局家族，并把原因写入 `manifest.json.image_auto_reason` 与 `image-plan.json.auto_reason`。
+
+比例策略：
+
+- 封面图：`3:2`
+- 信息图 / 流程图 / 对比图：`2:3`
+- 正文插图 / 分隔图：`3:2`
+
+封面图 prompt 会额外加入公众号封面裁切安全区约束；信息图默认优先竖版长图。
