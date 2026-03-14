@@ -79,9 +79,8 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
         {"topic": title, "selected_title": title, "title": title, "audience": audience or "公众号读者", "direction": ""},
     )
     blueprint = normalized_outline.get("viral_blueprint", {})
+    editorial = normalized_outline.get("editorial_blueprint", {})
     lines = [
-        f"# {title}",
-        "",
         f"写给{audience or '公众号读者'}的一篇骨架稿。当前环境未配置文本模型，因此这里先产出可继续编辑、带爆款蓝图的结构化初稿。",
         "",
         f"先说结论：{blueprint.get('core_viewpoint') or '真正决定传播效果的，不是信息堆积，而是判断、刺痛和行动感同时到位。'}",
@@ -91,6 +90,13 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
         "> 你不是内容不够多，而是还没有把真正能打到人心里的那句话说出来。",
         "",
     ]
+    if editorial.get("key_terms"):
+        lines.extend(
+            [
+                f"这一稿建议优先把这些术语写成可渲染格式：{'、'.join(f'`{item}`' for item in editorial.get('key_terms')[:5])}。",
+                "",
+            ]
+        )
     for section in (normalized_outline.get("sections") or []):
         lines.extend(
             [
@@ -279,10 +285,11 @@ class OpenAICompatibleTextProvider(TextProvider):
                 "role": "system",
                 "content": (
                     "你是微信公众号爆款文章总编。只输出 JSON。"
-                    "字段必须包含 title, angle, sections, viral_blueprint。"
+                    "字段必须包含 title, angle, sections, viral_blueprint, editorial_blueprint。"
                     "sections 每项包含 heading, goal, evidence_need。"
                     "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
                     "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals。"
+                    "editorial_blueprint 必须包含 key_terms, evidence_requirements, reader_questions, render_hints, visual_storyline。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -305,11 +312,13 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号爆款写作编辑。输出 Markdown 正文，不要解释。"
-                    "必须消费输入里的 viral_blueprint。"
+                    "你是微信公众号技术编辑。输出 Markdown 正文，不要解释，不要输出顶层 # 标题。"
+                    "必须消费输入里的 viral_blueprint 和 editorial_blueprint。"
+                    "默认按技术传播平衡写法：先保证技术可信、结构清晰、术语准确，再追求传播力。"
                     "要求：1 个主观点、2~4 个副观点、至少 3 种论证方式、至少 2 次视角切换、至少 3 句可截图金句、"
                     "段落短、句长有波动、禁用首先/其次/最后/综上所述等模板连接词。"
-                    "开头先制造刺痛感和结果预期，结尾必须给读者可执行动作。"
+                    "命令、包名、环境变量、路径、接口名、模型名、代码符号、英文专有名词优先用反引号。"
+                    "开头先说明价值，结尾必须给读者可执行动作。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -330,9 +339,10 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号爆款编辑。只输出 JSON，不要解释。"
+                    "你是微信公众号技术编辑。只输出 JSON，不要解释。"
                     "字段必须包含 summary, findings, strengths, issues, platform_notes, viral_analysis, "
-                    "emotion_value_sentences, pain_point_sentences, ai_smell_findings, revision_priorities。"
+                    "emotion_value_sentences, pain_point_sentences, ai_smell_findings, revision_priorities, "
+                    "term_render_issues, layout_rigidity_notes, title_leak_check。"
                     "viral_analysis 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
                     "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits。"
                     "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
@@ -368,8 +378,9 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号爆款改稿编辑。输出修订后的 Markdown 正文，不要输出解释。"
-                    "改稿优先级固定为：补开头爆点 -> 补情绪价值和刺痛句 -> 补论证多样性 -> 补视角切换 -> 补金句 -> 去模板腔。"
+                    "你是微信公众号技术改稿编辑。输出修订后的 Markdown 正文，不要输出解释，也不要输出顶层 # 标题。"
+                    "改稿优先级固定为：结构与价值 -> 证据 -> 术语渲染 -> 传播表达 -> 去 AI 味。"
+                    "命令、包名、环境变量、路径、接口名、模型名、代码符号、英文专有名词优先用反引号。"
                     "必须保留原文事实边界，不要编造数据。"
                 ),
             },

@@ -59,6 +59,11 @@
 - `score_total`
 - `score_passed`
 - `publish_intent`
+- `content_mode`
+- `wechat_header_mode`
+- `image_decision_source`
+- `image_article_category`
+- `image_auto_reason`
 
 ## `review-report.json` 关键字段
 
@@ -81,6 +86,7 @@
 - `passed`
 - `score_breakdown`
 - `quality_gates`
+- `score_profile`
 - `mandatory_revisions`
 - `suggestions`
 - `viral_blueprint`
@@ -88,6 +94,9 @@
 - `emotion_value_sentences`
 - `pain_point_sentences`
 - `ai_smell_hits`
+- `term_render_issues`
+- `layout_rigidity_notes`
+- `title_leak_check`
 - `revision_rounds`
 - `best_round`
 - `stop_reason`

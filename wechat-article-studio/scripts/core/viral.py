@@ -22,6 +22,14 @@ VIRAL_BLUEPRINT_FIELDS = [
     "emotion_value_goals",
 ]
 
+EDITORIAL_BLUEPRINT_FIELDS = [
+    "key_terms",
+    "evidence_requirements",
+    "reader_questions",
+    "render_hints",
+    "visual_storyline",
+]
+
 SCORE_WEIGHTS: list[tuple[str, int]] = [
     ("标题与开头爆点", 12),
     ("核心观点与副观点", 10),
@@ -107,6 +115,66 @@ STYLE_TRAIT_PATTERNS: list[tuple[str, list[str]]] = [
     ("行动导向", [r"先做", r"马上", r"今天", r"清单", r"步骤"]),
 ]
 
+CONTENT_MODE_CHOICES = ("tech-balanced", "tech-credible", "viral")
+CONTENT_MODE_DEFAULT = "tech-balanced"
+
+TECH_SCORE_PROFILES: dict[str, dict[str, Any]] = {
+    "tech-balanced": {
+        "threshold": 86,
+        "weights": [
+            ("标题与开头价值", 10),
+            ("核心观点与结构", 14),
+            ("技术准确与证据", 16),
+            ("术语处理与专名渲染", 12),
+            ("论证与例子", 12),
+            ("可执行性", 10),
+            ("可读性与节奏", 8),
+            ("传播句与记忆点", 8),
+            ("去 AI 味", 6),
+            ("读者共鸣", 4),
+        ],
+        "gates": {"tech_evidence_passed": 12, "term_render_passed": 8, "structure_passed": 10},
+    },
+    "tech-credible": {
+        "threshold": 88,
+        "weights": [
+            ("标题与开头价值", 8),
+            ("核心观点与结构", 16),
+            ("技术准确与证据", 20),
+            ("术语处理与专名渲染", 12),
+            ("论证与例子", 12),
+            ("可执行性", 10),
+            ("可读性与节奏", 8),
+            ("传播句与记忆点", 6),
+            ("去 AI 味", 6),
+            ("读者共鸣", 2),
+        ],
+        "gates": {"tech_evidence_passed": 14, "term_render_passed": 8, "structure_passed": 12},
+    },
+}
+
+TECH_COMMON_WORDS = {
+    "json",
+    "http",
+    "https",
+    "markdown",
+    "wechat",
+    "github",
+    "python",
+    "api",
+    "sdk",
+}
+
+TECH_TOKEN_PATTERNS = [
+    re.compile(r"--[a-z0-9][a-z0-9-]*"),
+    re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b"),
+    re.compile(r"\b(?:[A-Za-z]:\\|/)[\w.\-/\\]+\b"),
+    re.compile(r"\b(?:/v?\d+)?/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+\b"),
+    re.compile(r"\b[a-z0-9]+(?:[._/-][a-z0-9]+){1,}\b"),
+    re.compile(r"\b[A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+\b"),
+    re.compile(r"\b[a-z]+_[a-z0-9_]+\b"),
+]
+
 
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -146,6 +214,147 @@ def _normalize_list(value: Any) -> list[str]:
         parts = [item.strip() for item in re.split(r"[；;。]\s*", raw) if item.strip()]
         return _dedupe(parts)
     return []
+
+
+def _content_mode(manifest: dict[str, Any]) -> str:
+    value = str(manifest.get("content_mode") or CONTENT_MODE_DEFAULT).strip().lower()
+    return value if value in CONTENT_MODE_CHOICES else CONTENT_MODE_DEFAULT
+
+
+def _normalize_title_text(value: str) -> str:
+    cleaned = re.sub(r"^#+\s*", "", value or "").strip()
+    cleaned = re.sub(r"[《》【】「」『』“”\"'`]", "", cleaned)
+    cleaned = re.sub(r"[：:|｜—–\-·•()\[\]（）\s]+", "", cleaned)
+    return cleaned.lower()
+
+
+def _extract_key_terms(text: str, limit: int = 8) -> list[str]:
+    candidates: list[str] = []
+    sample = str(text or "")
+    for pattern in TECH_TOKEN_PATTERNS:
+        for match in pattern.findall(sample):
+            value = str(match).strip()
+            if not value:
+                continue
+            lowered = value.lower()
+            if lowered.startswith(("http://", "https://")):
+                continue
+            if lowered in TECH_COMMON_WORDS and value.islower():
+                continue
+            if value not in candidates:
+                candidates.append(value)
+    return candidates[:limit]
+
+
+def _default_editorial_blueprint(title: str, sections: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, Any]:
+    key_terms = _extract_key_terms(" ".join([title, str(context.get("topic") or ""), str(context.get("direction") or "")]))
+    if not key_terms:
+        key_terms = _extract_key_terms(" ".join(str(item.get("heading") or "") for item in sections))
+    evidence_needs = _dedupe([str(item.get("evidence_need") or "").strip() for item in sections if str(item.get("evidence_need") or "").strip()])
+    reader_questions = []
+    if title:
+        reader_questions.append(f"{title} 为什么值得现在关注？")
+    reader_questions.extend(
+        [
+            "这件事的关键概念到底是什么？",
+            "读者应该先做哪一步？",
+            "哪些地方最容易误判或踩坑？",
+        ]
+    )
+    render_hints = [
+        "术语、命令、路径、环境变量优先使用反引号。",
+        "步骤型章节可加入 `CHECKLIST` 或 `TIP` 信息卡。",
+        "结论型章节优先保留一条可截图判断句。",
+    ]
+    visual_storyline = [
+        "开头用问题场景建立阅读动机。",
+        "中段用结构图、流程图或对比图解释核心逻辑。",
+        "结尾用摘要卡或信息图收束可执行动作。",
+    ]
+    return {
+        "key_terms": key_terms,
+        "evidence_requirements": evidence_needs[:6],
+        "reader_questions": _dedupe(reader_questions)[:6],
+        "render_hints": render_hints,
+        "visual_storyline": visual_storyline,
+    }
+
+
+def _normalize_editorial_blueprint(payload: Any, title: str, sections: list[dict[str, Any]], context: dict[str, Any]) -> dict[str, Any]:
+    base = _default_editorial_blueprint(title, sections, context)
+    if not isinstance(payload, dict):
+        return base
+    merged = dict(base)
+    for field in EDITORIAL_BLUEPRINT_FIELDS:
+        values = _normalize_list(payload.get(field))
+        if values:
+            merged[field] = values[:8]
+    return merged
+
+
+def _term_render_analysis(body: str) -> dict[str, Any]:
+    in_code = False
+    rendered_terms: set[str] = set()
+    bare_terms: dict[str, int] = {}
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or re.match(r"^\s*\|.*\|\s*$", line):
+            continue
+        for match in re.findall(r"`([^`]+)`", line):
+            for token in _extract_key_terms(match, limit=12):
+                rendered_terms.add(token)
+        masked = re.sub(r"`[^`]+`|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?://[^\s)]+", " ", line)
+        for token in _extract_key_terms(masked, limit=24):
+            bare_terms[token] = bare_terms.get(token, 0) + 1
+    issues = [f"术语 `{token}` 建议使用反引号渲染。" for token in sorted(bare_terms)[:8]]
+    return {
+        "rendered_terms": sorted(rendered_terms),
+        "bare_terms": bare_terms,
+        "rendered_count": len(rendered_terms),
+        "bare_count": len(bare_terms),
+        "candidate_count": len(rendered_terms) + len(bare_terms),
+        "issues": issues,
+    }
+
+
+def _layout_rigidity_notes(body: str) -> list[str]:
+    headings = legacy.extract_headings(body)
+    paragraphs = legacy.list_paragraphs(body)
+    notes: list[str] = []
+    if len(headings) < 2 and len(paragraphs) >= 6:
+        notes.append("小标题层次偏少，公众号阅读节奏容易显得板。")
+    if len(re.findall(r"^\s*>\s+\[!", body, flags=re.M)) == 0 and len(paragraphs) >= 8:
+        notes.append("全文几乎没有信息卡或提示块，排版层次感偏弱。")
+    if len(re.findall(r"`[^`]+`", body)) == 0 and len(_extract_key_terms(body, limit=12)) >= 3:
+        notes.append("技术术语基本未做渲染，视觉重点不够。")
+    if len(re.findall(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", body, flags=re.M)) == 0 and len(paragraphs) >= 7:
+        notes.append("缺少清单或步骤型块，容易显得一整篇都在平铺。")
+    return notes
+
+
+def _title_leak_check(body: str, title: str) -> dict[str, Any]:
+    normalized_title = _normalize_title_text(title)
+    evidence = ""
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        evidence = stripped
+        if stripped.startswith("#") and _normalize_title_text(stripped) == normalized_title:
+            return {"leaked": True, "evidence": stripped}
+        if _normalize_title_text(stripped) == normalized_title:
+            return {"leaked": True, "evidence": stripped}
+        break
+    return {"leaked": False, "evidence": evidence}
+
+
+def _has_action_closure(body: str) -> bool:
+    tail = (body or "")[-320:]
+    action_keywords = ["现在就", "今天", "先做", "下一步", "你可以先", "建议你", "试试", "写下来", "照着做", "执行", "清单", "步骤", "收藏"]
+    return bool(re.search(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", tail, flags=re.M) or any(keyword in tail for keyword in action_keywords))
 
 
 def _first_paragraphs(body: str, limit: int = 2) -> list[str]:
@@ -348,6 +557,7 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
     output["angle"] = angle
     output["sections"] = normalized_sections
     output["viral_blueprint"] = normalize_viral_blueprint(output.get("viral_blueprint"), context | {"selected_title": title, "angle": angle})
+    output["editorial_blueprint"] = _normalize_editorial_blueprint(output.get("editorial_blueprint"), title, normalized_sections, context)
     return output
 
 
@@ -502,6 +712,10 @@ def build_heuristic_review(
     emotion_curve = _emotion_curve_from_body(body, headings)
     emotion_layers = _emotion_layers(body)
     style_traits = _style_traits(body, blueprint)
+    term_analysis = _term_render_analysis(body)
+    title_leak_check = _title_leak_check(body, title)
+    layout_rigidity_notes = _layout_rigidity_notes(body)
+    content_mode = _content_mode(manifest)
     strengths: list[str] = []
     issues: list[str] = []
     if len(signature_lines) >= SIGNATURE_LINE_THRESHOLD:
@@ -524,6 +738,14 @@ def build_heuristic_review(
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
         strengths.append("整体语言相对自然，没有明显模板腔堆积。")
+    if term_analysis["issues"]:
+        issues.append("技术术语和专有名词渲染不足，重点不够明确。")
+    else:
+        strengths.append("技术术语的可视化表达相对清晰。")
+    if title_leak_check.get("leaked"):
+        issues.append("正文开头仍泄漏标题，公众号发布时应交给后台处理。")
+    if layout_rigidity_notes:
+        issues.append("版式层次略显固定，需要补信息卡、清单或重点强调。")
     summary = (
         f"《{title}》当前稿件已经围绕“{core_viewpoint.rstrip('。')}”展开，"
         f"但仍需重点补强{('、'.join(item.rstrip('。') for item in issues[:3])) or '传播爆点与情绪价值'}。"
@@ -535,6 +757,9 @@ def build_heuristic_review(
             "补案例/对比/步骤，提升论证多样性" if len(argument_modes) < ARGUMENT_MODE_THRESHOLD else "",
             "补金句与可截图传播句" if len(signature_lines) < SIGNATURE_LINE_THRESHOLD else "",
             "清理模板连接词，继续去 AI 味" if ai_smell_findings else "",
+            "把关键术语、命令、路径和环境变量改成反引号渲染" if term_analysis["issues"] else "",
+            "移除正文顶层标题，避免重复进入公众号正文" if title_leak_check.get("leaked") else "",
+            "给重点章节补提示块、清单或结论卡，降低固定模板感" if layout_rigidity_notes else "",
         ]
     )
     return {
@@ -543,8 +768,9 @@ def build_heuristic_review(
         "strengths": strengths,
         "issues": issues,
         "platform_notes": [
-            "公众号正文优先短段落、强判断句和 2~4 级情绪推进。",
-            "不要把爆款理解成堆砌形容词，而是要让读者被刺痛、被理解、被推动。",
+            "公众号正文优先短段落、强判断句和清晰层级。",
+            "标题、摘要和正文要分层管理，发布到公众号时正文不应再重复顶层标题。",
+            "技术稿优先保证术语准确、证据可回溯，再追求传播表现。" if content_mode != "viral" else "不要把爆款理解成堆砌形容词，而是要让读者被刺痛、被理解、被推动。",
         ],
         "viral_analysis": {
             "core_viewpoint": core_viewpoint,
@@ -561,6 +787,10 @@ def build_heuristic_review(
         "emotion_value_sentences": emotion_value_sentences[:8],
         "pain_point_sentences": pain_point_sentences[:8],
         "ai_smell_findings": ai_smell_findings,
+        "term_render_analysis": term_analysis,
+        "term_render_issues": term_analysis["issues"],
+        "layout_rigidity_notes": layout_rigidity_notes,
+        "title_leak_check": title_leak_check,
         "revision_priorities": revision_priorities,
         "revision_round": revision_round,
         "review_source": review_source,
@@ -684,6 +914,18 @@ def normalize_review_payload(
     priorities = _normalize_list(payload.get("revision_priorities"))
     if priorities:
         result["revision_priorities"] = priorities
+    term_render_issues = _normalize_list(payload.get("term_render_issues"))
+    if term_render_issues:
+        result["term_render_issues"] = term_render_issues
+    layout_rigidity_notes = _normalize_list(payload.get("layout_rigidity_notes"))
+    if layout_rigidity_notes:
+        result["layout_rigidity_notes"] = layout_rigidity_notes
+    title_leak_check = payload.get("title_leak_check")
+    if isinstance(title_leak_check, dict):
+        result["title_leak_check"] = {
+            "leaked": bool(title_leak_check.get("leaked")),
+            "evidence": str(title_leak_check.get("evidence") or "").strip(),
+        }
     result["review_source"] = review_source
     result["source"] = review_source
     result["confidence"] = float(payload.get("confidence") or result.get("confidence") or 0.72)
@@ -798,6 +1040,215 @@ def _build_quality_gates(review: dict[str, Any], blueprint: dict[str, Any], cred
     }
 
 
+def _scale_score(raw: int, raw_max: int, target_max: int) -> int:
+    if raw_max <= 0:
+        return 0
+    ratio = max(0.0, min(1.0, raw / raw_max))
+    return min(target_max, max(0, int(round(target_max * ratio))))
+
+
+def _score_structure_tech(body: str, title: str, review: dict[str, Any], target_max: int) -> tuple[int, str]:
+    headings = legacy.extract_headings(body)
+    paragraph_count = len(legacy.list_paragraphs(body))
+    core_viewpoint = str((review.get("viral_analysis") or {}).get("core_viewpoint") or "").strip()
+    title_leak = bool((review.get("title_leak_check") or {}).get("leaked"))
+    raw = 0
+    raw += 3 if 3 <= len(headings) <= 7 else (2 if len(headings) >= 2 else 0)
+    raw += 2 if 6 <= paragraph_count <= 18 else (1 if paragraph_count >= 4 else 0)
+    raw += 3 if core_viewpoint else 1
+    raw += 2 if not title_leak else 0
+    raw += 2 if _has_action_closure(body) else 0
+    return _scale_score(raw, 12, target_max), "技术稿要有清晰结构、主线稳定，且正文不重复标题。"
+
+
+def _score_title_intro_tech(title: str, body: str, target_max: int) -> tuple[int, str]:
+    intro = " ".join(_first_paragraphs(body, limit=2))
+    raw = 2
+    raw += 2 if re.search(r"先说结论|一句话|核心判断|结论", intro) else 0
+    raw += 2 if re.search(r"三步|清单|教程|指南|如何|为什么|真相", title) else 0
+    raw += 2 if 36 <= legacy.cjk_len(intro) <= 180 else 0
+    raw += 2 if re.search(r"关键|步骤|先把|真正决定|不要先", intro) else 0
+    return _scale_score(raw, 10, target_max), "技术开头要先说明价值，再告诉读者为什么值得继续读。"
+
+
+def _score_tech_evidence(body: str, manifest: dict[str, Any], target_max: int) -> tuple[int, str]:
+    source_urls = manifest.get("source_urls") or []
+    inline_urls = re.findall(r"https?://[^\s)`>]+", body)
+    data_hits = re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\d+(?:\.\d+)?倍|第\d+", body)
+    authority_hits = re.findall(r"官方|文档|API|SDK|Release|更新日志|报告|研究|RFC", body, flags=re.I)
+    code_hits = len(re.findall(r"`[^`]+`|```", body))
+    raw = min(4, len(source_urls) * 2)
+    raw += min(3, len(inline_urls))
+    raw += min(3, len(data_hits))
+    raw += min(2, len(authority_hits))
+    raw += 2 if code_hits >= 3 else (1 if code_hits >= 1 else 0)
+    return _scale_score(raw, 13, target_max), "技术结论要有来源、数据、文档或代码级依据支撑。"
+
+
+def _score_term_render(review: dict[str, Any], body: str, target_max: int) -> tuple[int, str]:
+    analysis = review.get("term_render_analysis") or _term_render_analysis(body)
+    rendered_count = int(analysis.get("rendered_count") or 0)
+    bare_count = int(analysis.get("bare_count") or 0)
+    candidate_count = int(analysis.get("candidate_count") or 0)
+    raw = 4
+    if candidate_count:
+        raw += min(6, rendered_count)
+        raw -= min(4, bare_count)
+    else:
+        raw += 3
+    return int(legacy.clamp(_scale_score(raw, 10, target_max), 0, target_max)), "术语、命令、路径、环境变量和模型名应尽量可视化渲染。"
+
+
+def _score_argument_examples(review: dict[str, Any], body: str, target_max: int) -> tuple[int, str]:
+    argument_modes = _normalize_list((review.get("viral_analysis") or {}).get("argument_diversity"))
+    examples = len(re.findall(r"比如|例如|案例|实测|演示|示例", body))
+    steps = len(re.findall(r"第一步|第二步|第三步|步骤|清单", body))
+    raw = min(5, len(argument_modes) * 2) + min(3, examples) + min(3, steps) + (2 if re.search(r"对比|区别", body) else 0)
+    return _scale_score(raw, 13, target_max), "要用例子、对比、步骤或演示把观点落到读者能理解的层面。"
+
+
+def _score_actionability(body: str, target_max: int) -> tuple[int, str]:
+    list_hits = len(re.findall(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", body, flags=re.M))
+    action_keywords = ["先做", "下一步", "现在就", "今天", "执行", "清单", "步骤", "试试", "写下来", "照着做"]
+    action_hits = sum(1 for keyword in action_keywords if keyword in body)
+    raw = min(5, list_hits) + min(4, action_hits) + (3 if _has_action_closure(body) else 0)
+    return _scale_score(raw, 10, target_max), "读者应该能从正文里拿到马上能执行的动作。"
+
+
+def _score_readability_tech(review: dict[str, Any], body: str, target_max: int) -> tuple[int, str]:
+    ai_hits = len(review.get("ai_smell_findings") or [])
+    paragraph_count = len(legacy.list_paragraphs(body))
+    sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body) if sentence.strip()]
+    raw = 5 - min(3, ai_hits)
+    raw += 2 if 6 <= paragraph_count <= 18 else 1
+    if sentence_lengths and (max(sentence_lengths) - min(sentence_lengths)) >= 10:
+        raw += 2
+    return int(legacy.clamp(_scale_score(raw, 9, target_max), 0, target_max)), "技术稿也要有节奏，避免长句和模板化连接词堆叠。"
+
+
+def _score_memory_points(review: dict[str, Any], target_max: int) -> tuple[int, str]:
+    count = len((review.get("viral_analysis") or {}).get("signature_lines") or [])
+    return _scale_score(4 + count * 2, 10, target_max), "要留下少量可截图、可复述的关键判断句。"
+
+
+def _score_de_ai(review: dict[str, Any], target_max: int) -> tuple[int, str]:
+    ai_hits = len(review.get("ai_smell_findings") or [])
+    raw = max(0, 10 - ai_hits * 3)
+    return _scale_score(raw, 10, target_max), "优先消除模板腔和机械推进感。"
+
+
+def _score_reader_resonance(review: dict[str, Any], body: str, target_max: int) -> tuple[int, str]:
+    emotion_count = len(review.get("emotion_value_sentences") or [])
+    action_hits = len(re.findall(r"你|读者|团队|开发者|运营", body))
+    raw = min(4, emotion_count) + (3 if action_hits >= 3 else (2 if action_hits >= 1 else 1))
+    return _scale_score(raw, 6, target_max), "保持适度共鸣，但不牺牲技术可信度。"
+
+
+def _build_tech_quality_gates(profile: dict[str, Any], review: dict[str, Any], scores: dict[str, int], body: str) -> dict[str, bool]:
+    gates = profile.get("gates") or {}
+    return {
+        "tech_evidence_passed": scores["技术准确与证据"] >= int(gates.get("tech_evidence_passed", 12)),
+        "term_render_passed": scores["术语处理与专名渲染"] >= int(gates.get("term_render_passed", 8)),
+        "structure_passed": scores["核心观点与结构"] >= int(gates.get("structure_passed", 10)),
+        "de_ai_passed": len(review.get("ai_smell_findings") or []) <= AI_SMELL_THRESHOLD,
+        "title_leak_free": not bool((review.get("title_leak_check") or {}).get("leaked")),
+        "action_closure_present": _has_action_closure(body),
+    }
+
+
+def _build_tech_score_report(
+    mode: str,
+    title: str,
+    body: str,
+    manifest: dict[str, Any],
+    threshold: int,
+    review: dict[str, Any],
+    blueprint: dict[str, Any],
+    revision_rounds: list[dict[str, Any]] | None,
+    stop_reason: str,
+) -> dict[str, Any]:
+    profile = TECH_SCORE_PROFILES[mode]
+    weight_map = dict(profile["weights"])
+    breakdown_builders = [
+        ("标题与开头价值", *_score_title_intro_tech(title, body, weight_map["标题与开头价值"])),
+        ("核心观点与结构", *_score_structure_tech(body, title, review, weight_map["核心观点与结构"])),
+        ("技术准确与证据", *_score_tech_evidence(body, manifest, weight_map["技术准确与证据"])),
+        ("术语处理与专名渲染", *_score_term_render(review, body, weight_map["术语处理与专名渲染"])),
+        ("论证与例子", *_score_argument_examples(review, body, weight_map["论证与例子"])),
+        ("可执行性", *_score_actionability(body, weight_map["可执行性"])),
+        ("可读性与节奏", *_score_readability_tech(review, body, weight_map["可读性与节奏"])),
+        ("传播句与记忆点", *_score_memory_points(review, weight_map["传播句与记忆点"])),
+        ("去 AI 味", *_score_de_ai(review, weight_map["去 AI 味"])),
+        ("读者共鸣", *_score_reader_resonance(review, body, weight_map["读者共鸣"])),
+    ]
+    breakdown = []
+    for dimension, score, note in breakdown_builders:
+        breakdown.append({"dimension": dimension, "weight": weight_map[dimension], "score": score, "note": note})
+    total = sum(item["score"] for item in breakdown)
+    score_index = {item["dimension"]: int(item["score"]) for item in breakdown}
+    quality_gates = _build_tech_quality_gates(profile, review, score_index, body)
+    strengths = []
+    weaknesses = []
+    for item in breakdown:
+        ratio = item["score"] / max(1, item["weight"])
+        if ratio >= 0.8:
+            strengths.append(f"{item['dimension']}表现较强：{item['note']}")
+        elif ratio < 0.65:
+            weaknesses.append(f"{item['dimension']}偏弱：{item['note']}")
+    failed_gates = [name for name, ok in quality_gates.items() if not ok]
+    mandatory_revisions = _dedupe(
+        list(review.get("revision_priorities") or [])
+        + [
+            "补强文档、数据、官方说明或代码级依据。" if not quality_gates["tech_evidence_passed"] else "",
+            "把关键术语、命令、路径、环境变量改成反引号渲染。" if not quality_gates["term_render_passed"] else "",
+            "重写结构，让主观点、副观点和章节推进更清楚。" if not quality_gates["structure_passed"] else "",
+            "移除正文中的标题重复，只保留摘要或正文内容。" if not quality_gates["title_leak_free"] else "",
+            "结尾补一个明确动作，告诉读者接下来怎么做。" if not quality_gates["action_closure_present"] else "",
+            "继续去模板腔，压低 AI 味。" if not quality_gates["de_ai_passed"] else "",
+        ]
+    )
+    suggestions = {
+        "replacement_hook": "先把这件事为什么重要讲清，再给读者一个可执行动作。",
+        "sample_gold_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:3]],
+        "style_adjustments": _dedupe(
+            [
+                "术语和关键名词优先用反引号。",
+                "每个章节只讲一个判断，再用例子或步骤支撑。",
+                "结尾不要只收观点，要留动作。",
+            ]
+        ),
+        "failed_quality_gates": failed_gates,
+        "revision_priorities": list(review.get("revision_priorities") or []),
+    }
+    return {
+        "title": title,
+        "threshold": threshold,
+        "total_score": total,
+        "passed": total >= threshold and all(quality_gates.values()),
+        "score_profile": mode,
+        "score_breakdown": breakdown,
+        "strengths": strengths[:5],
+        "weaknesses": weaknesses[:5],
+        "mandatory_revisions": mandatory_revisions[:7],
+        "suggestions": suggestions,
+        "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
+        "quality_gates": quality_gates,
+        "viral_blueprint": blueprint,
+        "viral_analysis": review.get("viral_analysis") or {},
+        "emotion_value_sentences": review.get("emotion_value_sentences") or [],
+        "pain_point_sentences": review.get("pain_point_sentences") or [],
+        "ai_smell_findings": review.get("ai_smell_findings") or [],
+        "ai_smell_hits": len(review.get("ai_smell_findings") or []),
+        "term_render_issues": review.get("term_render_issues") or [],
+        "layout_rigidity_notes": review.get("layout_rigidity_notes") or [],
+        "title_leak_check": review.get("title_leak_check") or {"leaked": False, "evidence": ""},
+        "revision_rounds": revision_rounds or [],
+        "best_round": max((item.get("round", 0) for item in revision_rounds or []), default=int(review.get("revision_round") or 1)),
+        "stop_reason": stop_reason,
+        "generated_at": legacy.now_iso(),
+    }
+
+
 def build_score_report(
     title: str,
     body: str,
@@ -807,7 +1258,9 @@ def build_score_report(
     revision_rounds: list[dict[str, Any]] | None = None,
     stop_reason: str = "",
 ) -> dict[str, Any]:
-    threshold = int(threshold or manifest.get("score_threshold") or DEFAULT_THRESHOLD)
+    mode = _content_mode(manifest)
+    default_threshold = TECH_SCORE_PROFILES.get(mode, {}).get("threshold", DEFAULT_THRESHOLD)
+    threshold = int(threshold or manifest.get("score_threshold") or default_threshold)
     blueprint = normalize_viral_blueprint(
         manifest.get("viral_blueprint"),
         {
@@ -820,6 +1273,8 @@ def build_score_report(
         },
     )
     review = review or build_heuristic_review(title, body, manifest, blueprint=blueprint)
+    if mode in TECH_SCORE_PROFILES:
+        return _build_tech_score_report(mode, title, body, manifest, threshold, review, blueprint, revision_rounds, stop_reason)
     hot_intro, hot_intro_note = _score_hot_intro(title, body, review)
     viewpoint_score, viewpoint_note = _score_viewpoints(review)
     argument_score, argument_note = _score_argument_diversity(review)
@@ -886,6 +1341,7 @@ def build_score_report(
         "threshold": threshold,
         "total_score": total,
         "passed": passed,
+        "score_profile": "viral",
         "score_breakdown": breakdown,
         "strengths": strengths[:5],
         "weaknesses": weaknesses[:5],
@@ -899,6 +1355,9 @@ def build_score_report(
         "pain_point_sentences": review.get("pain_point_sentences") or [],
         "ai_smell_findings": review.get("ai_smell_findings") or [],
         "ai_smell_hits": ai_smell_hits,
+        "term_render_issues": review.get("term_render_issues") or [],
+        "layout_rigidity_notes": review.get("layout_rigidity_notes") or [],
+        "title_leak_check": review.get("title_leak_check") or {"leaked": False, "evidence": ""},
         "revision_rounds": revision_rounds or [],
         "best_round": max((item.get("round", 0) for item in revision_rounds or []), default=int(review.get("revision_round") or 1)),
         "stop_reason": stop_reason,
@@ -946,6 +1405,19 @@ def markdown_review_report(review: dict[str, Any]) -> str:
     lines.extend(["", "## AI 味检查", ""])
     for item in review.get("ai_smell_findings") or []:
         lines.append(f"- {item.get('type')}：{item.get('evidence')}（{item.get('count')}）")
+    if review.get("term_render_issues"):
+        lines.extend(["", "## 术语渲染问题", ""])
+        for item in review.get("term_render_issues") or []:
+            lines.append(f"- {item}")
+    if review.get("layout_rigidity_notes"):
+        lines.extend(["", "## 排版僵硬点", ""])
+        for item in review.get("layout_rigidity_notes") or []:
+            lines.append(f"- {item}")
+    title_leak = review.get("title_leak_check") or {}
+    lines.extend(["", "## 标题泄漏检查", ""])
+    lines.append(f"- 是否泄漏：{'是' if title_leak.get('leaked') else '否'}")
+    if title_leak.get("evidence"):
+        lines.append(f"- 证据：{title_leak.get('evidence')}")
     lines.extend(["", "## 修改优先级", ""])
     for item in review.get("revision_priorities") or ["当前结构完整，可进入下一步。"]:
         lines.append(f"- {item}")
@@ -964,6 +1436,7 @@ def markdown_score_report(report: dict[str, Any]) -> str:
     lines = [
         f"# 文章评分报告：{report.get('title') or '未命名文章'}",
         "",
+        f"- 评分档案：`{report.get('score_profile') or 'viral'}`",
         f"- 总分：`{report.get('total_score', 0)}` / 100",
         f"- 阈值：`{report.get('threshold', DEFAULT_THRESHOLD)}`",
         f"- 结果：`{'通过' if report.get('passed') else '未通过'}`",
