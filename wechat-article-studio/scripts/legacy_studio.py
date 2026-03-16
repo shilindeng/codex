@@ -357,6 +357,122 @@ IMAGE_LAYOUT_FAMILY_VARIANTS: dict[str, list[str]] = {
     "list": ["stacked-cards", "matrix-grid"],
 }
 IMAGE_LAYOUT_FAMILY_CHOICES = tuple(IMAGE_LAYOUT_FAMILY_VARIANTS.keys())
+IMAGE_STYLE_MODE_CHOICES = ("uniform", "mixed-by-type")
+IMAGE_AUTO_STYLE_PROFILES: dict[str, dict[str, Any]] = {
+    "editorial-analysis": {
+        "label": "编辑评论",
+        "preset": "editorial-grain",
+        "theme": "观点趋势洞察",
+        "style": "编辑评论插画",
+        "mood": "克制敏锐",
+        "style_mode": "uniform",
+        "layout_family": "editorial",
+        "cover_preset": "bold",
+        "infographic_preset": "notion",
+        "inline_preset": "editorial-grain",
+        "base_module": "Favor magazine-grade composition, conceptual metaphors, restrained texture, and opinionated framing over explanatory diagrams.",
+    },
+    "knowledge-explainer": {
+        "label": "知识解释",
+        "preset": "fresh",
+        "theme": "知识解释与方法拆解",
+        "style": "清晰解释型插画",
+        "mood": "清楚友好",
+        "style_mode": "mixed-by-type",
+        "layout_family": "editorial",
+        "cover_preset": "fresh",
+        "infographic_preset": "notion",
+        "inline_preset": "illustrated-handdrawn",
+        "base_module": "Favor clear teaching visuals, explainer metaphors, and approachable detail. Only use structure graphics when the section is genuinely structural.",
+    },
+    "storytelling-human": {
+        "label": "叙事手绘",
+        "preset": "illustrated-handdrawn",
+        "theme": "人物叙事与情绪共鸣",
+        "style": "手绘叙事插画",
+        "mood": "温和有人味",
+        "style_mode": "uniform",
+        "layout_family": "editorial",
+        "cover_preset": "warm",
+        "infographic_preset": "fresh",
+        "inline_preset": "illustrated-handdrawn",
+        "base_module": "Favor human-centered storytelling, tactile details, scene fragments, and emotional resonance instead of chart-like structure.",
+    },
+    "business-decision": {
+        "label": "商业决策",
+        "preset": "professional-corporate",
+        "theme": "商业判断与策略取舍",
+        "style": "商务图解与编辑海报",
+        "mood": "稳健果断",
+        "style_mode": "mixed-by-type",
+        "layout_family": "comparison",
+        "cover_preset": "bold",
+        "infographic_preset": "professional-corporate",
+        "inline_preset": "luxury-minimal",
+        "base_module": "Favor sharp strategic framing, premium business graphics, and clear decision signals. Avoid generic blueprint wireframes unless the article is about actual systems architecture.",
+    },
+    "organic-lifestyle": {
+        "label": "自然生活",
+        "preset": "organic-natural",
+        "theme": "生活方式与温和洞察",
+        "style": "自然叙事插画",
+        "mood": "舒展温暖",
+        "style_mode": "uniform",
+        "layout_family": "editorial",
+        "cover_preset": "organic-natural",
+        "infographic_preset": "fresh",
+        "inline_preset": "organic-natural",
+        "base_module": "Favor soft narrative imagery, organic shapes, and calm rhythm. Use diagrams sparingly and only when the article explicitly teaches a process.",
+    },
+    "abstract-trend": {
+        "label": "抽象趋势",
+        "preset": "abstract-geometric",
+        "theme": "趋势变化与抽象张力",
+        "style": "抽象几何趋势插画",
+        "mood": "前卫理性",
+        "style_mode": "uniform",
+        "layout_family": "editorial",
+        "cover_preset": "abstract-geometric",
+        "infographic_preset": "notion",
+        "inline_preset": "abstract-geometric",
+        "base_module": "Favor abstract trend storytelling, symbolic geometry, and strong directional composition over literal diagram blocks.",
+    },
+}
+IMAGE_CONTENT_MODE_MODULES: dict[str, str] = {
+    "conceptual": "Express concepts through metaphor, symbolic objects, tension, and visual hierarchy rather than explicit labels.",
+    "narrative": "Lean into scenes, character traces, tactile details, and emotional cues that feel like a story slice instead of a slide.",
+    "structural": "Use structure only where it clarifies relationships. Prefer elegant modules and readable grouping, not dense arrows by default.",
+    "data": "Use selective quantitative cues, contrast, and information layers. Keep labels extremely sparse and avoid turning every image into a dashboard.",
+}
+IMAGE_TYPE_PROMPT_MODULES: dict[str, str] = {
+    "封面图": "Create a high-recognition hero image for WeChat: one dominant focal idea, strong atmosphere, strong crop safety, and no headline baked into the image.",
+    "信息图": "Compress the key structure into a scan-friendly visual summary. Favor modular grouping, icon logic, and one clear reading path.",
+    "流程图": "Show a real sequence or operational path with just enough direction cues to be understood. Avoid sterile flowchart defaults if a more visual sequence can carry the idea.",
+    "对比图": "Make the contrast obvious at first glance through composition, grouping, and opposing cues. Avoid verbose labels or spreadsheet-like tables.",
+    "分隔图": "Reset the reading rhythm with a thematic visual pause that still belongs to the article's visual world.",
+    "正文插图": "Support the nearby paragraph through metaphor, objects, scenes, or conceptual framing. Do not fall back to a generic diagram unless the text truly demands structure.",
+}
+IMAGE_STYLE_FAMILY_MODULES: dict[str, str] = {
+    "editorial-analysis": "Use editorial collage language, premium print rhythm, restrained palette shifts, and a thought-piece tone.",
+    "knowledge-explainer": "Use approachable explainer illustration language with clear layers, digestible modules, and teaching clarity.",
+    "storytelling-human": "Use warm hand-drawn storytelling language, lived-in details, and expressive scene-building.",
+    "business-decision": "Use confident business-graphic language, premium contrast, and strategic framing with polished restraint.",
+    "organic-lifestyle": "Use organic shapes, tactile textures, and soft narrative pacing with natural visual cues.",
+    "abstract-trend": "Use abstract geometry, bold spatial contrast, and symbolic trend motion with minimal literalism.",
+}
+IMAGE_DIFFERENTIATION_MODULES = [
+    "Do not reuse the same visual grammar across every image in the article.",
+    "Vary the composition, camera distance, focal object strategy, and negative space pattern from image to image.",
+    "If one image is structural, let neighboring images lean metaphorical or scenic unless the text explicitly requires repeated structure diagrams.",
+]
+ARTICLE_VISUAL_HINT_WORDS: dict[str, tuple[str, ...]] = {
+    "narrative": ("故事", "人物", "经历", "日常", "生活", "感受", "情绪", "焦虑", "治愈", "成长", "关系", "亲密", "家庭"),
+    "business": ("商业", "增长", "市场", "变现", "策略", "决策", "竞争", "订阅", "广告", "公司", "收入", "利润", "品牌"),
+    "technical": ("模型", "系统", "推理", "工程", "芯片", "算力", "基础设施", "架构", "平台", "评测", "部署", "Agent"),
+    "tutorial": ("教程", "指南", "步骤", "实操", "上手", "怎么做", "如何", "方法", "SOP", "清单", "流程", "落地"),
+    "comparison": ("对比", "区别", "差异", "A/B", "vs", "VS", "不是", "而是", "优劣", "取舍", "选择"),
+    "data": ("数据", "指标", "趋势", "比例", "图表", "统计", "%", "同比", "环比", "增长率"),
+}
 DEPTH_WORDS = [
     "案例",
     "数据",
@@ -2531,12 +2647,14 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
     cookie_temp: Path | None = None
     env = os.environ.copy()
     detected_cookie = gemini_web_cookie_file()
-    if not env.get("GEMINI_WEB_COOKIE_PATH") and detected_cookie.exists():
+    detected_profile_root = local_chrome_user_data_root()
+
+    # Prefer a real browser profile when available (more likely to stay logged in)
+    # unless the user explicitly provided a cookie path.
+    if not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and detected_profile_root is not None:
+        env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(detected_profile_root)
+    if not env.get("GEMINI_WEB_COOKIE_PATH") and not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and detected_cookie.exists():
         env["GEMINI_WEB_COOKIE_PATH"] = str(detected_cookie)
-    if not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and not env.get("GEMINI_WEB_COOKIE_PATH"):
-        detected_profile_root = local_chrome_user_data_root()
-        if detected_profile_root is not None:
-            env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(detected_profile_root)
     raw_cookie = env.get("GEMINI_WEB_COOKIE")
     if raw_cookie:
         cookie_map = parse_cookie_string(raw_cookie)
@@ -2640,14 +2758,71 @@ def make_placeholder_png(path: Path) -> tuple[int, int]:
     return 1, 1
 
 
+def count_keyword_hits(text: str, keywords: Iterable[str]) -> int:
+    haystack = text.lower()
+    total = 0
+    for keyword in keywords:
+        token = str(keyword or "").strip().lower()
+        if not token:
+            continue
+        total += haystack.count(token)
+    return total
+
+
+def infer_layout_family_from_strategy(content_mode: str, type_bias: dict[str, float]) -> str:
+    dominant_type = max(type_bias.items(), key=lambda item: item[1])[0] if type_bias else "正文插图"
+    if dominant_type == "流程图":
+        return "process"
+    if dominant_type == "对比图":
+        return "comparison"
+    if dominant_type == "信息图":
+        return "dashboard" if content_mode == "data" else "hierarchy"
+    return "editorial"
+
+
+def normalize_type_bias(weights: dict[str, float]) -> dict[str, float]:
+    total = sum(max(0.0, value) for value in weights.values()) or 1.0
+    return {key: round(max(0.0, value) / total, 3) for key, value in weights.items()}
+
+
+def resolve_style_profile(profile_key: str) -> dict[str, Any]:
+    return dict(IMAGE_AUTO_STYLE_PROFILES.get(profile_key) or IMAGE_AUTO_STYLE_PROFILES["editorial-analysis"])
+
+
+def build_effective_image_controls(controls: dict[str, Any], strategy: dict[str, Any]) -> dict[str, Any]:
+    profile = strategy.get("profile") or {}
+    merged = dict(controls or {})
+    merged["style_mode"] = controls.get("style_mode") or strategy.get("style_mode") or profile.get("style_mode") or "uniform"
+    merged["density"] = controls.get("density") or "balanced"
+    merged["layout_family"] = controls.get("layout_family") or strategy.get("layout_family") or profile.get("layout_family") or ""
+    merged["preset"] = controls.get("preset") or strategy.get("preset") or profile.get("preset") or ""
+    merged["preset_label"] = IMAGE_STYLE_PRESETS.get(merged.get("preset", ""), {}).get("label", controls.get("preset_label", ""))
+    merged["theme"] = controls.get("theme") or strategy.get("theme") or profile.get("theme") or ""
+    merged["style"] = controls.get("style") or strategy.get("style") or profile.get("style") or ""
+    merged["mood"] = controls.get("mood") or strategy.get("mood") or profile.get("mood") or ""
+    merged["custom_visual_brief"] = controls.get("custom_visual_brief") or strategy.get("custom_visual_brief") or ""
+    merged["preset_cover"] = controls.get("preset_cover") or strategy.get("preset_cover") or profile.get("cover_preset") or merged.get("preset") or ""
+    merged["preset_infographic"] = controls.get("preset_infographic") or strategy.get("preset_infographic") or profile.get("infographic_preset") or merged.get("preset") or ""
+    merged["preset_inline"] = controls.get("preset_inline") or strategy.get("preset_inline") or profile.get("inline_preset") or merged.get("preset") or ""
+    if merged.get("preset_cover"):
+        merged["preset_cover_label"] = IMAGE_STYLE_PRESETS.get(merged["preset_cover"], {}).get("label", "")
+    if merged.get("preset_infographic"):
+        merged["preset_infographic_label"] = IMAGE_STYLE_PRESETS.get(merged["preset_infographic"], {}).get("label", "")
+    if merged.get("preset_inline"):
+        merged["preset_inline_label"] = IMAGE_STYLE_PRESETS.get(merged["preset_inline"], {}).get("label", "")
+    return merged
+
+
 def visual_profile_for_item(controls: dict[str, Any], item: dict[str, Any]) -> dict[str, str]:
     style_mode = controls.get("style_mode") or "uniform"
     base_preset = (controls.get("preset") or "").strip()
     base_preset_label = (controls.get("preset_label") or "").strip()
-    base_theme = controls.get("theme", "科技")
-    base_style = controls.get("style", "未来科技")
-    base_mood = controls.get("mood", "专业理性")
+    base_theme = controls.get("theme", "") or "文章主题导向"
+    base_style = controls.get("style", "") or "内容驱动视觉表达"
+    base_mood = controls.get("mood", "") or "克制清晰"
     base_brief = (controls.get("custom_visual_brief") or "").strip()
+    profile_key = (controls.get("profile_key") or item.get("article_visual_strategy", {}).get("profile_key") or "").strip()
+    style_reason = item.get("style_reason") or ""
 
     if style_mode != "mixed-by-type":
         return {
@@ -2660,15 +2835,16 @@ def visual_profile_for_item(controls: dict[str, Any], item: dict[str, Any]) -> d
             "visual_style": base_style,
             "visual_mood": base_mood,
             "visual_brief": base_brief or "highlight the core insight without clutter",
+            "style_reason": style_reason or f"文章整体采用 {IMAGE_AUTO_STYLE_PROFILES.get(profile_key, {}).get('label', '统一风格')} 方向，当前图片沿用整篇主视觉。",
         }
 
     item_type = item.get("type", "正文插图")
     if item_type == "封面图":
-        preset_key = (controls.get("preset_cover") or "").strip() or "bold"
+        preset_key = (controls.get("preset_cover") or "").strip() or base_preset
     elif item_type == "信息图":
-        preset_key = (controls.get("preset_infographic") or "").strip() or "notion"
+        preset_key = (controls.get("preset_infographic") or "").strip() or base_preset
     else:
-        preset_key = (controls.get("preset_inline") or "").strip() or "editorial-grain"
+        preset_key = (controls.get("preset_inline") or "").strip() or base_preset
 
     preset = IMAGE_STYLE_PRESETS.get(preset_key, {})
     preset_label = preset.get("label", "").strip()
@@ -2697,16 +2873,21 @@ def visual_profile_for_item(controls: dict[str, Any], item: dict[str, Any]) -> d
         "visual_style": style,
         "visual_mood": mood,
         "visual_brief": merged_brief,
+        "style_reason": style_reason or f"{item_type} 继承文章主视觉，并按图片用途切换到 {preset_label or preset_key or '当前'} 风格表达。",
     }
 
 
 def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dict[str, Any], audience: str) -> str:
     section = item.get("section_heading") or item.get("alt")
     style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
-    theme = item.get("visual_theme") or controls.get("theme", "科技")
-    style = item.get("visual_style") or controls.get("style", "未来科技")
-    mood = item.get("visual_mood") or controls.get("mood", "专业理性")
+    theme = item.get("visual_theme") or controls.get("theme", "") or "content-led visual direction"
+    style = item.get("visual_style") or controls.get("style", "") or "distinctive editorial illustration"
+    mood = item.get("visual_mood") or controls.get("mood", "") or "clear and restrained"
     brief = item.get("visual_brief") or controls.get("custom_visual_brief") or "highlight the core insight without clutter"
+    article_strategy = item.get("article_visual_strategy") or {}
+    profile_key = controls.get("profile_key") or article_strategy.get("profile_key") or ""
+    style_family = article_strategy.get("style_family") or IMAGE_AUTO_STYLE_PROFILES.get(profile_key, {}).get("label", "")
+    content_mode = article_strategy.get("content_mode") or "conceptual"
     instructions = [
         "Create a polished visual for a Chinese WeChat Official Account article.",
         f"Article title: {title}",
@@ -2717,7 +2898,16 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         f"Mood: {mood}",
         f"Visual brief: {brief}",
         f"Content summary: {summary}",
+        f"Article visual direction: {article_strategy.get('visual_direction') or title}",
+        f"Article style family: {style_family or 'content-driven auto'}",
+        f"Article content mode: {content_mode}",
     ]
+    style_family_module = IMAGE_STYLE_FAMILY_MODULES.get(profile_key, "")
+    if style_family_module:
+        instructions.append("Style family guidance: " + style_family_module)
+    content_mode_module = IMAGE_CONTENT_MODE_MODULES.get(content_mode, "")
+    if content_mode_module:
+        instructions.append("Content mode guidance: " + content_mode_module)
     if controls.get("preset"):
         instructions.append(f"Base visual preset: {controls['preset']}")
         if controls.get("preset_label"):
@@ -2741,23 +2931,16 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         instructions.append(f"Layout variant: {item['layout_variant_label']}")
     if item.get("layout_variant_instruction"):
         instructions.append(f"Composition rule: {item['layout_variant_instruction']}")
-    if item["type"] == "封面图":
-        instructions.append("Compose as a high-end WeChat cover, strong focal point, clean whitespace, no realistic faces unless requested.")
-    elif item["type"] == "信息图":
-        instructions.append("Design as an infographic with clear hierarchy, visual metaphors, and readable structure.")
-    elif item["type"] == "流程图":
-        instructions.append("Design as a process flow diagram with clear steps, direction cues, and easy-to-follow progression.")
-    elif item["type"] == "对比图":
-        instructions.append("Design as a side-by-side comparison graphic with explicit contrast, grouped evidence, and visual balance.")
-    elif item["type"] == "分隔图":
-        instructions.append("Design as a section-divider visual that resets rhythm while staying semantically tied to the section.")
-    else:
-        instructions.append("Design as an editorial inline illustration that supports the nearby paragraph.")
+    if item.get("type_reason"):
+        instructions.append("Type decision reason: " + str(item["type_reason"]))
+    if item.get("style_reason"):
+        instructions.append("Style decision reason: " + str(item["style_reason"]))
+    instructions.append(IMAGE_TYPE_PROMPT_MODULES.get(item["type"], IMAGE_TYPE_PROMPT_MODULES["正文插图"]))
     if item["type"] in {"封面图", "正文插图", "分隔图"}:
         instructions.append("Use little to no embedded text. Prefer pure imagery, symbols, objects, and composition over words.")
     else:
         instructions.append("Keep embedded text extremely sparse. Use at most a few short labels, and prefer icons, arrows, grouping, and hierarchy over paragraphs.")
-    instructions.append("Do not reuse a generic poster layout for every image. Keep the article theme consistent, but make each image feel compositionally distinct.")
+    instructions.extend(IMAGE_DIFFERENTIATION_MODULES)
     instructions.append("Avoid clutter, excessive small text, watermarks, and brand logos unless explicitly requested.")
     return " ".join(instructions)
 
@@ -2765,7 +2948,7 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
 def image_position_label(item: dict[str, Any]) -> str:
     if item.get("type") == "封面图":
         return "cover"
-    if item.get("type") == "信息图" and item.get("insert_strategy") == "section_end":
+    if item.get("insert_strategy") == "section_end":
         return "closing-summary"
     target = item.get("target_section") or f"section-{item.get('target_section_index', -1)}"
     return f"{target}@block-{item.get('placement_block_index', 0)}"
@@ -2897,6 +3080,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
     style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
     base_style_label = (item.get("base_preset_label") or controls.get("preset_label") or controls.get("style") or "").strip()
     visual_style_label = (item.get("visual_preset_label") or base_style_label).strip()
+    article_strategy = item.get("article_visual_strategy") or {}
     style_lines: list[str] = []
     if style_mode == "mixed-by-type":
         style_lines.append(f"- 基调风格：{base_style_label or 'default'}")
@@ -2913,6 +3097,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         f"layout_variant: {item.get('layout_variant_key', '')}",
         f"layout_family: {controls.get('layout_family', '')}",
         f"style_mode: {style_mode}",
+        f"decision_source: {item.get('decision_source', '')}",
         f"base_preset: {controls.get('preset', '')}",
         f"preset: {item.get('visual_preset') or controls.get('preset', '')}",
         f"density: {controls.get('density', 'balanced')}",
@@ -2925,6 +3110,11 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
     ]
     lines.extend(style_lines)
     lines.extend([
+        f"- 文章视觉方向：{article_strategy.get('visual_direction') or 'auto'}",
+        f"- 风格家族：{article_strategy.get('style_family') or 'auto'}",
+        f"- 内容模式：{article_strategy.get('content_mode') or 'auto'}",
+        f"- 类型决策：{item.get('type_reason') or 'auto'}",
+        f"- 风格决策：{item.get('style_reason') or 'auto'}",
         f"- 版式变体：{item.get('layout_variant_label', '默认构图')}",
         "",
         "## 视觉内容",
@@ -2970,6 +3160,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
 
 def write_image_outline_artifacts(workspace: Path, title: str, audience: str, controls: dict[str, Any], plan: dict[str, Any]) -> None:
     prompt_dir = ensure_dir(workspace / "prompts" / "images")
+    article_strategy = plan.get("article_visual_strategy") or {}
     outline_items: list[dict[str, Any]] = []
     for item in plan.get("items") or []:
         prompt_path = prompt_dir / f"{item['id']}.md"
@@ -2995,6 +3186,9 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
                 "label_strategy": label_strategy,
                 "text_budget": image_text_budget(item),
                 "aspect_policy": image_aspect_policy(item),
+                "decision_source": item.get("decision_source", ""),
+                "type_reason": item.get("type_reason", ""),
+                "style_reason": item.get("style_reason", ""),
                 "anchor_block_excerpt": item.get("anchor_block_excerpt") or "",
                 "prompt_path": relative_posix(prompt_path, workspace),
             }
@@ -3005,6 +3199,7 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         "preset": controls.get("preset", ""),
         "preset_label": controls.get("preset_label", ""),
         "style_mode": controls.get("style_mode", "uniform"),
+        "article_visual_strategy": article_strategy,
         "preset_cover": controls.get("preset_cover", ""),
         "preset_cover_label": controls.get("preset_cover_label", ""),
         "preset_infographic": controls.get("preset_infographic", ""),
@@ -3023,6 +3218,9 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
     write_json(workspace / "image-outline.json", outline)
     lines = [f"# 插图大纲：{title}", ""]
     lines.append(f"- 密度：`{outline['density']}`")
+    lines.append(f"- 视觉方向：`{article_strategy.get('visual_direction') or 'auto'}`")
+    lines.append(f"- 风格家族：`{article_strategy.get('style_family') or 'auto'}`")
+    lines.append(f"- 内容模式：`{article_strategy.get('content_mode') or 'auto'}`")
     if outline.get("style_mode") == "mixed-by-type":
         lines.append(
             f"- 风格模式：`{outline['style_mode']}`（封面 `{outline.get('preset_cover')}` / 信息图 `{outline.get('preset_infographic')}` / 正文 `{outline.get('preset_inline')}`）"
@@ -3047,6 +3245,9 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         lines.append(f"- 目标章节：{item['target_section'] or 'cover'}")
         lines.append(f"- 版式：{item['layout_variant']}")
         lines.append(f"- 布局规则：{item['layout_spec']['instruction']}")
+        lines.append(f"- 决策来源：`{item['decision_source'] or 'auto'}`")
+        lines.append(f"- 图型原因：{item['type_reason'] or 'auto'}")
+        lines.append(f"- 风格原因：{item['style_reason'] or 'auto'}")
         lines.append(f"- 视觉内容：{item['visual_content']}")
         lines.append(f"- 视觉元素：{'；'.join(item['visual_elements'])}")
         lines.append(f"- 文字预算：{item['text_budget']}")
@@ -3109,13 +3310,8 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     manifest["topic_discovery_provider"] = payload.get("provider") or normalize_discovery_provider(provider)
     manifest["topic_discovery_focus"] = payload.get("focus") or focus
     controls = dict(manifest.get("image_controls") or {})
-    # 无主题启动链路默认：balanced + mixed-by-type（不覆盖用户已有配置）。
+    # 无主题启动仅保留安全的密度默认，不再隐式锁定风格、主题或图型。
     controls.setdefault("density", "balanced")
-    controls.setdefault("style_mode", "mixed-by-type")
-    controls.setdefault("preset", "editorial-grain")
-    controls.setdefault("preset_cover", "bold")
-    controls.setdefault("preset_infographic", "notion")
-    controls.setdefault("preset_inline", "editorial-grain")
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
     safe_print_json(payload)
@@ -3124,12 +3320,16 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
 
 def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[str, Any]:
     current = dict(existing or {})
-    raw_style_mode = getattr(args, "image_style_mode", None) or current.get("style_mode") or "uniform"
-    style_mode = "mixed-by-type" if str(raw_style_mode).strip().lower().replace("_", "-") in {"mixed-by-type", "mixed"} else "uniform"
+    raw_style_mode = getattr(args, "image_style_mode", None) or current.get("style_mode") or ""
+    normalized_style_mode = str(raw_style_mode).strip().lower().replace("_", "-")
+    if normalized_style_mode in {"mixed-by-type", "mixed"}:
+        style_mode = "mixed-by-type"
+    elif normalized_style_mode == "uniform":
+        style_mode = "uniform"
+    else:
+        style_mode = ""
     explicit_preset = getattr(args, "image_preset", None)
     selected_preset = explicit_preset or current.get("preset") or ""
-    if style_mode == "mixed-by-type" and not str(selected_preset).strip():
-        selected_preset = "editorial-grain"
     preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
     density = getattr(args, "image_density", None) or current.get("density") or "balanced"
     layout_family = getattr(args, "image_layout_family", None) or current.get("layout_family") or ""
@@ -3137,20 +3337,16 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
     preset_cover = getattr(args, "image_preset_cover", None) or current.get("preset_cover") or ""
     preset_infographic = getattr(args, "image_preset_infographic", None) or current.get("preset_infographic") or ""
     preset_inline = getattr(args, "image_preset_inline", None) or current.get("preset_inline") or ""
-    if style_mode == "mixed-by-type":
-        preset_cover = preset_cover or "bold"
-        preset_infographic = preset_infographic or "notion"
-        preset_inline = preset_inline or "editorial-grain"
 
     if selected_preset and current.get("preset") != selected_preset:
         base = {
             "style_mode": style_mode,
             "preset": selected_preset,
             "preset_label": preset.get("label", ""),
-            "theme": preset.get("theme", "科技"),
-            "style": preset.get("style", "未来科技"),
-            "type": current.get("type") or "封面图",
-            "mood": preset.get("mood", "专业理性"),
+            "theme": preset.get("theme", ""),
+            "style": preset.get("style", ""),
+            "type": current.get("type") or "",
+            "mood": preset.get("mood", ""),
             "custom_visual_brief": preset.get("custom_visual_brief", ""),
             "density": density,
             "layout_family": layout_family,
@@ -3163,10 +3359,10 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
             "style_mode": style_mode,
             "preset": current.get("preset", selected_preset),
             "preset_label": current.get("preset_label", preset.get("label", "")),
-            "theme": current.get("theme") or preset.get("theme") or "科技",
-            "style": current.get("style") or preset.get("style") or "未来科技",
-            "type": current.get("type") or "封面图",
-            "mood": current.get("mood") or preset.get("mood") or "专业理性",
+            "theme": current.get("theme") or preset.get("theme") or "",
+            "style": current.get("style") or preset.get("style") or "",
+            "type": current.get("type") or "",
+            "mood": current.get("mood") or preset.get("mood") or "",
             "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
             "density": density,
             "layout_family": layout_family,
@@ -3433,10 +3629,133 @@ def extract_section_metrics(section: dict[str, Any], section_index: int) -> dict
     }
 
 
-def infer_section_image_type(section_metric: dict[str, Any], is_final: bool = False) -> str:
+def infer_article_visual_strategy(
+    title: str,
+    summary: str,
+    body: str,
+    audience: str,
+    controls: dict[str, Any],
+    sections: list[dict[str, Any]],
+) -> dict[str, Any]:
+    combined = "\n".join(part for part in [title, summary, body] if part).strip()
+    lowered = combined.lower()
+    list_heavy_sections = 0
+    data_heavy_sections = 0
+    metrics = [extract_section_metrics(section, index) for index, section in enumerate(sections)]
+    for metric in metrics:
+        if metric.get("list_count", 0) >= 2:
+            list_heavy_sections += 1
+        if metric.get("info_hits", 0) >= 2:
+            data_heavy_sections += 1
+
+    scores = {
+        "narrative": count_keyword_hits(lowered, ARTICLE_VISUAL_HINT_WORDS["narrative"]) + max(0, count_keyword_hits(combined, ("我", "我们", "你", "他们")) - 2),
+        "business": count_keyword_hits(lowered, ARTICLE_VISUAL_HINT_WORDS["business"]),
+        "technical": count_keyword_hits(lowered, ARTICLE_VISUAL_HINT_WORDS["technical"]),
+        "tutorial": count_keyword_hits(lowered, ARTICLE_VISUAL_HINT_WORDS["tutorial"]) + list_heavy_sections * 2,
+        "comparison": count_keyword_hits(lowered, ARTICLE_VISUAL_HINT_WORDS["comparison"]),
+        "data": count_keyword_hits(lowered, ARTICLE_VISUAL_HINT_WORDS["data"]) + data_heavy_sections * 2,
+    }
+
+    narrative_score = scores["narrative"]
+    business_score = scores["business"]
+    technical_score = scores["technical"]
+    tutorial_score = scores["tutorial"]
+    comparison_score = scores["comparison"]
+    data_score = scores["data"]
+    explanatory_score = tutorial_score + data_score + list_heavy_sections
+
+    if narrative_score >= max(explanatory_score, business_score, technical_score) + 1:
+        profile_key = "storytelling-human"
+    elif business_score >= max(technical_score, explanatory_score) + 1:
+        profile_key = "business-decision"
+    elif tutorial_score >= 4 or explanatory_score >= 7:
+        profile_key = "knowledge-explainer"
+    elif technical_score >= 5 and data_score <= 2:
+        profile_key = "editorial-analysis"
+    elif data_score >= 5 and comparison_score >= 2:
+        profile_key = "business-decision"
+    elif count_keyword_hits(lowered, ("生活", "日常", "方式", "疗愈", "自然", "习惯")) >= 3:
+        profile_key = "organic-lifestyle"
+    elif count_keyword_hits(lowered, ("趋势", "拐点", "周期", "转向", "变化")) >= 3:
+        profile_key = "abstract-trend"
+    else:
+        profile_key = "editorial-analysis"
+
+    profile = resolve_style_profile(profile_key)
+    style_mode = controls.get("style_mode") or (
+        "mixed-by-type"
+        if profile.get("style_mode") == "mixed-by-type" and explanatory_score >= max(4, narrative_score + 1)
+        else "uniform"
+    )
+
+    type_bias = normalize_type_bias(
+        {
+            "正文插图": 0.62 + narrative_score * 0.04 - tutorial_score * 0.03 - data_score * 0.02,
+            "对比图": 0.12 + comparison_score * 0.06 + business_score * 0.01,
+            "信息图": 0.14 + data_score * 0.05 + tutorial_score * 0.02,
+            "流程图": 0.12 + tutorial_score * 0.05 - narrative_score * 0.03,
+        }
+    )
+    layout_family = controls.get("layout_family") or infer_layout_family_from_strategy(
+        "narrative" if narrative_score > explanatory_score and narrative_score >= 3 else "data" if data_score >= tutorial_score and data_score >= 4 else "structural" if explanatory_score >= 4 else "conceptual",
+        type_bias,
+    )
+    visual_direction = extract_summary(
+        controls.get("theme")
+        or title
+        or summary
+        or profile.get("theme")
+        or "文章视觉方向",
+        28,
+    )
+    content_mode = "narrative"
+    if data_score >= max(tutorial_score, narrative_score, 4):
+        content_mode = "data"
+    elif explanatory_score >= max(narrative_score + 1, 4):
+        content_mode = "structural"
+    elif narrative_score <= 2 and (technical_score >= 4 or business_score >= 4):
+        content_mode = "conceptual"
+
+    explicit_overrides = [
+        name
+        for name in ["preset", "theme", "style", "mood", "style_mode", "layout_family", "preset_cover", "preset_infographic", "preset_inline"]
+        if str(controls.get(name) or "").strip()
+    ]
+    reasons = [
+        f"文章视觉方向判定为“{profile['label']}”，因为内容中 {('叙事/情绪表达' if narrative_score >= max(explanatory_score, 3) else '解释/结构化信息' if explanatory_score >= 4 else '观点/趋势分析')} 更强。",
+        f"内容模式为 `{content_mode}`，正文默认偏向 `{max(type_bias, key=type_bias.get)}`。",
+    ]
+    if explicit_overrides:
+        reasons.append("检测到显式图片参数覆盖：" + "、".join(explicit_overrides) + "。")
+
+    return {
+        "profile_key": profile_key,
+        "profile": profile,
+        "visual_direction": visual_direction,
+        "style_family": profile["label"],
+        "content_mode": content_mode,
+        "style_mode": style_mode,
+        "layout_family": layout_family,
+        "preset": controls.get("preset") or profile.get("preset") or "",
+        "preset_cover": controls.get("preset_cover") or profile.get("cover_preset") or "",
+        "preset_infographic": controls.get("preset_infographic") or profile.get("infographic_preset") or "",
+        "preset_inline": controls.get("preset_inline") or profile.get("inline_preset") or "",
+        "theme": controls.get("theme") or profile.get("theme") or visual_direction,
+        "style": controls.get("style") or profile.get("style") or "",
+        "mood": controls.get("mood") or profile.get("mood") or "",
+        "custom_visual_brief": controls.get("custom_visual_brief") or profile.get("base_module") or "",
+        "type_bias": type_bias,
+        "decision_reasoning": reasons,
+        "explicit_overrides": explicit_overrides,
+        "audience": audience,
+    }
+
+
+def infer_section_image_decision(section_metric: dict[str, Any], article_strategy: dict[str, Any] | None = None, is_final: bool = False) -> dict[str, str]:
     directives = section_metric.get("image_directives") or {}
     if directives.get("type"):
-        return directives["type"]
+        return {"type": directives["type"], "reason": "用户通过文内 image directive 显式指定了图片类型。", "decision_source": "directive"}
     heading = section_metric.get("heading", "")
     blocks = "\n\n".join(section_metric.get("blocks") or [])
     combined = f"{heading}\n{blocks}"
@@ -3444,20 +3763,45 @@ def infer_section_image_type(section_metric: dict[str, Any], is_final: bool = Fa
     list_count = section_metric.get("list_count", 0)
     info_hits = section_metric.get("info_hits", 0)
     char_count = section_metric.get("char_count", 0)
+    strategy = article_strategy or {}
+    type_bias = strategy.get("type_bias") or {}
 
-    if re.search(r"流程|步骤|路径|SOP|怎么做|如何做|执行步骤|落地|分为\d+步|第[一二三四五六七八九十\d]+步", combined):
-        return "流程图"
-    if list_count >= 2 and re.search(r"步骤|清单|执行|流程|先|再|最后|第一|第二|第三", combined):
-        return "流程图"
-    if re.search(r"对比|区别|差异|误区|vs|VS|不是.+而是|A/B|优劣|好处|坏处", combined):
-        return "对比图"
-    if re.search(r"总结|框架|模型|地图|全景|一图|清单|结论|指标|趋势|数据", combined) and (info_hits >= 2 or list_count >= 2):
-        return "信息图"
-    if is_final and (info_hits >= 1 or list_count >= 1 or char_count >= 500):
-        return "信息图"
-    if paragraph_count >= 4 and char_count >= 1200:
-        return "分隔图"
-    return "正文插图"
+    process_markers = len(re.findall(r"(?:^|\n)\s*(?:\d+[\.、)]|第[一二三四五六七八九十\d]+步|步骤[一二三四五六七八九十\d]+)", combined, flags=re.M))
+    contrast_markers = len(re.findall(r"(?:对比|区别|差异|vs|VS|不是.+而是|A/B|优劣|更适合|相反)", combined, flags=re.I))
+    framework_markers = len(re.findall(r"(?:框架|模型|地图|全景|清单|结论|指标|趋势|数据|维度|模块|层)", combined))
+    summary_markers = len(re.findall(r"(?:总结|最后的判断|结论|一句话|归纳|总的来看|归根结底)", combined))
+    sequence_phrases = len(re.findall(r"(?:先.+再.+最后|首先.+其次|接着|然后|最后)", combined))
+    two_sided_entities = bool(re.search(r"(免费模式|订阅模式).*(免费模式|订阅模式)|A.+B|一边.+另一边|左边.+右边", combined))
+
+    if process_markers >= 2 and list_count >= 1 and paragraph_count >= 1:
+        return {"type": "流程图", "reason": "章节同时包含明确的步骤编号和多段结构，属于真实流程型内容。", "decision_source": "auto-structure"}
+    if re.search(r"流程|SOP|执行路径|操作路径|落地步骤|实施步骤|第[一二三四五六七八九十\d]+步", heading) and (list_count >= 1 or sequence_phrases >= 1):
+        return {"type": "流程图", "reason": "标题明确是流程/步骤章节，且正文确有结构化步骤。", "decision_source": "auto-structure"}
+    if (contrast_markers >= 2 and (list_count >= 1 or paragraph_count >= 2)) or (contrast_markers >= 1 and two_sided_entities):
+        return {"type": "对比图", "reason": "章节存在明显双边对照关系，适合用对比图表达。", "decision_source": "auto-structure"}
+    if framework_markers >= 2 and (info_hits >= 3 or list_count >= 3):
+        return {"type": "信息图", "reason": "章节更像框架/清单/指标总结，适合压缩成信息图。", "decision_source": "auto-structure"}
+    if is_final and summary_markers >= 1 and (list_count >= 2 or info_hits >= 2 or type_bias.get("信息图", 0) >= 0.28):
+        return {"type": "信息图", "reason": "结尾章节具备明显总结与结构化特征，适合做收束信息图。", "decision_source": "auto-summary"}
+    if paragraph_count >= 5 and char_count >= 1500 and type_bias.get("正文插图", 0) >= 0.5:
+        return {"type": "分隔图", "reason": "章节较长，且文章整体更偏叙事/概念表达，补一张分隔图比结构图更自然。", "decision_source": "auto-rhythm"}
+    return {"type": "正文插图", "reason": "章节更适合用概念性正文插图承接，而不是先验地转成结构图。", "decision_source": "auto-default"}
+
+
+def infer_section_image_type(section_metric: dict[str, Any], article_strategy: dict[str, Any] | None = None, is_final: bool = False) -> str:
+    return infer_section_image_decision(section_metric, article_strategy=article_strategy, is_final=is_final)["type"]
+
+
+def infer_closing_image_decision(final_metric: dict[str, Any] | None, article_strategy: dict[str, Any]) -> dict[str, str]:
+    if not final_metric:
+        return {"type": "信息图", "reason": "缺少明确的收束章节，使用信息图作为默认全文总结图。", "decision_source": "auto-fallback"}
+    final_decision = infer_section_image_decision(final_metric, article_strategy=article_strategy, is_final=True)
+    if final_decision["type"] in {"信息图", "对比图", "流程图"}:
+        return final_decision
+    type_bias = article_strategy.get("type_bias") or {}
+    if type_bias.get("信息图", 0) >= 0.3 and (final_metric.get("info_hits", 0) >= 1 or final_metric.get("list_count", 0) >= 1):
+        return {"type": "信息图", "reason": "文章整体更偏结构化解释，结尾使用信息图收束更合适。", "decision_source": "auto-summary"}
+    return {"type": "正文插图", "reason": "结尾更适合概念收束插图，不强制转成信息图。", "decision_source": "auto-summary"}
 
 
 def estimate_inline_image_count(body: str, explicit_count: int, density: str = "balanced") -> int:
@@ -3486,8 +3830,9 @@ def estimate_inline_image_count(body: str, explicit_count: int, density: str = "
     special_count = 0
     dense_count = 0
     force_bonus = 0
+    article_strategy = infer_article_visual_strategy("", extract_summary(body), body, "大众读者", {"density": density}, sections)
     for index, metric in enumerate(metrics):
-        inferred = infer_section_image_type(metric, is_final=index == len(metrics) - 1)
+        inferred = infer_section_image_type(metric, article_strategy=article_strategy, is_final=index == len(metrics) - 1)
         if inferred in {"流程图", "对比图", "信息图"}:
             special_count += 1
         if metric.get("info_hits", 0) >= 2 or metric.get("list_count", 0) >= 2 or metric.get("char_count", 0) >= 900:
@@ -3580,14 +3925,18 @@ def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> 
     return int(scored[0][2])
 
 
-def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, Any]]:
+def select_sections_for_images(body: str, inline_limit: int, article_strategy: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     _, sections = normalize_sections_for_images(body)
+    strategy = article_strategy or infer_article_visual_strategy("", extract_summary(body), body, "大众读者", {"density": "balanced"}, sections)
     metrics = []
     for index, section in enumerate(sections):
         if is_reference_heading(section.get("heading", "")):
             continue
         metric = extract_section_metrics(section, index)
-        metric["inferred_image_type"] = infer_section_image_type(metric, is_final=index == len(sections) - 1)
+        decision = infer_section_image_decision(metric, article_strategy=strategy, is_final=index == len(sections) - 1)
+        metric["inferred_image_type"] = decision["type"]
+        metric["inferred_image_type_reason"] = decision["reason"]
+        metric["inferred_image_type_source"] = decision["decision_source"]
         metrics.append(metric)
     if not metrics or inline_limit <= 0:
         return []
@@ -3668,6 +4017,8 @@ def select_sections_for_images(body: str, inline_limit: int) -> list[dict[str, A
                 "placement_block_index": block_index,
                 "placement_reason": placement_reason,
                 "image_type": image_type,
+                "image_type_reason": metric.get("inferred_image_type_reason") or "按章节内容自动判定。",
+                "image_type_source": metric.get("inferred_image_type_source") or "auto-default",
             }
         )
     return selected_metrics
@@ -3714,13 +4065,17 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     summary = manifest.get("summary") or meta.get("summary") or extract_summary(body)
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
     intro_blocks, sections = normalize_sections_for_images(body)
+    article_strategy = infer_article_visual_strategy(title, summary, body, audience, controls, sections)
+    effective_controls = build_effective_image_controls(controls, article_strategy)
+    effective_controls["profile_key"] = article_strategy.get("profile_key", "")
     provider = image_provider_from_env(args.provider)
-    inline_limit = estimate_inline_image_count(body, args.inline_count, controls.get("density", "balanced"))
-    inline_sections = select_sections_for_images(body, inline_limit)
+    inline_limit = estimate_inline_image_count(body, args.inline_count, effective_controls.get("density", "balanced"))
+    inline_sections = select_sections_for_images(body, inline_limit, article_strategy=article_strategy)
     intro_char_count = sum(cjk_len(block) for block in intro_blocks)
     content_sections = [section for section in sections if not is_reference_heading(section.get("heading", ""))]
     final_section = content_sections[-1] if content_sections else None
     final_metric = extract_section_metrics(final_section, sections.index(final_section)) if final_section else None
+    closing_decision = infer_closing_image_decision(final_metric, article_strategy)
     diagnostics = image_planning_diagnostics(sections, inline_sections, inline_limit)
 
     items: list[dict[str, Any]] = [
@@ -3737,26 +4092,32 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "aspect_ratio": "16:9",
             "section_heading": title,
             "section_excerpt": extract_summary("\n\n".join(intro_blocks[:2]) if intro_blocks else summary, 220),
+            "decision_source": "required-cover",
+            "type_reason": "封面图是整篇文章的固定入口图，用于公众号封面与缩略图。",
+            "style_reason": "封面图按整篇文章的自动视觉策略选择主视觉语言。",
         },
         {
-            "id": "infographic-01",
-            "type": "\u4fe1\u606f\u56fe",
+            "id": "closing-01",
+            "type": closing_decision["type"],
             "target_section": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
             "target_section_index": final_metric["section_index"] if final_metric else -1,
             "insert_strategy": "section_end",
             "placement_block_index": final_metric["paragraph_count"] if final_metric else 0,
-            "placement_reason": "\u5168\u6587\u603b\u7ed3\u578b\u4fe1\u606f\u56fe\uff0c\u653e\u5728\u6587\u672b\u5185\u5bb9\u6bb5\u843d\u4e4b\u540e\u66f4\u9002\u5408\u6536\u675f\u5168\u6587",
+            "placement_reason": "\u5168\u6587\u6536\u675f\u578b\u914d\u56fe\uff0c\u653e\u5728\u6587\u672b\u5185\u5bb9\u6bb5\u843d\u4e4b\u540e\u7528\u4e8e\u6536\u675f\u5168\u6587",
             "section_weight": round((final_metric["section_weight"] if final_metric else 0) + intro_char_count / 500, 2),
-            "alt": f"{title} \u4fe1\u606f\u56fe",
-            "aspect_ratio": "3:4",
+            "alt": f"{title} {closing_decision['type']}",
+            "aspect_ratio": "3:4" if closing_decision["type"] == "信息图" else "16:9",
             "section_heading": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
             "section_excerpt": final_metric.get("excerpt", "") if final_metric else extract_summary(summary, 220),
+            "decision_source": closing_decision["decision_source"],
+            "type_reason": closing_decision["reason"],
+            "style_reason": "收束图沿用整篇自动视觉策略，并根据结尾章节是否结构化决定是否转为信息图。",
         },
     ]
     type_occurrence: dict[str, int] = {}
     for item in items:
         occurrence_index = type_occurrence.get(item["type"], 0)
-        variant = pick_layout_variant(item["type"], occurrence_index, controls.get("layout_family", ""))
+        variant = pick_layout_variant(item["type"], occurrence_index, effective_controls.get("layout_family", ""))
         item["layout_variant_key"] = variant["key"]
         item["layout_variant_label"] = variant["label"]
         item["layout_variant_instruction"] = variant["instruction"]
@@ -3765,7 +4126,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     for index, section in enumerate(inline_sections, start=1):
         image_type = section.get("image_type") or "\u6b63\u6587\u63d2\u56fe"
         occurrence_index = type_occurrence.get(image_type, 0)
-        variant = pick_layout_variant(image_type, occurrence_index, controls.get("layout_family", ""))
+        variant = pick_layout_variant(image_type, occurrence_index, effective_controls.get("layout_family", ""))
         blocks = [block for block in (section.get("blocks") or []) if block.strip()]
         placement_index = int(section.get("placement_block_index", 0) or 0)
         anchor_index = 0
@@ -3790,14 +4151,24 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
                 "layout_variant_key": variant["key"],
                 "layout_variant_label": variant["label"],
                 "layout_variant_instruction": variant["instruction"],
+                "decision_source": section.get("image_type_source") or "auto-default",
+                "type_reason": section.get("image_type_reason") or "按章节内容自动判定。",
+                "style_reason": "正文插图风格由整篇文章的自动视觉策略决定；若图片类型特殊，再按用途做轻微分化。",
             }
         )
         type_occurrence[image_type] = occurrence_index + 1
 
     for item in items:
         item["provider"] = provider
-        item.update(visual_profile_for_item(controls, item))
-        item["prompt"] = compose_prompt(title, summary, controls, item, audience)
+        item["article_visual_strategy"] = {
+            "visual_direction": article_strategy.get("visual_direction", ""),
+            "style_family": article_strategy.get("style_family", ""),
+            "content_mode": article_strategy.get("content_mode", ""),
+            "type_bias": article_strategy.get("type_bias", {}),
+        }
+        item.update(visual_profile_for_item(effective_controls, item))
+        item["style_reason"] = item.get("style_reason") or "按文章视觉策略自动决定。"
+        item["prompt"] = compose_prompt(title, summary, effective_controls, item, audience)
         item["revised_prompt"] = item["prompt"]
         item["asset_path"] = None
         item["source_meta"] = {}
@@ -3809,19 +4180,31 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         "article_char_count": cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
         "planned_inline_count": len(inline_sections),
         "requested_inline_count": inline_limit,
-        "density_mode": controls.get("density", "balanced"),
-        "layout_family": controls.get("layout_family", ""),
+        "density_mode": effective_controls.get("density", "balanced"),
+        "layout_family": effective_controls.get("layout_family", ""),
         "planning_shortfall_reason": diagnostics["planning_shortfall_reason"],
         "skipped_sections": diagnostics["skipped_sections"],
         "forced_sections": diagnostics["forced_sections"],
-        "image_controls": controls,
+        "image_controls": effective_controls,
+        "user_image_controls": controls,
+        "article_visual_strategy": {
+            "visual_direction": article_strategy.get("visual_direction", ""),
+            "style_family": article_strategy.get("style_family", ""),
+            "content_mode": article_strategy.get("content_mode", ""),
+            "style_mode": article_strategy.get("style_mode", ""),
+            "type_bias": article_strategy.get("type_bias", {}),
+            "decision_reasoning": article_strategy.get("decision_reasoning", []),
+            "explicit_overrides": article_strategy.get("explicit_overrides", []),
+        },
         "items": items,
         "generated_at": now_iso(),
     }
     write_json(workspace / "image-plan.json", plan)
-    write_image_outline_artifacts(workspace, title, audience, controls, plan)
+    write_json(workspace / "image-strategy.json", plan["article_visual_strategy"])
+    write_image_outline_artifacts(workspace, title, audience, effective_controls, plan)
     manifest["image_provider"] = provider
     manifest["image_plan_path"] = "image-plan.json"
+    manifest["image_strategy_path"] = "image-strategy.json"
     manifest["image_outline_path"] = "image-outline.json"
     manifest["image_outline_markdown_path"] = "image-outline.md"
     manifest["image_prompt_dir"] = "prompts/images"
@@ -4460,14 +4843,40 @@ def replace_local_images(
 def resolve_wechat_credentials(required: bool) -> tuple[str | None, str | None, list[str]]:
     app_id = os.getenv("WECHAT_APP_ID")
     app_secret = os.getenv("WECHAT_APP_SECRET")
+
+    # Optional fallback: allow loading credentials from a local config file so users
+    # don't have to export env vars in every shell session. Env vars still take
+    # precedence. The file lives under APPDATA by default to avoid accidental commits.
+    if not app_id or not app_secret:
+        cred_path = wechat_credential_path()
+        if cred_path.exists():
+            try:
+                payload = read_json(cred_path, default={}) or {}
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                if not app_id:
+                    app_id = str(payload.get("WECHAT_APP_ID") or payload.get("app_id") or "").strip() or None
+                if not app_secret:
+                    app_secret = str(payload.get("WECHAT_APP_SECRET") or payload.get("app_secret") or "").strip() or None
     missing = []
     if not app_id:
         missing.append("WECHAT_APP_ID")
     if not app_secret:
         missing.append("WECHAT_APP_SECRET")
     if required and missing:
-        raise SystemExit(f"缺少微信发布环境变量：{', '.join(missing)}")
+        raise SystemExit(
+            "缺少微信发布配置："
+            + ", ".join(missing)
+            + "。请设置环境变量 WECHAT_APP_ID/WECHAT_APP_SECRET，"
+            + f"或在 {wechat_credential_path()} 中填写同名字段。"
+        )
     return app_id, app_secret, missing
+
+
+def wechat_credential_path() -> Path:
+    base = Path(os.getenv("APPDATA") or Path.home() / "AppData" / "Roaming")
+    return base / "wechat-article-studio" / "wechat.json"
 
 
 def wechat_draft_batchget(access_token: str, offset: int = 0, count: int = WECHAT_BATCHGET_COUNT, no_content: int = 0) -> dict[str, Any]:

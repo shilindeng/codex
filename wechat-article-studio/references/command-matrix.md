@@ -60,6 +60,7 @@
   - 默认进入“多轮回炉”：每轮 `review -> score -> revise(promote) -> 再 review/score`，最多 `--max-revision-rounds` 轮；最终保留最佳稿并在 `score-report` 中记录 `revision_rounds/best_round/stop_reason`
 - 常用图片参数：
   - `--image-preset`
+  - `--image-style-mode`
   - `--image-density`
   - `--image-layout-family`
   - `--inline-count`
@@ -76,6 +77,7 @@
 - 失败条件：发布前置条件不满足，或自动补全过程失败
 - 常用图片参数：
   - `--image-preset`
+  - `--image-style-mode`
   - `--image-density`
   - `--image-layout-family`
   - `--inline-count`
@@ -137,14 +139,18 @@
 
 ## `plan-images`
 
-- 输入：`--workspace [--provider] [--image-preset] [--image-density] [--image-layout-family] [--inline-count]`
+- 输入：`--workspace [--provider] [--image-preset] [--image-style-mode] [--image-density] [--image-layout-family] [--inline-count]`
 - 依赖：`article.md` 或当前活跃正文存在
 - 输出：
+  - `image-strategy.json`
   - `image-plan.json`
   - `image-outline.json`
   - `image-outline.md`
   - `prompts/images/*.md`
 - 失败条件：找不到正文，或图片 provider 不可用
+- 说明：
+  - 未显式传入图片主题/风格/类型时，会先自动生成文章级视觉策略，再决定整篇图片的视觉方向、风格家族、内容模式与类型倾向。
+  - `image-plan.json` 中会写入 `article_visual_strategy`，并为每张图补充 `decision_source / type_reason / style_reason`。
 
 ## `generate-images`
 

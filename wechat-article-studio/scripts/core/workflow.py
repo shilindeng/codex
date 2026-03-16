@@ -748,6 +748,7 @@ def cmd_verify_draft(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace).resolve() if args.workspace else Path.cwd().resolve()
     provider = active_text_provider()
+    wechat_app_id, wechat_app_secret, _ = legacy.resolve_wechat_credentials(required=False)
     report = {
         "python": {"version": legacy.sys.version.split()[0], "ok": legacy.sys.version_info >= (3, 10)},
         "workspace": {
@@ -773,8 +774,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "gemini-web": legacy.doctor_provider_status("gemini-web"),
         },
         "wechat": {
-            "has_app_id": bool(legacy.os.getenv("WECHAT_APP_ID")),
-            "has_app_secret": bool(legacy.os.getenv("WECHAT_APP_SECRET")),
+            "has_app_id": bool(wechat_app_id),
+            "has_app_secret": bool(wechat_app_secret),
+            "credential_path": str(getattr(legacy, "wechat_credential_path", lambda: "")()),
         },
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
