@@ -17,6 +17,8 @@ MANIFEST_STATUS_DEFAULTS = {
     "render_status": "not_started",
     "publish_status": "not_started",
     "verify_status": "not_started",
+    "content_mode": "tech-balanced",
+    "wechat_header_mode": "drop-title",
 }
 
 ARTIFACT_DEFAULTS = {

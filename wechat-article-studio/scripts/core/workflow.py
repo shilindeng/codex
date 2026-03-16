@@ -43,6 +43,26 @@ from publishers.wechat import cmd_publish as wechat_publish
 from publishers.wechat import cmd_verify_draft as wechat_verify_draft
 
 PUBLISH_MIN_CREDIBILITY_SCORE = 6
+CONTENT_MODE_CHOICES = ("tech-balanced", "tech-credible", "viral")
+WECHAT_HEADER_MODE_CHOICES = ("keep", "drop-title", "drop-title-summary")
+
+
+def normalize_content_mode(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in CONTENT_MODE_CHOICES else "tech-balanced"
+
+
+def normalize_wechat_header_mode(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in WECHAT_HEADER_MODE_CHOICES else "drop-title"
+
+
+def persist_runtime_preferences(manifest: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    manifest["content_mode"] = normalize_content_mode(getattr(args, "content_mode", None) or manifest.get("content_mode"))
+    manifest["wechat_header_mode"] = normalize_wechat_header_mode(
+        getattr(args, "wechat_header_mode", None) or manifest.get("wechat_header_mode")
+    )
+    return manifest
 
 
 def active_text_provider():
@@ -97,9 +117,15 @@ def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[
     failed_gates = [name for name, ok in quality_gates.items() if not ok]
     if failed_gates:
         blockers.append(f"质量门槛未通过：{'、'.join(failed_gates)}")
-    credibility_score = score_dimension_value(report, "可信度与检索支撑")
-    if credibility_score < PUBLISH_MIN_CREDIBILITY_SCORE:
-        blockers.append(f"可信度与检索支撑得分过低（{credibility_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
+    if str(report.get("score_profile") or "") in {"tech-balanced", "tech-credible"}:
+        evidence_score = score_dimension_value(report, "技术准确与证据")
+        min_score = 12 if str(report.get("score_profile")) == "tech-balanced" else 14
+        if evidence_score < min_score:
+            blockers.append(f"技术准确与证据得分过低（{evidence_score}/{min_score}）")
+    else:
+        credibility_score = score_dimension_value(report, "可信度与检索支撑")
+        if credibility_score < PUBLISH_MIN_CREDIBILITY_SCORE:
+            blockers.append(f"可信度与检索支撑得分过低（{credibility_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
     return blockers
 
 
@@ -433,6 +459,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
 def cmd_outline(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     provider = require_live_text_provider("outline")
     research = load_research(workspace)
@@ -448,6 +475,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
             "titles": ideation.get("titles") or [],
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
         }
     )
     outline = normalize_outline_payload(
@@ -459,6 +487,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
             "direction": manifest.get("direction") or research.get("angle") or "",
             "research": research,
             "style_signals": manifest.get("style_signals") or [],
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
         },
     )
     outline.setdefault("title", selected_title)
@@ -466,11 +495,13 @@ def cmd_outline(args: argparse.Namespace) -> int:
     ideation["outline"] = outline.get("sections") or []
     ideation["outline_meta"] = outline
     ideation["viral_blueprint"] = outline.get("viral_blueprint") or {}
+    ideation["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
     ideation["updated_at"] = now_iso()
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = selected_title
     manifest["outline"] = [item.get("heading", "") for item in outline.get("sections") or []]
     manifest["viral_blueprint"] = outline.get("viral_blueprint") or {}
+    manifest["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
     update_stage(manifest, "outline", "outline_status")
     save_manifest(workspace, manifest)
     print(json.dumps(outline, ensure_ascii=False, indent=2))
@@ -480,6 +511,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
 def cmd_write(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     provider = require_live_text_provider("write")
     research = load_research(workspace)
@@ -498,6 +530,7 @@ def cmd_write(args: argparse.Namespace) -> int:
             "direction": manifest.get("direction") or research.get("angle") or "",
             "research": research,
             "style_signals": manifest.get("style_signals") or [],
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
         },
     )
     result = provider.generate_article(
@@ -510,8 +543,10 @@ def cmd_write(args: argparse.Namespace) -> int:
             "research": research,
             "outline": outline_meta or {"sections": ideation.get("outline") or []},
             "viral_blueprint": outline_meta.get("viral_blueprint") or current_viral_blueprint(workspace, manifest, ideation),
+            "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
         }
     )
     body = str(result.payload).strip()
@@ -526,6 +561,7 @@ def cmd_write(args: argparse.Namespace) -> int:
             "article_path": "article.md",
             "outline": [item.get("heading", "") for item in (outline_meta.get("sections") or [])],
             "viral_blueprint": outline_meta.get("viral_blueprint") or {},
+            "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "text_provider": result.provider,
             "text_model": result.model,
         }
@@ -539,6 +575,7 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -557,9 +594,11 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "summary": meta.get("summary") or manifest.get("summary") or extract_summary(body),
                 "article_body": body,
                 "viral_blueprint": blueprint,
+                "editorial_blueprint": (load_ideation(workspace).get("outline_meta") or {}).get("editorial_blueprint") or {},
                 "style_samples": manifest.get("style_sample_paths") or [],
                 "style_signals": manifest.get("style_signals") or [],
                 "revision_round": int(manifest.get("revision_round") or 1),
+                "content_mode": manifest.get("content_mode") or "tech-balanced",
             }
         )
         review_source = result.provider
@@ -671,6 +710,7 @@ def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) ->
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -1094,11 +1134,14 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
                 "direction": manifest.get("direction") or "",
                 "research": load_research(workspace),
                 "style_signals": manifest.get("style_signals") or [],
+                "content_mode": manifest.get("content_mode") or "tech-balanced",
             },
         )
         ideation["outline_meta"] = outline_meta
         ideation["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
+        ideation["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
         manifest["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
+        manifest["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
     elif not ideation.get("viral_blueprint") and not manifest.get("viral_blueprint"):
         blueprint = default_viral_blueprint(
             topic=str(manifest.get("topic") or title),
@@ -1112,6 +1155,7 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
         manifest["viral_blueprint"] = blueprint
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = title
+    manifest["content_mode"] = manifest.get("content_mode") or "tech-balanced"
     if outline_items:
         manifest["outline"] = outline_items
         update_stage(manifest, "outline", "outline_status")
@@ -1226,6 +1270,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "titles": ideation.get("titles") or [],
                 "style_samples": manifest.get("style_sample_paths") or [],
                 "style_signals": manifest.get("style_signals") or [],
+                "content_mode": manifest.get("content_mode") or "tech-balanced",
             }
         )
         outline_meta = normalize_outline_payload(
@@ -1237,6 +1282,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "direction": angle,
                 "research": research,
                 "style_signals": manifest.get("style_signals") or [],
+                "content_mode": manifest.get("content_mode") or "tech-balanced",
             },
         )
         if not outline_meta.get("sections"):
@@ -1245,12 +1291,14 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
         ideation["outline"] = outline_meta.get("sections") or []
         ideation["outline_meta"] = outline_meta
         ideation["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
+        ideation["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
         ideation["updated_at"] = now_iso()
         ideation["provider"] = outline_result.provider
         ideation["model"] = outline_result.model
         write_json(workspace / "ideation.json", ideation)
         manifest["outline"] = [item.get("heading", "") for item in outline_meta.get("sections") or []]
         manifest["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
+        manifest["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
         update_stage(manifest, "outline", "outline_status")
 
     article_result = provider.generate_article(
@@ -1263,8 +1311,10 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "research": research,
             "outline": outline_meta or {"sections": ideation.get("outline") or []},
             "viral_blueprint": outline_meta.get("viral_blueprint") or current_viral_blueprint(workspace, manifest, ideation),
+            "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
         }
     )
     body = str(article_result.payload).strip()
@@ -1341,6 +1391,7 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
 def cmd_score(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -1348,7 +1399,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     meta, body = split_frontmatter(read_text(article_path))
     body = legacy.strip_image_directives(body)
     title = legacy.infer_title(manifest, meta, body)
-    threshold = args.threshold or manifest.get("score_threshold") or VIRAL_SCORE_THRESHOLD
+    threshold = args.threshold or manifest.get("score_threshold")
     review = read_json(workspace / "review-report.json", default={}) or {}
     if not review:
         blueprint = current_viral_blueprint(workspace, manifest)
@@ -1363,7 +1414,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         title,
         body,
         manifest,
-        int(threshold),
+        int(threshold) if threshold is not None else None,
         review=review,
         revision_rounds=revision_rounds,
         stop_reason=str(manifest.get("stop_reason") or ""),
@@ -1395,7 +1446,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest["score_status"] = "done"
     save_manifest(workspace, manifest)
     print(json.dumps(report, ensure_ascii=False, indent=2))
-    if args.fail_below and report["total_score"] < threshold:
+    if args.fail_below and report["total_score"] < int(report.get("threshold") or VIRAL_SCORE_THRESHOLD):
         return 2
     return 0
 
@@ -1506,6 +1557,7 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
 def cmd_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     style_sample = list(getattr(args, "style_sample", []) or [])
     manifest = persist_style_samples(workspace, manifest, style_sample)
     save_manifest(workspace, manifest)
@@ -1568,6 +1620,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             accent_color=args.accent_color,
             layout_style=getattr(args, "layout_style", "auto"),
             input_format=getattr(args, "input_format", "auto"),
+            wechat_header_mode=getattr(args, "wechat_header_mode", "drop-title"),
         )
     )
     manifest = load_manifest(workspace)
@@ -1595,6 +1648,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_hosted_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
     style_sample = list(getattr(args, "style_sample", []) or [])
     manifest = persist_style_samples(workspace, manifest, style_sample)
     save_manifest(workspace, manifest)
@@ -1650,6 +1704,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
             accent_color=args.accent_color,
             layout_style=getattr(args, "layout_style", "auto"),
             input_format=getattr(args, "input_format", "auto"),
+            wechat_header_mode=getattr(args, "wechat_header_mode", "drop-title"),
         )
     )
     manifest = load_manifest(workspace)
@@ -1684,6 +1739,8 @@ def cmd_all(args: argparse.Namespace) -> int:
             source_url=[],
             title=None,
             title_count=3,
+            content_mode=args.content_mode,
+            wechat_header_mode=args.wechat_header_mode,
             image_provider=args.provider,
             image_preset=args.image_preset,
             image_style_mode=getattr(args, "image_style_mode", None),
@@ -1767,6 +1824,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--source-url", action="append", default=[])
     run.add_argument("--title")
     run.add_argument("--title-count", type=int, default=3)
+    run.add_argument("--content-mode", choices=CONTENT_MODE_CHOICES, default="tech-balanced")
+    run.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
     run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")
     run.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     run.add_argument("--to", choices=["render", "publish"], default="render")
@@ -1829,6 +1888,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--outline-file")
     hosted_run.add_argument("--article-file")
     hosted_run.add_argument("--summary")
+    hosted_run.add_argument("--content-mode", choices=CONTENT_MODE_CHOICES, default="tech-balanced")
+    hosted_run.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
     hosted_run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")
     hosted_run.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
@@ -1937,6 +1998,7 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--accent-color", default="#0F766E")
     render.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
     render.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
+    render.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
     render.set_defaults(func=legacy_render)
 
     publish = subparsers.add_parser("publish", help="发布到微信公众号草稿箱；正式发布需显式确认")
@@ -1980,6 +2042,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--custom-visual-brief")
     all_cmd.add_argument("--inline-count", type=int, default=0)
     all_cmd.add_argument("--threshold", type=int)
+    all_cmd.add_argument("--content-mode", choices=CONTENT_MODE_CHOICES, default="tech-balanced")
+    all_cmd.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
     all_cmd.add_argument("--dry-run-images", action="store_true")
     all_cmd.add_argument("--publish", action="store_true")
     all_cmd.add_argument("--dry-run-publish", action="store_true")

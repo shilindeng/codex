@@ -685,9 +685,16 @@ def extract_title_from_body(body: str) -> str | None:
     return None
 
 
+def _normalize_title_match(text: str) -> str:
+    value = re.sub(r"^#\s+", "", text or "").strip()
+    value = value.strip("《》\"'“”‘’")
+    value = re.sub(r"[：:()\[\]（）\-—_·`~!@#$%^&*+=|\\/<>,.?？，。！、\s]+", "", value)
+    return value.lower()
+
+
 def strip_leading_h1(body: str, title: str) -> str:
     lines = body.splitlines()
-    if lines and lines[0].strip() == f"# {title}".strip():
+    if lines and _normalize_title_match(lines[0]) == _normalize_title_match(title):
         return "\n".join(lines[1:]).lstrip("\n")
     return body
 
@@ -3357,7 +3364,63 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     return 0
 
 
-def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[str, Any]:
+def _has_explicit_image_controls(args: Any) -> bool:
+    keys = [
+        "image_preset",
+        "image_style_mode",
+        "image_preset_cover",
+        "image_preset_infographic",
+        "image_preset_inline",
+        "image_layout_family",
+        "image_theme",
+        "image_style",
+        "image_type",
+        "image_mood",
+        "custom_visual_brief",
+    ]
+    return any(str(getattr(args, key, "") or "").strip() for key in keys)
+
+
+def infer_article_category_label(title: str, summary: str, body: str) -> str:
+    corpus = f"{title}\n{summary}\n{body}"
+    if re.search(r"教程|指南|手把手|实操|步骤|SOP|怎么做|如何|模板|清单", corpus):
+        return "教程实操"
+    if re.search(r"案例|复盘|拆解|项目|公司|产品", corpus):
+        return "案例拆解"
+    if re.search(r"故事|经历|生活|关系|成长|焦虑|情绪", corpus):
+        return "叙事观察"
+    return "分析评论"
+
+
+def _candidate_keywords(text: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9_\-/\.]{2,}|[\u4e00-\u9fff]{2,8}", text or "")
+    stop = {"这篇文章", "真正", "问题", "内容", "方法", "步骤", "清单", "最后", "为什么", "如果", "因为", "所以", "这个", "那个", "我们", "你们", "他们"}
+    output: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        value = str(token).strip()
+        if not value or value in stop or value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+        if len(output) >= 6:
+            break
+    return output
+
+
+def item_native_aspect_ratio(item: dict[str, Any]) -> str:
+    return "2:3" if item.get("aspect_ratio") == "3:4" else "3:2"
+
+
+def item_safe_crop_policy(item: dict[str, Any]) -> str:
+    if item.get("type") == "封面图":
+        return "Keep the focal object within the central safe zone for WeChat thumbnail and header crops."
+    if item.get("type") in {"信息图", "对比图", "流程图"}:
+        return "Keep key structure away from the outer 8% edges so mobile crops do not break the reading path."
+    return "Keep the main subject and symbolic cues centered enough to survive responsive cropping."
+
+
+def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title: str = "", summary: str = "", body: str = "") -> dict[str, Any]:
     current = dict(existing or {})
     raw_style_mode = getattr(args, "image_style_mode", None) or current.get("style_mode") or ""
     normalized_style_mode = str(raw_style_mode).strip().lower().replace("_", "-")
@@ -3434,6 +3497,14 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any) -> dict[s
         base["preset_infographic_label"] = IMAGE_STYLE_PRESETS.get(base["preset_infographic"], {}).get("label", "")
     if base.get("preset_inline"):
         base["preset_inline_label"] = IMAGE_STYLE_PRESETS.get(base["preset_inline"], {}).get("label", "")
+    if _has_explicit_image_controls(args):
+        base["decision_source"] = "explicit"
+    elif title or summary or body:
+        base["decision_source"] = "auto"
+        base["article_category"] = infer_article_category_label(title, summary, body)
+        base["auto_reason"] = f"未显式指定图片参数，按文章内容自动选择；当前判定为 {base['article_category']}。"
+    else:
+        base["decision_source"] = current.get("decision_source") or ""
     return base
 
 
@@ -4094,14 +4165,14 @@ def image_planning_diagnostics(sections: list[dict[str, Any]], inline_sections: 
 def cmd_plan_images(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
-    controls = resolve_image_controls(manifest.get("image_controls"), args)
-    manifest["image_controls"] = controls
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"\u627e\u4e0d\u5230\u6587\u7ae0\u6587\u4ef6\uff1a{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
     title = infer_title(manifest, meta, body)
     summary = manifest.get("summary") or meta.get("summary") or extract_summary(body)
+    controls = resolve_image_controls(manifest.get("image_controls"), args, title=title, summary=summary, body=body)
+    manifest["image_controls"] = controls
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
     intro_blocks, sections = normalize_sections_for_images(body)
     article_strategy = infer_article_visual_strategy(title, summary, body, audience, controls, sections)
@@ -4207,15 +4278,36 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         }
         item.update(visual_profile_for_item(effective_controls, item))
         item["style_reason"] = item.get("style_reason") or "按文章视觉策略自动决定。"
+        item["semantic_focus"] = extract_summary(f"{item.get('section_heading') or ''} {item.get('section_excerpt') or ''}", 64)
+        item["keyword_glossary"] = _candidate_keywords(
+            " ".join(
+                [
+                    title,
+                    summary,
+                    str(item.get("section_heading") or ""),
+                    str(item.get("section_excerpt") or ""),
+                    str(item.get("anchor_block_excerpt") or ""),
+                ]
+            )
+        )
+        item["native_aspect_ratio"] = item_native_aspect_ratio(item)
+        item["safe_crop_policy"] = item_safe_crop_policy(item)
+        item["visual_reason"] = f"{item.get('type_reason', '')} {item.get('style_reason', '')}".strip()
         item["prompt"] = compose_prompt(title, summary, effective_controls, item, audience)
         item["revised_prompt"] = item["prompt"]
         item["asset_path"] = None
         item["source_meta"] = {}
 
+    decision_source = "explicit" if article_strategy.get("explicit_overrides") else "auto"
+    article_category = infer_article_category_label(title, summary, body)
+    auto_reason = "；".join(article_strategy.get("decision_reasoning") or []) or f"按文章内容自动判定为 {article_category}。"
     plan = {
         "title": title,
         "provider": provider,
         "strategy": "mixed-section-density",
+        "decision_source": decision_source,
+        "article_category": article_category,
+        "auto_reason": auto_reason,
         "article_char_count": cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
         "planned_inline_count": len(inline_sections),
         "requested_inline_count": inline_limit,
@@ -4247,6 +4339,8 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     manifest["image_outline_path"] = "image-outline.json"
     manifest["image_outline_markdown_path"] = "image-outline.md"
     manifest["image_prompt_dir"] = "prompts/images"
+    manifest["image_decision_source"] = decision_source
+    manifest["image_article_category"] = article_category
     save_manifest(workspace, manifest)
     safe_print_json(plan)
     return 0

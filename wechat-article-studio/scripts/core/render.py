@@ -23,6 +23,75 @@ from core.manifest import ensure_workspace, load_manifest, relative_posix, save_
 from core.wechat_fragment import render_wechat_fragment
 
 
+_TECH_MASK_PREFIX = "__WXMASK"
+_TECH_TOKEN_PATTERNS = [
+    re.compile(r"(?<!`)(--[a-z0-9][a-z0-9-]*)"),
+    re.compile(r"(?<!`)\b([A-Z][A-Z0-9_]{2,})\b"),
+    re.compile(r"(?<![`\\w])((?:[A-Za-z]:\\|/)[\w.\-/\\]+)"),
+    re.compile(r"(?<![`\\w])((?:/v?\d+)?/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)"),
+    re.compile(r"(?<!`)\b([a-z0-9]+(?:[._/-][a-z0-9]+){1,})\b"),
+    re.compile(r"(?<!`)\b([A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+|[a-z]+_[a-z0-9_]+)\b"),
+]
+
+
+def _mask_technical_spans(text: str) -> tuple[str, list[str]]:
+    masks: list[str] = []
+
+    def replacer(match: re.Match[str]) -> str:
+        token = f"{_TECH_MASK_PREFIX}{len(masks)}__"
+        masks.append(match.group(0))
+        return token
+
+    masked = re.sub(r"!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?://[^\s)]+", replacer, text)
+    return masked, masks
+
+
+def _restore_technical_spans(text: str, masks: list[str]) -> str:
+    restored = text
+    for index, value in enumerate(masks):
+        restored = restored.replace(f"{_TECH_MASK_PREFIX}{index}__", value)
+    return restored
+
+
+def _wrap_technical_tokens(segment: str) -> str:
+    updated = segment
+    for pattern in _TECH_TOKEN_PATTERNS:
+        parts = re.split(r"(`[^`]+`)", updated)
+        rebuilt: list[str] = []
+        for part in parts:
+            if part.startswith("`") and part.endswith("`"):
+                rebuilt.append(part)
+            else:
+                rebuilt.append(pattern.sub(lambda m: f"`{m.group(1)}`", part))
+        updated = "".join(rebuilt)
+    return updated
+
+
+def highlight_technical_terms_markdown(body: str) -> str:
+    lines = (body or "").splitlines()
+    in_code = False
+    output: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_code = not in_code
+            output.append(line)
+            continue
+        if in_code or re.match(r"^\s*\|.*\|\s*$", line) or re.match(r"^\s*\|?[\-: ]+\|[\-|: ]*$", line):
+            output.append(line)
+            continue
+        parts = re.split(r"(`[^`]+`)", line)
+        rebuilt: list[str] = []
+        for part in parts:
+            if not part or (part.startswith("`") and part.endswith("`")):
+                rebuilt.append(part)
+                continue
+            masked, masks = _mask_technical_spans(part)
+            rebuilt.append(_restore_technical_spans(_wrap_technical_tokens(masked), masks))
+        output.append("".join(rebuilt))
+    return "\n".join(output)
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -42,7 +111,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     input_format_arg = getattr(args, "input_format", "auto")
     fmt = detect_input_format(input_path.name, str(input_format_arg), body)
     if fmt == "md":
-        content_source = body
+        content_source = highlight_technical_terms_markdown(body)
         content_html = markdown_to_html(content_source)
     else:
         content_source = body
@@ -90,6 +159,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     write_text(output_path, rendered)
 
     # WeChat fragment uses full inline styles and a safe tag whitelist.
+    wechat_header_mode = str(getattr(args, "wechat_header_mode", "") or manifest.get("wechat_header_mode") or "drop-title")
     wechat_fragment = render_wechat_fragment(
         content_html,
         title=title,
@@ -97,6 +167,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         theme=theme,
         accent=accent_decision.accent,
         chosen_style=chosen_style,
+        header_mode=wechat_header_mode,
     )
 
     wechat_output = workspace / (Path(output_path.name).stem + ".wechat.html")
@@ -109,6 +180,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     manifest["accent_color"] = accent_decision.accent
     manifest["accent_color_reason"] = accent_decision.reason
     manifest["render_input_format"] = fmt
+    manifest["wechat_header_mode"] = wechat_header_mode
     save_manifest(workspace, manifest)
     print(str(output_path))
     return 0
