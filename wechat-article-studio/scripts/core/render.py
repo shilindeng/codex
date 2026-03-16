@@ -42,7 +42,7 @@ def _mask_technical_spans(text: str) -> tuple[str, list[str]]:
         masks.append(match.group(0))
         return token
 
-    masked = re.sub(r"!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?://[^\s)]+", replacer, text)
+    masked = re.sub(r"\[\![A-Za-z]+\]|!\[[^\]]*\]\([^)]+\)|\[[^\]]+\]\([^)]+\)|https?://[^\s)]+", replacer, text)
     return masked, masks
 
 

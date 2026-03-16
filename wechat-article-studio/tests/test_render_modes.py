@@ -13,6 +13,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 import legacy_studio as legacy  # noqa: E402
+from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
 
 
@@ -76,6 +77,17 @@ class RenderModeTests(unittest.TestCase):
         body = "# 《OpenAI：API-上手》\n\n正文内容"
         stripped = legacy.strip_leading_h1(body, "OpenAI API 上手")
         self.assertEqual(stripped, "正文内容")
+
+    def test_auto_layout_uses_article_archetype(self):
+        signals = analyze_content_signals("这是一个观点分析，包含一段引用。\n\n> 一句判断", "md")
+        decision = choose_layout_style("auto", signals, {"viral_blueprint": {"article_archetype": "commentary"}})
+        self.assertEqual(decision.style, "magazine")
+
+    def test_commentary_with_inline_code_does_not_force_tech_theme(self):
+        source = "这是一篇评论稿，讨论 `Chrome DevTools MCP`、`Playwright`、`CDP`、`Console`、`Network`、`DOM`、`Trace`、`Profiler`。"
+        signals = analyze_content_signals(source, "md")
+        decision = choose_layout_style("auto", signals, {"viral_blueprint": {"article_archetype": "commentary"}})
+        self.assertEqual(decision.style, "magazine")
 
 
 if __name__ == "__main__":

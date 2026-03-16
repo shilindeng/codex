@@ -253,6 +253,21 @@ IMAGE_PRESET_TO_ACCENT: dict[str, str] = {
 
 
 _AUDIENCE_BUSINESS_KEYWORDS = ("职场", "运营", "商业", "管理", "企业", "老板", "创业", "B端")
+_ARCHETYPE_TO_LAYOUT_STYLE = {
+    "commentary": "magazine",
+    "tutorial": "tech",
+    "case-study": "business",
+    "narrative": "warm",
+}
+
+
+def _article_archetype(manifest: dict[str, Any]) -> str:
+    blueprint = manifest.get("viral_blueprint") or {}
+    if isinstance(blueprint, dict):
+        value = _normalize_key(str(blueprint.get("article_archetype") or ""))
+        if value:
+            return value
+    return ""
 
 
 def detect_input_format(path_name: str, input_format: str, text: str) -> str:
@@ -331,9 +346,12 @@ def choose_layout_style(requested: str, content_signals: ContentSignals, manifes
             return LayoutDecision(style="clean", reason=f"unknown_layout_style={req} -> clean")
         return LayoutDecision(style=req, reason="explicit_layout_style")
 
+    archetype = _article_archetype(manifest)
     # Rule 2: tech override for code-heavy content.
-    if content_signals.has_code_block or content_signals.inline_code_count >= 8:
-        return LayoutDecision(style="tech", reason="code_detected -> tech")
+    if content_signals.has_code_block:
+        return LayoutDecision(style="tech", reason="code_block_detected -> tech")
+    if content_signals.inline_code_count >= 12 and archetype in {"", "tutorial"}:
+        return LayoutDecision(style="tech", reason=f"inline_code_count={content_signals.inline_code_count} archetype={archetype or 'none'} -> tech")
 
     image_controls = manifest.get("image_controls") or {}
     preset = _normalize_key(str(image_controls.get("preset") or ""))
@@ -342,6 +360,8 @@ def choose_layout_style(requested: str, content_signals: ContentSignals, manifes
             str(image_controls.get("preset_cover") or image_controls.get("preset_infographic") or image_controls.get("preset_inline") or "")
         )
     base = IMAGE_PRESET_TO_LAYOUT_STYLE.get(preset, "clean")
+    if archetype in _ARCHETYPE_TO_LAYOUT_STYLE:
+        base = _ARCHETYPE_TO_LAYOUT_STYLE[archetype]
 
     audience = str(manifest.get("audience") or "")
     audience_business = any(keyword in audience for keyword in _AUDIENCE_BUSINESS_KEYWORDS)
@@ -352,6 +372,15 @@ def choose_layout_style(requested: str, content_signals: ContentSignals, manifes
             reason=f"boost_business(table={content_signals.has_table},audience={audience_business}) preset={preset or 'none'} base={base}",
         )
 
+    if archetype == "tutorial" and content_signals.list_item_count >= 4:
+        return LayoutDecision(style="tech", reason=f"archetype={archetype} list_items={content_signals.list_item_count} -> tech")
+
+    if archetype == "narrative":
+        return LayoutDecision(style="warm", reason=f"archetype={archetype} -> warm")
+
+    if archetype == "commentary" and content_signals.blockquote_count >= 1:
+        return LayoutDecision(style="magazine", reason=f"archetype={archetype} quote_detected -> magazine")
+
     if content_signals.list_item_count >= 8 or content_signals.blockquote_count >= 2:
         boosted = "cards"
         return LayoutDecision(
@@ -359,7 +388,7 @@ def choose_layout_style(requested: str, content_signals: ContentSignals, manifes
             reason=f"boost_cards(list_items={content_signals.list_item_count},quotes={content_signals.blockquote_count}) preset={preset or 'none'} base={base}",
         )
 
-    return LayoutDecision(style=base, reason=f"preset={preset or 'none'} -> {base}")
+    return LayoutDecision(style=base, reason=f"preset={preset or 'none'} archetype={archetype or 'none'} -> {base}")
 
 
 @dataclass(frozen=True)
