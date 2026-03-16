@@ -13,12 +13,43 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 
-from core.viral import build_score_report  # noqa: E402
+from core.viral import build_score_report, infer_article_archetype, normalize_outline_payload  # noqa: E402
 from core.workflow import collect_publish_blockers, _run_revision_loop  # noqa: E402
 import legacy_studio as legacy  # noqa: E402
+from providers.text.openai_compatible import placeholder_article, placeholder_outline  # noqa: E402
 
 
 class ViralEngineTests(unittest.TestCase):
+    def test_commentary_topics_do_not_default_to_action_template_outline(self):
+        context = {
+            "topic": "如果 Gemini 开始上广告，AI 免费时代可能真的要变了",
+            "selected_title": "如果 Gemini 开始上广告，AI 免费时代可能真的要变了",
+            "audience": "大众读者",
+            "direction": "",
+            "research": {},
+        }
+        outline = normalize_outline_payload({}, context)
+        headings = [item["heading"] for item in outline.get("sections") or []]
+        self.assertEqual(outline.get("article_archetype"), "commentary")
+        self.assertNotIn("把判断变成动作", headings)
+        self.assertNotIn("最后把动作落地", headings)
+        self.assertNotEqual(outline.get("ending_mode"), "行动提示")
+
+    def test_tutorial_topics_can_still_use_tutorial_archetype(self):
+        archetype = infer_article_archetype(
+            topic="RAG 实战指南",
+            title="RAG 实战指南：从 0 到 1 搭好检索增强流程",
+            angle="",
+            research={},
+        )
+        self.assertEqual(archetype, "tutorial")
+
+    def test_placeholder_article_avoids_fixed_conclusion_and_checklist(self):
+        title = "AI 产品为什么越来越像内容战争"
+        article = placeholder_article(title, placeholder_outline(title), "公众号读者")
+        self.assertNotIn("先说结论", article)
+        self.assertNotIn("最后给你一个可执行清单", article)
+
     def test_score_report_has_quality_gates_and_can_pass(self):
         title = "为什么你越学越焦虑：真相是别再堆信息"
         body = "\n\n".join(

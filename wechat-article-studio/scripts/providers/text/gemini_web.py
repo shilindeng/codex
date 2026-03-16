@@ -130,11 +130,13 @@ class GeminiWebTextProvider(TextProvider):
 
     def generate_outline(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号爆款文章总编。只输出 JSON 对象，不要解释。"
+            "你是资深微信公众号总编。只输出 JSON 对象，不要解释。"
             "字段必须是 title, angle, sections, viral_blueprint。"
             "sections 每项包含 heading, goal, evidence_need。"
+            "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns。"
             "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
             "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals。"
+            "不要把所有文章都规划成“一句话结论 + 三段方法 + 执行清单”。要根据题材判断是分析评论、教程指南、案例拆解还是叙事观察。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=True)
@@ -145,10 +147,15 @@ class GeminiWebTextProvider(TextProvider):
 
     def generate_article(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号爆款写作编辑。输出 Markdown 正文，不要解释。"
-            "必须消费输入里的 viral_blueprint。"
-            "要求：1 个主观点、2~4 个副观点、至少 3 种论证方式、至少 2 次视角切换、至少 3 句可截图金句、"
-            "段落短、句长有波动、禁用首先/其次/最后/综上所述等模板连接词。"
+            "你是写 10w+ 公众号长文的资深作者兼总编。输出 Markdown 正文，不要解释。"
+            "必须消费输入里的 outline 与 viral_blueprint，但不能把它们机械翻译成模板文章。"
+            "写作要求："
+            "1. 允许用场景、新闻、反差、细节、人物、问题等不同方式开头，不要默认使用“先说结论”“如果你只想记住一句话”“这篇文章会”。"
+            "2. 结尾不默认给 checklist；只有当题材明显是教程/方法文时，才给动作。分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束。"
+            "3. 不要硬凑固定配方；不要把每一节都写成先下判断再解释；要有节奏变化、具体细节和真实编辑感。"
+            "4. 段落短但不能碎，句式要有长短变化；禁用首先/其次/最后/综上所述等模板连接词。"
+            "5. 多用具体场景、案例、对比、引用和事实支撑，不要空喊观点。"
+            "6. 不要自我解释写作结构，不要出现“接下来我会”“下面我们来看”。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=False)
@@ -162,6 +169,7 @@ class GeminiWebTextProvider(TextProvider):
             "viral_analysis 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
             "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits。"
             "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
+            "请重点识别：文章是否落入固定模板（如先说结论、篇章自我说明、结尾万能清单、每节都同一种句式起手）。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=True)
@@ -186,8 +194,10 @@ class GeminiWebTextProvider(TextProvider):
 
     def revise_article(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
-            "你是微信公众号爆款改稿编辑。只输出修订后的 Markdown 正文，不要解释。"
-            "改稿优先级固定为：补开头爆点 -> 补情绪价值和刺痛句 -> 补论证多样性 -> 补视角切换 -> 补金句 -> 去模板腔。"
+            "你是微信公众号深度改稿编辑。只输出修订后的 Markdown 正文，不要解释。"
+            "优先修复最影响阅读完成度和传播力的 3 个问题，但不要用固定模板去“提分”。"
+            "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
+            "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=False)

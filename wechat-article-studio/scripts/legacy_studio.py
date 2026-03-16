@@ -159,6 +159,11 @@ AI_STYLE_PHRASES = [
     "值得一提的是",
     "归根结底",
     "在当今社会",
+    "接下来，我会",
+    "接下来我们来看",
+    "这篇文章会",
+    "如果你只想记住一句话",
+    "最后给你一个可执行清单",
 ]
 
 IMAGE_STYLE_PRESETS: dict[str, dict[str, str]] = {
@@ -1757,9 +1762,11 @@ def intro_score(title: str, intro: str) -> tuple[int, str]:
         score += 1
     if title and any(word in intro for word in [title[:6], title[-6:]] if word.strip()):
         score += 1
-    if any(word in intro for word in ["故事", "场景", "冲突", "问题", "结果"]):
+    if any(word in intro for word in ["故事", "场景", "冲突", "问题", "结果", "消息", "细节", "那一刻", "刷到"]):
         score += 1
-    return min(score, 12), "前 2~4 段应快速建立好奇、痛点或结果期待。"
+    if "?" in intro or "？" in intro:
+        score += 1
+    return min(score, 12), "前 2~4 段应快速建立代入感、反差、问题或结果期待，但不等于统一用一句话结论开场。"
 
 
 def hook_score(title: str, intro: str, headings: list[dict[str, Any]]) -> tuple[int, str]:
@@ -1769,9 +1776,9 @@ def hook_score(title: str, intro: str, headings: list[dict[str, Any]]) -> tuple[
     score += min(2, count_occurrences(heading_text, HOOK_WORDS))
     if any(mark in intro for mark in ["?", "？"]):
         score += 1
-    if any(phrase in intro for phrase in ["先说结论", "先给答案", "结果是"]):
+    if any(phrase in intro for phrase in ["结果是", "但真正", "你可能", "那一刻", "刷到", "看到"]):
         score += 1
-    return min(score, 10), "钩子需要贯穿标题、导语和小标题，而不是只出现在第一句。"
+    return min(score, 10), "钩子需要贯穿标题、导语和小标题，但不该收敛成固定句式模板。"
 
 
 def quote_score(body: str) -> tuple[int, str, list[str]]:
@@ -1848,9 +1855,9 @@ def share_score(body: str, quotes: list[str]) -> tuple[int, str]:
     score = min(3, count_occurrences(body, SHARE_WORDS))
     if len(quotes) >= 2:
         score += 1
-    if re.search(r"(^|\n)1\.\s+", body, flags=re.M):
+    if re.search(r"(^|\n)1\.\s+", body, flags=re.M) and re.search(r"教程|指南|步骤|如何|怎么|清单", body):
         score += 1
-    return min(score, 5), "能被收藏或转发的内容，通常既有观点价值也有立即可用性。"
+    return min(score, 5), "能被收藏或转发的内容，既可能因为观点有复述价值，也可能因为它真的有用；不等于一律上清单。"
 
 
 def build_breakdown(title: str, body: str, headings: list[dict[str, Any]], source_urls: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -1908,16 +1915,25 @@ def rewrite_actions(breakdown: list[dict[str, Any]], title: str, body: str) -> t
         needs.append("补充来源、数据或案例出处，并在正文相关段落中自然融入可核验表述。")
     topic_hint = extract_summary(title + " " + body, 28)
     suggestions = {
-        "replacement_hook": f"大多数人以为 {topic_hint} 靠的是运气，但真正拉开差距的，往往是那些不容易被看见的底层动作。",
+        "opening_directions": [
+            f"从一个与 {topic_hint} 直接相关的具体场景切入，而不是直接下总结。",
+            "先立住反差或误判，再把判断慢一点抛出来。",
+            "如果题材允许，可以从最近发生的一条消息、一个细节或一个真实处境开场。",
+        ],
+        "ending_directions": [
+            "分析稿优先用判断或余味收束，不要默认上动作清单。",
+            "教程稿才考虑动作化结尾，而且动作要少、真、能开始。",
+            "结尾更适合回扣全文真正的分水岭，而不是重复目录。",
+        ],
         "sample_gold_quotes": [
-            f"{topic_hint} 不是信息不够，而是判断不够。",
-            "真正决定结果的，从来不是知道多少，而是你能否把关键动作重复到位。",
-            "当别人只盯着表面热闹时，高手已经开始搭建自己的长期优势。",
+            f"{topic_hint} 真正难的，从来不是知道更多，而是你愿不愿意重新校准自己的判断。",
+            "一篇有说服力的文章，真正值钱的不是信息量，而是它替读者省掉了多少误判。",
+            "当别人只盯着表面的热闹时，真正拉开差距的那条线，往往已经悄悄开始移动了。",
         ],
         "style_adjustments": [
-            "减少模板句，优先使用结论句、判断句和对比句。",
-            "让每个小节开头先给结论，再展开论证。",
-            "保留强态度，但避免空喊口号。",
+            "减少模板句，优先用场景、细节、对比和判断推进。",
+            "不同小节换不同进入方式，别每节都用同一种句式起手。",
+            "保留态度，但别把判断喊成口号。",
         ],
     }
     return needs[:5], suggestions
@@ -1997,7 +2013,7 @@ def cleanup_rewrite_text(text: str) -> str:
         r"总而言之": "说到底",
         r"总的来说": "说到底",
         r"归根结底": "说到底",
-        r"简而言之": "一句话总结：",
+        r"简而言之": "更关键的是，",
         r"值得注意的是": "更关键的是",
         r"需要指出的是": "先把话说清楚，",
         r"不可否认": "先别急着反驳，",
@@ -2038,9 +2054,9 @@ def cleanup_rewrite_markdown(body: str) -> str:
 def make_section_opener(heading: str, first_block: str, title: str) -> str:
     focus = extract_summary(first_block or heading or title, 24)
     if "为什么" in heading:
-        return f"先说结论：{focus} 之所以让人反复卡住，不是因为你不够努力，而是因为你看见的只是表层现象。"
+        return f"{focus} 看起来像一个表面问题，但真正让人反复卡住的，往往是更底层的判断没有被说透。"
     if any(word in heading for word in ["三件事", "方法", "怎么", "如何"]):
-        return f"真正有效的做法，不是把动作做多，而是把最关键的动作做到位。围绕“{heading}”，你至少要先抓住一条能立刻执行的主线。"
+        return f"真正有效的做法，不是把动作做多，而是先把最关键的顺序理清。围绕“{heading}”，这节更想讲清楚的是哪一步最不能做反。"
     return f"如果只从表面理解“{heading}”，很容易把力气花错地方。{focus}，才是这一部分真正想说明的问题。"
 
 
@@ -2048,29 +2064,48 @@ def build_rewritten_intro(title: str, intro_blocks: list[str], suggestions: dict
     audience = manifest.get("audience") or "公众号读者"
     direction = manifest.get("direction") or "这个主题"
     first_heading = sections[0]["heading"] if sections else title
-    paragraphs = [suggestions["replacement_hook"]]
+    opening_directions = list(suggestions.get("opening_directions") or [])
+    lead = intro_blocks[0] if intro_blocks else ""
+    hook = ""
+    if lead:
+        hook = cleanup_rewrite_text(lead)
+    if not hook:
+        hook = f"很多人谈 {direction} 时，往往只盯着最热闹的那层变化，但真正决定结果的，常常是那条更慢、也更难被看见的线。"
+    paragraphs = [hook]
     if "情绪共鸣" in low_dims:
         paragraphs.append("如果你也在被新工具推着跑、却又隐约担心自己会被替代，这种焦虑并不丢人，它恰恰说明你开始认真看待自己的长期价值了。")
-    paragraphs.append(f"这篇文章不打算重复那些正确但空泛的大道理，而是围绕“{direction}”把问题拆开：为什么人会越学越焦虑，真正该补的能力是什么，以及从今天开始你能先做哪一步。")
-    if intro_blocks:
-        tail = cleanup_rewrite_text(intro_blocks[0])
+    if opening_directions:
+        paragraphs.append(f"这类题目最怕的，不是信息不够，而是写法太像模板。围绕“{direction}”，更值得展开的是：{opening_directions[0]}。")
+    else:
+        paragraphs.append(f"围绕“{direction}”，这篇文章更想把那些不那么显眼、却更影响结果的逻辑一层层翻出来。")
+    if len(intro_blocks) > 1:
+        tail = cleanup_rewrite_text(intro_blocks[1])
         if tail and tail not in paragraphs[-1]:
             paragraphs.append(tail)
-    paragraphs.append(f"接下来，我会从“{first_heading}”开始，把最容易被忽略、却最影响结果的那层逻辑讲透，尽量让 {audience} 读完就能立刻行动。")
+    else:
+        paragraphs.append(f"如果这件事和 {audience} 的日常判断有关，那真正值得读下去的，不是标准答案，而是“{first_heading}”背后的那层分水岭。")
     return paragraphs[:4]
 
 
-def build_execution_section(sections: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    bullets = []
-    for section in sections[:3]:
-        bullets.append(f"先把“{section['heading']}”里最重要的一条动作写下来，并在 24 小时内执行一次。")
-    if not bullets:
-        bullets = [
-            "先把这篇文章的核心判断用一句话复述出来。",
-            "再选一个最容易开始的动作，今天就做。",
-            "一周后复盘：什么动作真的带来了变化。",
-        ]
-    return "最后给你一个可执行清单", bullets
+def build_closing_section(title: str, body: str, sections: list[dict[str, Any]]) -> tuple[str, list[str], bool]:
+    tutorial_like = bool(re.search(r"教程|指南|步骤|怎么|如何|SOP|清单|模板|方法", f"{title}\n{body}"))
+    if tutorial_like:
+        bullets = []
+        for section in sections[:3]:
+            bullets.append(f"先回到“{section['heading']}”，只挑一个最容易开始的动作，今天先做一次，不要贪多。")
+        if not bullets:
+            bullets = [
+                "先把这篇文章里最关键的一步写下来。",
+                "只做一次最小动作，确认自己真的能开始。",
+                "回头再补优化，而不是一开始就求完整。",
+            ]
+        return "如果你现在就要开始动手", bullets, True
+    focus = extract_summary(title, 22)
+    paragraphs = [
+        f"{focus} 真正难的，从来不是知道更多，而是你愿不愿意把旧判断放下，重新看一遍那些被你忽略的细节。",
+        "很多稿子喜欢在结尾甩出一张清单，好像这样就更有用。但真正会被读者带走的，往往是一句更稳的判断，或者一个以后看问题的角度。",
+    ]
+    return "最后想提醒的一点", paragraphs, False
 
 
 def build_reference_section(manifest: dict[str, Any], evidence_report: dict[str, Any]) -> tuple[str, list[str]]:
@@ -2358,9 +2393,13 @@ def auto_rewrite_article(title: str, meta: dict[str, str], body: str, report: di
         rewritten_parts.append("\n\n".join(section_parts).strip())
 
     if any(dim in low_dims for dim in ["收藏/转发潜力", "情绪共鸣"]):
-        heading, bullets = build_execution_section(sections)
-        rewritten_parts.append(f"## {heading}\n\n" + "\n".join(f"- {bullet}" for bullet in bullets))
-        applied_actions.append("补入了更适合收藏转发的行动清单")
+        heading, closing_content, as_bullets = build_closing_section(title, body, sections)
+        if as_bullets:
+            rewritten_parts.append(f"## {heading}\n\n" + "\n".join(f"- {bullet}" for bullet in closing_content))
+            applied_actions.append("按教程型收束补入了更克制的行动段落")
+        else:
+            rewritten_parts.append(f"## {heading}\n\n" + "\n\n".join(closing_content))
+            applied_actions.append("把结尾改成更适合分析稿传播的判断收束")
     if "金句质量" in low_dims:
         applied_actions.append("补入了可截图传播的金句")
     if "文风适配度" in low_dims:

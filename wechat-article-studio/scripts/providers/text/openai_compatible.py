@@ -53,17 +53,11 @@ def placeholder_outline(title: str) -> dict[str, Any]:
     return normalize_outline_payload(
         {
             "title": title,
-            "angle": "从问题、误区、方法、行动四段展开",
-            "sections": [
-                {"heading": "为什么这个问题现在必须重视", "goal": "建立阅读动机", "evidence_need": "趋势或场景证据"},
-                {"heading": "大多数人真正卡住的地方", "goal": "拆解常见误区", "evidence_need": "案例或对比"},
-                {"heading": "一套可复用的执行框架", "goal": "给出方法论", "evidence_need": "步骤或清单"},
-                {"heading": "把方法变成接下来 7 天的动作", "goal": "收束并行动引导", "evidence_need": "行动建议"},
-            ],
+            "angle": "从被误读的信号、真正的分水岭和最后的判断展开",
             "viral_blueprint": default_viral_blueprint(
                 topic=title,
                 title=title,
-                angle="从问题、误区、方法、行动四段展开",
+                angle="从被误读的信号、真正的分水岭和最后的判断展开",
                 audience="大众读者",
                 research={},
                 style_signals=[],
@@ -82,13 +76,13 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
     lines = [
         f"# {title}",
         "",
-        f"写给{audience or '公众号读者'}的一篇骨架稿。当前环境未配置文本模型，因此这里先产出可继续编辑、带爆款蓝图的结构化初稿。",
+        f"写给{audience or '公众号读者'}的一篇骨架稿。当前环境未配置文本模型，因此这里只先给出一版可继续编辑的结构化长文起稿。",
         "",
-        f"先说结论：{blueprint.get('core_viewpoint') or '真正决定传播效果的，不是信息堆积，而是判断、刺痛和行动感同时到位。'}",
+        blueprint.get('core_viewpoint') or '真正决定传播效果的，不是信息堆积，而是文章有没有带出新的判断。',
         "",
-        "很多人写公众号文章时，明明信息不少，却还是没人转发。问题通常不在信息量，而在于没有把读者真正卡住的地方说透，也没有让读者觉得“这说的就是我”。",
+        "很多公众号稿件的问题，不是信息不够，而是写法太像模板：开头一眼能猜到，结尾一眼能看穿，读完没有余味。",
         "",
-        "> 你不是内容不够多，而是还没有把真正能打到人心里的那句话说出来。",
+        "真正能留下来的文章，往往不是上来就把答案喊出来，而是先把读者带进那个具体的问题和处境。",
         "",
     ]
     for section in (normalized_outline.get("sections") or []):
@@ -100,9 +94,9 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
                 "",
                 f"建议补充：{section.get('evidence_need') or '案例、数据或对比'}。",
                 "",
-                "把这一段写实，写到读者能立刻理解问题、判断代价、看到可执行动作。",
+                "把这一段写实，写到读者能立刻看见场景、理解代价，并带走一个更稳的判断。",
                 "",
-                "写这一节时，至少补一处对比、一处读者视角、一句能让人截图的判断。",
+                "写这一节时，尽量补一处具体细节、一处对比或案例，以及一句值得被记住的判断。",
                 "",
             ]
         )
@@ -110,11 +104,9 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
         [
             "## 结尾",
             "",
-            "真正有传播力的公众号文章，结尾不会停在观点，而会停在一个读者愿意马上保存或转发的动作上。",
+            "真正有传播力的公众号文章，结尾不会只剩一个清单，它通常会把全文判断收束到一句读者愿意带走的话。",
             "",
-            "- 先复述一句核心判断。",
-            "- 再给读者一个今天就能做的动作。",
-            "- 最后留下一句能被带走的金句。",
+            "如果这是方法文，可以给一个真的能开始的动作；如果这是分析稿，更适合留下一个值得反复想的判断。",
         ]
     )
     return "\n".join(lines).strip() + "\n"
@@ -278,11 +270,13 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号爆款文章总编。只输出 JSON。"
+                    "你是资深微信公众号总编。只输出 JSON。"
                     "字段必须包含 title, angle, sections, viral_blueprint。"
                     "sections 每项包含 heading, goal, evidence_need。"
+                    "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns。"
                     "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
                     "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals。"
+                    "不要把所有文章都规划成“一句话结论 + 三段方法 + 执行清单”。要根据题材判断是分析评论、教程指南、案例拆解还是叙事观察。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -305,11 +299,15 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号爆款写作编辑。输出 Markdown 正文，不要解释。"
-                    "必须消费输入里的 viral_blueprint。"
-                    "要求：1 个主观点、2~4 个副观点、至少 3 种论证方式、至少 2 次视角切换、至少 3 句可截图金句、"
-                    "段落短、句长有波动、禁用首先/其次/最后/综上所述等模板连接词。"
-                    "开头先制造刺痛感和结果预期，结尾必须给读者可执行动作。"
+                    "你是写 10w+ 公众号长文的资深作者兼总编。输出 Markdown 正文，不要解释。"
+                    "必须消费输入里的 outline 与 viral_blueprint，但不能把它们机械翻译成模板文章。"
+                    "写作要求："
+                    "1. 允许用场景、新闻、反差、细节、人物、问题等不同方式开头，不要默认使用“先说结论”“如果你只想记住一句话”“这篇文章会”。"
+                    "2. 结尾不默认给 checklist；只有当题材明显是教程/方法文时，才给动作。分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束。"
+                    "3. 不要硬凑固定配方；不要把每一节都写成先下判断再解释；要有节奏变化、具体细节和真实编辑感。"
+                    "4. 段落短但不能碎，句式要有长短变化；禁用首先/其次/最后/综上所述等模板连接词。"
+                    "5. 多用具体场景、案例、对比、引用和事实支撑，不要空喊观点。"
+                    "6. 不要自我解释写作结构，不要出现“接下来我会”“下面我们来看”。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -336,6 +334,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "viral_analysis 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
                     "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits。"
                     "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
+                    "请重点识别：文章是否落入固定模板（如先说结论、篇章自我说明、结尾万能清单、每节都同一种句式起手）。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -368,9 +367,11 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号爆款改稿编辑。输出修订后的 Markdown 正文，不要输出解释。"
-                    "改稿优先级固定为：补开头爆点 -> 补情绪价值和刺痛句 -> 补论证多样性 -> 补视角切换 -> 补金句 -> 去模板腔。"
+                    "你是微信公众号深度改稿编辑。输出修订后的 Markdown 正文，不要输出解释。"
                     "必须保留原文事实边界，不要编造数据。"
+                    "优先修复最影响阅读完成度和传播力的 3 个问题，但不要用固定模板去“提分”。"
+                    "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
+                    "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

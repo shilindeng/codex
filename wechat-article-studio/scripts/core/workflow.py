@@ -164,8 +164,12 @@ def extract_style_signals(sample_paths: list[str]) -> list[str]:
             signals.append("短段落")
         if any(word in compact for word in ["案例", "比如", "例如", "故事"]):
             signals.append("案例推进")
-        if any(word in compact for word in ["先说结论", "一句话", "核心"]):
-            signals.append("结论前置")
+        if any(word in compact for word in ["某天", "那一刻", "刷到", "看到", "消息", "细节"]):
+            signals.append("场景切口")
+        if any(word in compact for word in ["判断", "信号", "分水岭", "趋势", "误判"]):
+            signals.append("判断递进")
+        if any(word in compact for word in ["官方", "报告", "数据", "文档", "来源", "研究"]):
+            signals.append("证据穿插")
     return list(dict.fromkeys(signals))
 
 

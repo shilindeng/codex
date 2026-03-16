@@ -81,6 +81,37 @@ class RewriteModeTests(unittest.TestCase):
             self.assertEqual(rewrite.get("evidence_report_path"), "evidence-report.json")
             self.assertGreaterEqual(int(rewrite.get("evidence_used_count") or 0), 0)
 
+    def test_improve_score_mode_for_analysis_does_not_force_execution_checklist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            title = "为什么 AI 公司迟早都要面对变现问题？"
+            meta = {"title": title, "summary": "摘要"}
+            body = (
+                "很多人以为 AI 产品竞争只是在比模型参数，但真正难的，是找到能长期成立的商业逻辑。"
+                "\n\n"
+                "## 为什么这件事现在更重要\n\n"
+                "因为成本、调用频率、用户预期和信任问题正在同时抬头。"
+                "\n\n"
+                "## 真正的分水岭在哪里\n\n"
+                "真正拉开差距的，往往不是多一个功能，而是你的产品最后靠什么活下去。"
+            )
+            manifest = {"source_urls": [], "audience": "大众读者", "direction": ""}
+            report = legacy.build_score_report(title, body, manifest, threshold=85)
+
+            generate_revision_candidate(
+                workspace,
+                title,
+                meta,
+                body,
+                report,
+                manifest,
+                output_name="article-rewrite.md",
+                mode="improve-score",
+            )
+            rewritten = (workspace / "article-rewrite.md").read_text(encoding="utf-8")
+            self.assertNotIn("最后给你一个可执行清单", rewritten)
+            self.assertNotIn("## 最后给你一个可执行清单", rewritten)
+
 
 if __name__ == "__main__":
     unittest.main()
