@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import legacy_studio as legacy
 from core.artifacts import (
@@ -42,9 +44,19 @@ from providers.text.openai_compatible import OpenAICompatibleTextProvider, place
 from publishers.wechat import cmd_publish as wechat_publish
 from publishers.wechat import cmd_verify_draft as wechat_verify_draft
 
-PUBLISH_MIN_CREDIBILITY_SCORE = 6
+PUBLISH_MIN_CREDIBILITY_SCORE = 5
 CONTENT_MODE_CHOICES = ("tech-balanced", "tech-credible", "viral")
 WECHAT_HEADER_MODE_CHOICES = ("keep", "drop-title", "drop-title-summary")
+RECENT_CORPUS_LIMIT = 20
+KNOWN_TEMPLATE_PHRASES = [
+    "这很正常，你不是一个人",
+    "最难受的是",
+    "真正值得带走的判断只有一个",
+    "如果你最近",
+    "别急着把",
+    "说白了",
+    "以后真正靠谱的 AI，可能不是",
+]
 
 
 def normalize_content_mode(value: str | None) -> str:
@@ -146,6 +158,229 @@ def normalize_urls(values: list[str]) -> list[str]:
         seen.add(value)
         urls.append(value)
     return urls
+
+
+def detect_corpus_root(workspace: Path) -> Path | None:
+    env_root = (legacy.os.getenv("WECHAT_JOBS_ROOT") or "").strip()
+    candidates: list[Path] = []
+    if env_root:
+        candidates.append(Path(env_root).expanduser().resolve())
+    candidates.append(Path(r"D:\vibe-coding\codex\wechat-jobs"))
+    candidates.append(workspace.parent / "wechat-jobs")
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.exists() and resolved.is_dir():
+            return resolved
+    return None
+
+
+def _normalize_phrase(text: str) -> str:
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    compact = compact.strip(" -•>\"'“”‘’")
+    return compact
+
+
+def recent_article_paths(corpus_root: Path | None, current_workspace: Path, limit: int = RECENT_CORPUS_LIMIT) -> list[Path]:
+    if corpus_root is None or not corpus_root.exists():
+        return []
+    current_workspace = current_workspace.resolve()
+    articles: list[Path] = []
+    for path in corpus_root.rglob("article.md"):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if current_workspace in resolved.parents:
+            continue
+        articles.append(resolved)
+    articles.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+    return articles[:limit]
+
+
+def collect_recent_phrase_blacklist(paths: list[Path]) -> list[str]:
+    counter: Counter[str] = Counter()
+    for path in paths:
+        try:
+            raw = read_text(path)
+        except OSError:
+            continue
+        _, body = split_frontmatter(raw)
+        paragraphs = [block.strip() for block in legacy.list_paragraphs(body) if block.strip()]
+        candidates = paragraphs[:2] + paragraphs[-2:]
+        headings = [item.get("text", "") for item in legacy.extract_headings(body)[:4]]
+        candidates.extend(headings)
+        for item in candidates:
+            normalized = _normalize_phrase(item)
+            if 8 <= legacy.cjk_len(normalized) <= 36:
+                counter[normalized] += 1
+    for phrase in KNOWN_TEMPLATE_PHRASES:
+        counter[_normalize_phrase(phrase)] += 2
+    return [item for item, count in counter.most_common(20) if count >= 2]
+
+
+def attach_corpus_context(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    corpus_root = detect_corpus_root(workspace)
+    if corpus_root is None:
+        manifest["corpus_root"] = ""
+        manifest["recent_phrase_blacklist"] = []
+        manifest["recent_article_titles"] = []
+        return manifest
+    article_paths = recent_article_paths(corpus_root, workspace)
+    titles: list[str] = []
+    for path in article_paths[:8]:
+        try:
+            raw = read_text(path)
+            meta, body = split_frontmatter(raw)
+            title = meta.get("title") or legacy.extract_title_from_body(body) or path.parent.name
+        except OSError:
+            title = path.parent.name
+        titles.append(str(title))
+    manifest["corpus_root"] = str(corpus_root)
+    manifest["recent_phrase_blacklist"] = collect_recent_phrase_blacklist(article_paths)
+    manifest["recent_article_titles"] = titles
+    return manifest
+
+
+def _reference_domain(url: str) -> str:
+    return urlparse(url).netloc.replace("www.", "") or url
+
+
+def _reference_label(url: str) -> str:
+    domain = _reference_domain(url)
+    path = (urlparse(url).path or "").strip("/")
+    if path:
+        parts = [part for part in path.split("/") if part]
+        return f"{domain} / {parts[-1][:36]}"
+    return domain
+
+
+def _extract_body_urls(body: str) -> list[str]:
+    urls = re.findall(r"https?://[^\s)>\]]+", body or "")
+    return normalize_urls(urls)
+
+
+def build_references_payload(workspace: Path, manifest: dict[str, Any], body: str) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    evidence_report = read_json(workspace / "evidence-report.json", default={}) or {}
+    for entry in (evidence_report.get("items") or []):
+        url = str(entry.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        items.append(
+            {
+                "url": url,
+                "title": str(entry.get("page_title") or entry.get("title") or _reference_label(url)).strip(),
+                "domain": _reference_domain(url),
+                "note": extract_summary(str(entry.get("sentence") or entry.get("description") or ""), 72),
+                "source_type": "evidence",
+            }
+        )
+    research = load_research(workspace)
+    for entry in (research.get("sources") or []):
+        if isinstance(entry, dict):
+            url = str(entry.get("url") or entry.get("link") or "").strip()
+            title = str(entry.get("title") or entry.get("name") or "").strip()
+        else:
+            url = str(entry or "").strip()
+            title = ""
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        items.append(
+            {
+                "url": url,
+                "title": title or _reference_label(url),
+                "domain": _reference_domain(url),
+                "note": "",
+                "source_type": "research",
+            }
+        )
+    for url in normalize_urls(list(manifest.get("source_urls") or []) + _extract_body_urls(body)):
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        items.append(
+            {
+                "url": url,
+                "title": _reference_label(url),
+                "domain": _reference_domain(url),
+                "note": "",
+                "source_type": "manifest",
+            }
+        )
+    normalized_items = []
+    for index, item in enumerate(items, start=1):
+        normalized_items.append({**item, "index": index})
+    payload = {"items": normalized_items, "generated_at": now_iso()}
+    write_json(workspace / "references.json", payload)
+    manifest["references_path"] = "references.json"
+    return payload
+
+
+def apply_reference_policy(workspace: Path, manifest: dict[str, Any], title: str, body: str) -> tuple[str, dict[str, Any]]:
+    payload = build_references_payload(workspace, manifest, body)
+    items = payload.get("items") or []
+    body_urls = _extract_body_urls(body)
+    body_citation_urls = body_urls[:4]
+    marker_map = {url: f"[{index + 1}]" for index, url in enumerate(body_citation_urls)}
+    title_map = {item["url"]: item["title"] for item in items}
+
+    def replace_markdown_link(match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        url = match.group(2).strip()
+        if url in marker_map:
+            return f"{label} {marker_map[url]}"
+        return label or title_map.get(url, _reference_label(url))
+
+    normalized_body = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", replace_markdown_link, body)
+
+    def replace_raw_url(match: re.Match[str]) -> str:
+        url = match.group(0).strip()
+        return marker_map.get(url, title_map.get(url, _reference_label(url)))
+
+    normalized_body = re.sub(r"https?://[^\s)>\]]+", replace_raw_url, normalized_body)
+    if not re.search(r"\[\d+\]", normalized_body) and items:
+        paragraphs = [block for block in re.split(r"\n\s*\n", normalized_body) if block.strip()]
+        injected = 0
+        rebuilt: list[str] = []
+        for block in paragraphs:
+            candidate = block
+            if injected < min(4, len(items)) and not candidate.lstrip().startswith("#") and legacy.cjk_len(candidate) >= 35:
+                if re.search(r"\d{4}年|\d+(?:\.\d+)?%|官方|研究|报告|数据显示|文档|发布|上线|Stars|release", candidate):
+                    candidate = candidate.rstrip() + f" [{items[injected]['index']}]"
+                    injected += 1
+            rebuilt.append(candidate)
+        normalized_body = "\n\n".join(rebuilt)
+    findings = {
+        "raw_urls_before": len(body_urls),
+        "raw_urls_after": len(_extract_body_urls(normalized_body)),
+        "body_citation_count": len(re.findall(r"\[\d+\]", normalized_body)),
+        "reference_count": len(items),
+        "citation_policy_passed": len(_extract_body_urls(normalized_body)) == 0,
+    }
+    return normalized_body, findings
+
+
+def sync_article_reference_policy(workspace: Path, manifest: dict[str, Any]) -> tuple[dict[str, str], str]:
+    article_path = workspace / (manifest.get("article_path") or "article.md")
+    if not article_path.exists():
+        return {}, ""
+    raw = read_text(article_path)
+    meta, body = split_frontmatter(raw)
+    title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
+    body = strip_leading_h1(body, title)
+    normalized_body, findings = apply_reference_policy(workspace, manifest, title, body)
+    summary = meta.get("summary") or manifest.get("summary") or extract_summary(normalized_body)
+    if normalized_body != body or not (workspace / "references.json").exists():
+        write_text(article_path, join_frontmatter({"title": title, "summary": summary}, normalized_body))
+    manifest["references_path"] = "references.json"
+    manifest["citation_policy_findings"] = findings
+    return {"title": title, "summary": summary}, normalized_body
 
 
 def normalize_style_samples(values: list[str], workspace: Path | None = None) -> list[str]:
@@ -345,7 +580,8 @@ def apply_research_credibility_boost(report: dict[str, Any], research: dict[str,
             break
     if target is None:
         return boosted
-    bonus = min(10, max(target.get("score", 0), min(5, len(sources)) + min(5, len(evidence_items))))
+    weight = int(target.get("weight") or 8) or 8
+    bonus = min(weight, max(target.get("score", 0), min(4, len(sources)) + min(4, len(evidence_items))))
     target["score"] = bonus
     boosted["total_score"] = sum(item.get("score", 0) for item in boosted.get("score_breakdown", []))
     quality_gates = boosted.get("quality_gates") or {}
@@ -461,6 +697,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    manifest = attach_corpus_context(workspace, manifest)
     provider = require_live_text_provider("outline")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -475,6 +712,9 @@ def cmd_outline(args: argparse.Namespace) -> int:
             "titles": ideation.get("titles") or [],
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+            "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "corpus_root": manifest.get("corpus_root") or "",
             "content_mode": manifest.get("content_mode") or "tech-balanced",
         }
     )
@@ -513,6 +753,7 @@ def cmd_write(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    manifest = attach_corpus_context(workspace, manifest)
     provider = require_live_text_provider("write")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -546,14 +787,18 @@ def cmd_write(args: argparse.Namespace) -> int:
             "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+            "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "corpus_root": manifest.get("corpus_root") or "",
             "content_mode": manifest.get("content_mode") or "tech-balanced",
         }
     )
     body = str(result.payload).strip()
     body = strip_leading_h1(body, selected_title)
-    summary = extract_summary(body)
     article_path = workspace / "article.md"
-    write_text(article_path, join_frontmatter({"title": selected_title, "summary": summary}, body))
+    write_text(article_path, join_frontmatter({"title": selected_title, "summary": extract_summary(body)}, body))
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
+    summary = synced_meta.get("summary") or extract_summary(synced_body or body)
     manifest.update(
         {
             "selected_title": selected_title,
@@ -577,10 +822,15 @@ def cmd_review(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    manifest = attach_corpus_context(workspace, manifest)
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待评审文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
+    if synced_body:
+        meta.update({key: value for key, value in synced_meta.items() if value})
+        body = synced_body
     body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     blueprint = current_viral_blueprint(workspace, manifest)
@@ -597,6 +847,9 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "editorial_blueprint": (load_ideation(workspace).get("outline_meta") or {}).get("editorial_blueprint") or {},
                 "style_samples": manifest.get("style_sample_paths") or [],
                 "style_signals": manifest.get("style_signals") or [],
+                "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+                "recent_article_titles": manifest.get("recent_article_titles") or [],
+                "corpus_root": manifest.get("corpus_root") or "",
                 "revision_round": int(manifest.get("revision_round") or 1),
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
             }
@@ -712,10 +965,15 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    manifest = attach_corpus_context(workspace, manifest)
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待改写文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
+    if synced_body:
+        meta.update({key: value for key, value in synced_meta.items() if value})
+        body = synced_body
     body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     report = read_json(workspace / "score-report.json", default={}) or {}
@@ -768,7 +1026,33 @@ def cmd_ideate(args: argparse.Namespace) -> int:
 
 
 def cmd_draft(args: argparse.Namespace) -> int:
-    return legacy.cmd_draft(args)
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    manifest = attach_corpus_context(workspace, manifest)
+    raw = read_input_file(args.input)
+    meta, body = split_frontmatter(raw)
+    title = args.selected_title or manifest.get("selected_title") or meta.get("title") or legacy.extract_title_from_body(body) or manifest.get("topic") or "未命名文章"
+    body = strip_leading_h1(body, title)
+    summary = args.summary or meta.get("summary") or manifest.get("summary") or extract_summary(body)
+    author = args.author or meta.get("author") or manifest.get("author") or ""
+    article_meta = {"title": title, "summary": summary}
+    if author:
+        article_meta["author"] = author
+    article_path = workspace / "article.md"
+    write_text(article_path, join_frontmatter(article_meta, body))
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
+    manifest.update(
+        {
+            "selected_title": title,
+            "summary": synced_meta.get("summary") or summary,
+            "author": author,
+            "article_path": "article.md",
+            "outline": [item["text"] for item in legacy.extract_headings(synced_body or body)] or manifest.get("outline") or [],
+        }
+    )
+    save_manifest(workspace, manifest)
+    print(str(article_path))
+    return 0
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
@@ -1097,6 +1381,7 @@ def _write_hosted_research(workspace: Path, manifest: dict[str, Any], topic: str
 
 
 def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str, outline_file: str | None) -> None:
+    manifest = attach_corpus_context(workspace, manifest)
     ideation = load_ideation(workspace)
     ideation["topic"] = manifest.get("topic") or title
     ideation["direction"] = manifest.get("direction") or ""
@@ -1134,6 +1419,8 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
                 "direction": manifest.get("direction") or "",
                 "research": load_research(workspace),
                 "style_signals": manifest.get("style_signals") or [],
+                "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+                "recent_article_titles": manifest.get("recent_article_titles") or [],
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
             },
         )
@@ -1204,6 +1491,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
 
 
 def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: str, title: str, angle: str, audience: str) -> str:
+    manifest = attach_corpus_context(workspace, manifest)
     provider = require_live_text_provider("hosted-run 自动补正文")
     source_urls = normalize_urls(manifest.get("source_urls") or [])
     research = load_research(workspace)
@@ -1239,6 +1527,8 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "angle": angle,
                 "count": 3,
                 "research": research,
+                "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+                "recent_article_titles": manifest.get("recent_article_titles") or [],
             }
         )
         titles = title_result.payload[:3] if isinstance(title_result.payload, list) else title_result.payload.get("titles", [])
@@ -1270,6 +1560,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "titles": ideation.get("titles") or [],
                 "style_samples": manifest.get("style_sample_paths") or [],
                 "style_signals": manifest.get("style_signals") or [],
+                "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+                "recent_article_titles": manifest.get("recent_article_titles") or [],
+                "corpus_root": manifest.get("corpus_root") or "",
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
             }
         )
@@ -1314,6 +1607,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+            "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "corpus_root": manifest.get("corpus_root") or "",
             "content_mode": manifest.get("content_mode") or "tech-balanced",
         }
     )
@@ -1321,8 +1617,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
     if not body:
         body = placeholder_article(title, outline_meta or placeholder_outline(title), audience)
     body = strip_leading_h1(body, title)
-    summary = extract_summary(body)
-    write_text(workspace / "article.md", join_frontmatter({"title": title, "summary": summary}, body))
+    write_text(workspace / "article.md", join_frontmatter({"title": title, "summary": extract_summary(body)}, body))
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
+    summary = synced_meta.get("summary") or extract_summary(synced_body or body)
     manifest.update(
         {
             "selected_title": title,
@@ -1345,6 +1642,7 @@ def _import_hosted_article(
     angle: str,
     audience: str,
 ) -> str:
+    manifest = attach_corpus_context(workspace, manifest)
     article_path = workspace / "article.md"
     if article_file:
         raw = read_input_file(article_file)
@@ -1360,10 +1658,11 @@ def _import_hosted_article(
     title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
     summary = summary_hint or meta.get("summary") or extract_summary(body)
     write_text(article_path, join_frontmatter({"title": title, "summary": summary}, strip_leading_h1(body, title)))
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     manifest.update(
         {
             "selected_title": title,
-            "summary": summary,
+            "summary": synced_meta.get("summary") or summary,
             "article_path": "article.md",
             "text_provider": "host-agent",
             "text_model": "session",
@@ -1393,10 +1692,15 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest = load_manifest(workspace)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    manifest = attach_corpus_context(workspace, manifest)
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"找不到待评分文章：{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
+    if synced_body:
+        meta.update({key: value for key, value in synced_meta.items() if value})
+        body = synced_body
     body = legacy.strip_image_directives(body)
     title = legacy.infer_title(manifest, meta, body)
     threshold = args.threshold or manifest.get("score_threshold")

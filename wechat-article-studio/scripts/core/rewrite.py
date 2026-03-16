@@ -171,6 +171,9 @@ def generate_revision_candidate(
             "quality_gates": report.get("quality_gates") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
+            "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+            "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "corpus_root": manifest.get("corpus_root") or "",
         }
         result = provider.revise_article(context)
         provider_name = result.provider

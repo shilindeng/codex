@@ -5,8 +5,9 @@ import html
 import re
 import textwrap
 from pathlib import Path
+from urllib.parse import urlparse
 
-from core.artifacts import extract_summary, read_text, split_frontmatter, strip_leading_h1, write_text
+from core.artifacts import extract_summary, read_json, read_text, split_frontmatter, strip_leading_h1, write_text
 from core.layout import (
     DEFAULT_ACCENT_COLOR,
     THEMES,
@@ -92,6 +93,31 @@ def highlight_technical_terms_markdown(body: str) -> str:
     return "\n".join(output)
 
 
+def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str:
+    path = workspace / str(manifest.get("references_path") or "references.json")
+    if not path.exists():
+        return ""
+    payload = read_json(path, default={}) or {}
+    items = payload.get("items") or []
+    if not items:
+        return ""
+    cards: list[str] = ['<h2>参考资料</h2>']
+    for item in items:
+        index = int(item.get("index") or 0)
+        title = html.escape(str(item.get("title") or "参考资料").strip())
+        domain = html.escape(str(item.get("domain") or urlparse(str(item.get("url") or "")).netloc.replace("www.", "")).strip())
+        note = html.escape(str(item.get("note") or "").strip())
+        url = html.escape(str(item.get("url") or "").strip(), quote=True)
+        cards.append(
+            '<blockquote data-wx-tone="tip">'
+            f'<p><strong>[{index}]</strong> {title}</p>'
+            f'<p>{domain}' + (f" · {note}" if note else "") + '</p>'
+            + (f'<p><a href="{url}">查看原文</a></p>' if url else "")
+            + '</blockquote>'
+        )
+    return "\n".join(cards)
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -116,6 +142,10 @@ def cmd_render(args: argparse.Namespace) -> int:
     else:
         content_source = body
         content_html = content_source
+
+    reference_cards_html = build_reference_cards_html(workspace, manifest)
+    if reference_cards_html:
+        content_html = content_html + "\n" + reference_cards_html
 
     signals = analyze_content_signals(content_source if fmt == "md" else content_html, fmt)
     layout_style_arg = getattr(args, "layout_style", "auto")

@@ -89,6 +89,53 @@ class RenderModeTests(unittest.TestCase):
         decision = choose_layout_style("auto", signals, {"viral_blueprint": {"article_archetype": "commentary"}})
         self.assertEqual(decision.style, "magazine")
 
+    def test_render_appends_reference_cards_without_raw_urls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "这是一段摘要",
+                        "article_path": "article.md",
+                        "wechat_header_mode": "drop-title",
+                        "references_path": "references.json",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("正文内容里有一个判断 [1]。", encoding="utf-8")
+            (workspace / "references.json").write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"index": 1, "url": "https://example.com/a", "title": "官方文档", "domain": "example.com", "note": "一条说明"}
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
+            self.assertIn("参考资料", wechat_html)
+            self.assertIn("官方文档", wechat_html)
+            self.assertIn("查看原文", wechat_html)
+            self.assertNotIn(">https://example.com/a<", wechat_html)
+
 
 if __name__ == "__main__":
     unittest.main()

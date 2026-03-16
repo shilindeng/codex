@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
@@ -36,7 +37,7 @@ SCORE_WEIGHTS: list[tuple[str, int]] = [
     ("可信度与检索支撑", 8),
 ]
 
-DEFAULT_THRESHOLD = 88
+DEFAULT_THRESHOLD = 86
 
 EMOTION_VALUE_THRESHOLD = 6
 PAIN_POINT_THRESHOLD = 4
@@ -45,6 +46,15 @@ ARGUMENT_MODE_THRESHOLD = 3
 PERSPECTIVE_SHIFT_THRESHOLD = 2
 AI_SMELL_THRESHOLD = 2
 CREDIBILITY_THRESHOLD = 6
+KNOWN_TEMPLATE_PHRASES = [
+    "这很正常，你不是一个人",
+    "最难受的是",
+    "真正值得带走的判断只有一个",
+    "如果你最近",
+    "别急着把",
+    "说白了",
+    "以后真正靠谱的 AI，可能不是",
+]
 
 EMOTION_VALUE_MARKERS = [
     "你不是",
@@ -123,6 +133,8 @@ BLUEPRINT_EXTRA_LIST_FIELDS = [
 ]
 BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "article_archetype",
+    "primary_interaction_goal",
+    "secondary_interaction_goal",
     "interaction_formula",
     "peak_moment_design",
     "ending_interaction_design",
@@ -165,6 +177,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["行业观察者", "普通用户", "同类决策者"],
         "controversy_anchors": ["不要中性总结，要给一个可以被讨论甚至被反驳的靶子", "关键判断要让支持者愿意附和，反对者愿意开口"],
         "interaction_prompts": ["如果是你，你会怎么判断？", "你更认同哪一边？"],
+        "primary_interaction_goal": "comment/share",
+        "secondary_interaction_goal": "like",
         "interaction_formula": "点赞靠文末升华和金句，评论靠鲜明判断与提问，转发靠谈资和身份认同。",
         "peak_moment_design": "中段安排一次反常识判断或趋势反转，让读者想停下来划线或转发。",
         "ending_interaction_design": "结尾先收束判断，再留一个能让读者站队或补充经验的问题。",
@@ -204,6 +218,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["新手", "实操者", "团队执行者"],
         "controversy_anchors": ["指出常见误区，不要假装所有做法都对", "必要时让读者在两种路径之间做选择"],
         "interaction_prompts": ["你最容易卡在哪一步？", "如果是你，你会先改哪一个动作？"],
+        "primary_interaction_goal": "like/save",
+        "secondary_interaction_goal": "comment",
         "interaction_formula": "点赞靠低门槛获得感，评论靠卡点提问，转发靠实用框架和圈层认同。",
         "peak_moment_design": "中段要出现一次“原来我一直做反了”的醒悟时刻。",
         "ending_interaction_design": "结尾只留一两个最关键动作，并用提问促使读者说出自己的卡点。",
@@ -243,6 +259,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["同行", "操盘者", "案例复盘者"],
         "controversy_anchors": ["指出案例里最值得争议的一步", "不要只讲过程，要敢讲谁做对了谁做错了"],
         "interaction_prompts": ["如果换成你，会在哪一步做不同选择？", "你见过更典型的类似案例吗？"],
+        "primary_interaction_goal": "share/comment",
+        "secondary_interaction_goal": "like",
         "interaction_formula": "点赞靠细节与判断，评论靠站队与复盘欲，转发靠同行谈资和方法迁移。",
         "peak_moment_design": "案例中段要有一个让读者情绪抬起来的关键转折或失误点。",
         "ending_interaction_design": "结尾把个案抬升成通用判断，并留一个让同行想补充经历的问题。",
@@ -282,6 +300,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["打工人", "父母", "伴侣", "同类处境中的人"],
         "controversy_anchors": ["不用强行制造对立，但可以给出让人想回应的价值判断", "让读者觉得自己的立场被看见"],
         "interaction_prompts": ["你有没有过类似的瞬间？", "如果是你，你会怎么理解这件事？"],
+        "primary_interaction_goal": "like/comment",
+        "secondary_interaction_goal": "share",
         "interaction_formula": "点赞靠被说中，评论靠补充经历，转发靠替读者表达‘我是谁’。",
         "peak_moment_design": "中段安排一次情绪爆点或被说中的瞬间，让读者想停下来截图。",
         "ending_interaction_design": "结尾轻回扣全文情绪，再留一个与读者自身经历直接相关的问题。",
@@ -508,6 +528,8 @@ def default_viral_blueprint(
         "identity_labels": _dedupe([audience_text, *list(profile.get("identity_labels") or [])])[:5],
         "controversy_anchors": list(profile.get("controversy_anchors") or []),
         "interaction_prompts": list(profile.get("interaction_prompts") or []),
+        "primary_interaction_goal": str(profile.get("primary_interaction_goal") or ""),
+        "secondary_interaction_goal": str(profile.get("secondary_interaction_goal") or ""),
         "interaction_formula": str(profile.get("interaction_formula") or "高互动文章 = 情绪价值 + 社交货币 + 峰终体验"),
         "peak_moment_design": str(profile.get("peak_moment_design") or ""),
         "ending_interaction_design": str(profile.get("ending_interaction_design") or ""),
@@ -656,7 +678,6 @@ INTERACTION_IDENTITY_MARKERS = [
 
 
 def _extract_comment_questions(body: str, blueprint: dict[str, Any] | None = None) -> list[str]:
-    prompts = _normalize_list((blueprint or {}).get("interaction_prompts"))
     hits: list[str] = []
     for sentence in legacy.sentence_split(body):
         cleaned = _clean_sentence(sentence)
@@ -664,11 +685,10 @@ def _extract_comment_questions(body: str, blueprint: dict[str, Any] | None = Non
             continue
         if "？" in cleaned or "?" in cleaned or any(marker in cleaned for marker in ["你呢", "如果是你", "评论区", "你会怎么", "你怎么看"]):
             hits.append(cleaned)
-    return _dedupe(prompts + hits)[:6]
+    return _dedupe(hits)[:6]
 
 
 def _extract_social_currency_points(body: str, signature_lines: list[dict[str, Any]], blueprint: dict[str, Any] | None = None) -> list[str]:
-    prompts = _normalize_list((blueprint or {}).get("social_currency_points"))
     hits: list[str] = []
     for item in signature_lines[:4]:
         text = str(item.get("text") or "").strip()
@@ -680,11 +700,11 @@ def _extract_social_currency_points(body: str, signature_lines: list[dict[str, A
             continue
         if any(marker in cleaned for marker in ["真正", "误判", "信号", "分水岭", "判断", "真相", "你以为", "看起来"]):
             hits.append(cleaned)
-    return _dedupe(prompts + hits)[:6]
+    return _dedupe(hits)[:6]
 
 
 def _extract_identity_labels(body: str, blueprint: dict[str, Any] | None = None) -> list[str]:
-    labels = _normalize_list((blueprint or {}).get("identity_labels"))
+    labels: list[str] = []
     for marker in INTERACTION_IDENTITY_MARKERS:
         if marker in body:
             labels.append(marker)
@@ -692,7 +712,7 @@ def _extract_identity_labels(body: str, blueprint: dict[str, Any] | None = None)
 
 
 def _extract_controversy_anchors(body: str, blueprint: dict[str, Any] | None = None) -> list[str]:
-    anchors = _normalize_list((blueprint or {}).get("controversy_anchors"))
+    anchors: list[str] = []
     for sentence in legacy.sentence_split(body):
         cleaned = _clean_sentence(sentence)
         if legacy.cjk_len(cleaned) < 10:
@@ -707,24 +727,17 @@ def _interaction_design(body: str, blueprint: dict[str, Any] | None, signature_l
     paragraphs = [block.strip() for block in legacy.list_paragraphs(body) if block.strip()]
     ending_blocks = paragraphs[-2:] if paragraphs else []
     ending_snapshot = " ".join(ending_blocks)
-    like_triggers = _dedupe(
-        _normalize_list((blueprint or {}).get("like_triggers"))
-        + [item.get("text") or "" for item in signature_lines[:3]]
-        + ([ending_blocks[-1]] if ending_blocks else [])
-    )[:6]
+    like_triggers = _dedupe([item.get("text") or "" for item in signature_lines[:3]] + ([ending_blocks[-1]] if ending_blocks else []))[:6]
     comment_triggers = _extract_comment_questions(body, blueprint)
-    share_triggers = _dedupe(
-        _normalize_list((blueprint or {}).get("share_triggers"))
-        + _extract_social_currency_points(body, signature_lines, blueprint)[:2]
-    )[:6]
+    share_triggers = _extract_social_currency_points(body, signature_lines, blueprint)[:6]
     social_currency_points = _extract_social_currency_points(body, signature_lines, blueprint)
     identity_labels = _extract_identity_labels(body, blueprint)
     controversy_anchors = _extract_controversy_anchors(body, blueprint)
     peak_hint = str((blueprint or {}).get("peak_moment_design") or "").strip()
-    if not peak_hint:
-        peak_hint = signature_lines[0]["text"] if signature_lines else extract_summary(body, 80)
+    if not peak_hint or peak_hint == str((blueprint or {}).get("peak_moment_design") or "").strip():
+        peak_hint = signature_lines[0]["text"] if signature_lines else legacy.extract_summary(body, 80)
     ending_design = str((blueprint or {}).get("ending_interaction_design") or "").strip()
-    if not ending_design:
+    if not ending_design or ending_design == str((blueprint or {}).get("ending_interaction_design") or "").strip():
         ending_design = ending_snapshot or "结尾需要把情绪和判断收束到最值得互动的一点上。"
     peak_end_present = bool(peak_hint and ending_snapshot)
     return {
@@ -844,6 +857,155 @@ def _ai_smell_findings(body: str) -> list[dict[str, Any]]:
     return findings
 
 
+def _workspace_from_manifest(manifest: dict[str, Any]) -> Path | None:
+    raw = str(manifest.get("workspace") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    return path if path.exists() else None
+
+
+def _recent_corpus_articles(manifest: dict[str, Any], limit: int = 20) -> list[Path]:
+    root_raw = str(manifest.get("corpus_root") or "").strip()
+    if not root_raw:
+        return []
+    root = Path(root_raw)
+    if not root.exists():
+        return []
+    current_workspace = _workspace_from_manifest(manifest)
+    items: list[Path] = []
+    for path in root.rglob("article.md"):
+        resolved = path.resolve()
+        if current_workspace and current_workspace.resolve() in resolved.parents:
+            continue
+        items.append(resolved)
+    items.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
+    return items[:limit]
+
+
+def _normalize_similarity_text(text: str) -> str:
+    value = re.sub(r"https?://[^\s)>\]]+", " ", text or "")
+    value = re.sub(r"\[[^\]]+\]\([^)]+\)", " ", value)
+    value = re.sub(r"[^\w\u4e00-\u9fff]+", "", value).lower()
+    return value
+
+
+def _char_ngrams(text: str, n: int = 4) -> set[str]:
+    normalized = _normalize_similarity_text(text)
+    if len(normalized) <= n:
+        return {normalized} if normalized else set()
+    return {normalized[index : index + n] for index in range(len(normalized) - n + 1)}
+
+
+def _jaccard_similarity(left: str, right: str) -> float:
+    left_set = _char_ngrams(left)
+    right_set = _char_ngrams(right)
+    if not left_set or not right_set:
+        return 0.0
+    return round(len(left_set & right_set) / max(1, len(left_set | right_set)), 3)
+
+
+def _template_findings(body: str, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    phrases = list(dict.fromkeys([*KNOWN_TEMPLATE_PHRASES, *list(manifest.get("recent_phrase_blacklist") or [])]))
+    findings: list[dict[str, Any]] = []
+    for phrase in phrases:
+        compact = str(phrase or "").strip()
+        if not compact:
+            continue
+        hits = body.count(compact)
+        if hits:
+            findings.append({"pattern": compact, "count": hits, "evidence": compact})
+    return findings
+
+
+def _similarity_findings(title: str, body: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    current_intro = " ".join(_first_paragraphs(body, limit=2))
+    current_end = " ".join(legacy.list_paragraphs(body)[-2:])
+    current_headings = " ".join(item.get("text") or "" for item in legacy.extract_headings(body)[:6])
+    similar_articles: list[dict[str, Any]] = []
+    repeated_phrases = [item["pattern"] for item in _template_findings(body, manifest)]
+    max_similarity = 0.0
+    for path in _recent_corpus_articles(manifest):
+        try:
+            raw = legacy.read_text(path)
+        except OSError:
+            continue
+        meta, other_body = legacy.split_frontmatter(raw)
+        other_title = meta.get("title") or legacy.extract_title_from_body(other_body) or path.parent.name
+        intro_score = _jaccard_similarity(current_intro, " ".join(_first_paragraphs(other_body, limit=2)))
+        end_score = _jaccard_similarity(current_end, " ".join(legacy.list_paragraphs(other_body)[-2:]))
+        heading_score = _jaccard_similarity(current_headings, " ".join(item.get("text") or "" for item in legacy.extract_headings(other_body)[:6]))
+        body_score = _jaccard_similarity(body, other_body)
+        score = max(intro_score, end_score, heading_score, body_score)
+        max_similarity = max(max_similarity, score)
+        if score >= 0.25:
+            similar_articles.append({"title": other_title, "path": str(path.parent), "score": score})
+    similar_articles.sort(key=lambda item: item["score"], reverse=True)
+    return {
+        "max_similarity": round(max_similarity, 3),
+        "similar_articles": similar_articles[:5],
+        "repeated_phrases": repeated_phrases[:10],
+        "similarity_passed": max_similarity <= 0.42 and len(repeated_phrases) <= 2,
+    }
+
+
+def _references_summary(manifest: dict[str, Any]) -> dict[str, Any]:
+    workspace = _workspace_from_manifest(manifest)
+    if workspace is None:
+        return {"reference_count": 0, "items": []}
+    path = workspace / str(manifest.get("references_path") or "references.json")
+    payload = legacy.read_json(path, default={}) or {}
+    items = payload.get("items") or []
+    return {"reference_count": len(items), "items": items}
+
+
+def _citation_findings(body: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    refs = _references_summary(manifest)
+    raw_urls = re.findall(r"https?://[^\s)>\]]+", body or "")
+    markers = re.findall(r"\[(\d+)\]", body or "")
+    marker_ids = sorted({int(item) for item in markers if str(item).isdigit()})
+    valid_ids = {int(item.get("index") or 0) for item in refs.get("items") or []}
+    dangling = [item for item in marker_ids if item not in valid_ids]
+    return {
+        "raw_url_count": len(raw_urls),
+        "inline_citation_count": len(marker_ids),
+        "dangling_citations": dangling,
+        "reference_count": refs["reference_count"],
+        "citation_policy_passed": len(raw_urls) == 0 and not dangling and (refs["reference_count"] == 0 or len(marker_ids) > 0),
+    }
+
+
+def _heuristic_editorial_review(
+    title: str,
+    body: str,
+    review: dict[str, Any],
+    template_findings: list[dict[str, Any]],
+    similarity: dict[str, Any],
+    citation: dict[str, Any],
+) -> dict[str, Any]:
+    intro = " ".join(_first_paragraphs(body, limit=2))
+    reading_desire = "high" if ("？" in intro or any(word in intro for word in ["你可能", "最近", "刷到", "某天", "为什么"])) else "medium"
+    if legacy.cjk_len(intro) < 40:
+        reading_desire = "low"
+    professional_tone = "high" if len(template_findings) <= 1 else "medium"
+    novelty = "high" if any(word in body for word in ["误判", "分水岭", "真相", "被忽略", "拐点"]) else "medium"
+    template_risk = "high" if len(template_findings) >= 3 or similarity.get("max_similarity", 0) > 0.42 else "medium" if template_findings else "low"
+    citation_restraint = "high" if citation.get("raw_url_count", 0) == 0 else "low"
+    ending = " ".join(legacy.list_paragraphs(body)[-2:])
+    ending_naturalness = "high" if ending and not re.search(r"最后给你一个可执行清单|如果你只想记住一句话", ending) else "low"
+    interaction_naturalness = "high" if review.get("viral_analysis", {}).get("comment_triggers") and review.get("viral_analysis", {}).get("share_triggers") else "medium"
+    return {
+        "reading_desire": reading_desire,
+        "professional_tone": professional_tone,
+        "novelty_of_viewpoint": novelty,
+        "template_risk": template_risk,
+        "citation_restraint": citation_restraint,
+        "ending_naturalness": ending_naturalness,
+        "interaction_naturalness": interaction_naturalness,
+        "summary": "高分稿必须让人想读下去、像专业编辑写的，并且不靠套路完成互动设计。",
+    }
+
+
 def build_heuristic_review(
     title: str,
     body: str,
@@ -882,11 +1044,14 @@ def build_heuristic_review(
     pain_point_sentences = _sentence_objects(body, _extract_sentences_by_markers(body, PAIN_POINT_MARKERS), "刺痛读者处境")
     signature_lines = _sentence_objects(body, _extract_signatures(body), "可截图传播")
     ai_smell_findings = _ai_smell_findings(body)
+    template_findings = _template_findings(body, manifest)
     perspective_shifts = _perspective_shifts(body, blueprint)
     emotion_curve = _emotion_curve_from_body(body, headings)
     emotion_layers = _emotion_layers(body)
     style_traits = _style_traits(body, blueprint)
     interaction_design = _interaction_design(body, blueprint, signature_lines)
+    similarity_findings = _similarity_findings(title, body, manifest)
+    citation_findings = _citation_findings(body, manifest)
     strengths: list[str] = []
     issues: list[str] = []
     if len(signature_lines) >= SIGNATURE_LINE_THRESHOLD:
@@ -913,6 +1078,10 @@ def build_heuristic_review(
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
         strengths.append("整体语言相对自然，没有明显模板腔堆积。")
+    if similarity_findings.get("max_similarity", 0) > 0.42:
+        issues.append("与近期已生成文章相似度过高，存在明显同质化风险。")
+    if citation_findings.get("raw_url_count", 0) > 0:
+        issues.append("正文仍然存在裸 URL，引用策略不符合公众号阅读体验。")
     summary = (
         f"《{title}》当前稿件已经围绕“{core_viewpoint.rstrip('。')}”展开，"
         f"但仍需重点补强{('、'.join(item.rstrip('。') for item in issues[:3])) or '传播爆点与情绪价值'}。"
@@ -925,8 +1094,11 @@ def build_heuristic_review(
             "补金句与可截图传播句" if len(signature_lines) < SIGNATURE_LINE_THRESHOLD else "",
             "清理模板连接词，继续去 AI 味" if ai_smell_findings else "",
             "打散固定开头和结尾套路，别再回到一句话结论 + 万能清单" if any("先说结论" in str(item.get("evidence") or "") or "最后给你一个可执行清单" in str(item.get("evidence") or "") for item in ai_smell_findings) else "",
+            "去掉正文裸链接，把引用收敛到关键节点和文末参考资料卡片" if citation_findings.get("raw_url_count", 0) else "",
+            "重写开头和结尾，避开近期高频套路句与结构" if not similarity_findings.get("similarity_passed", True) else "",
         ]
     )
+    editorial_review = _heuristic_editorial_review(title, body, {"viral_analysis": interaction_design}, template_findings, similarity_findings, citation_findings)
     return {
         "summary": summary,
         "findings": strengths + issues,
@@ -959,6 +1131,11 @@ def build_heuristic_review(
         "emotion_value_sentences": emotion_value_sentences[:8],
         "pain_point_sentences": pain_point_sentences[:8],
         "ai_smell_findings": ai_smell_findings,
+        "template_findings": template_findings,
+        "similarity_findings": similarity_findings,
+        "citation_findings": citation_findings,
+        "interaction_findings": interaction_design,
+        "editorial_review": editorial_review,
         "revision_priorities": revision_priorities,
         "revision_round": revision_round,
         "review_source": review_source,
@@ -1082,6 +1259,20 @@ def normalize_review_payload(
     priorities = _normalize_list(payload.get("revision_priorities"))
     if priorities:
         result["revision_priorities"] = priorities
+    for field in ["template_findings", "citation_findings", "interaction_findings"]:
+        value = payload.get(field)
+        if isinstance(value, list):
+            result[field] = value
+        elif isinstance(value, dict):
+            result[field] = value
+    similarity = payload.get("similarity_findings")
+    if isinstance(similarity, dict):
+        result["similarity_findings"] = similarity
+    editorial_review = payload.get("editorial_review")
+    if isinstance(editorial_review, dict):
+        merged_editorial = dict(result.get("editorial_review") or {})
+        merged_editorial.update({key: value for key, value in editorial_review.items() if value not in (None, "")})
+        result["editorial_review"] = merged_editorial
     result["review_source"] = review_source
     result["source"] = review_source
     result["confidence"] = float(payload.get("confidence") or result.get("confidence") or 0.72)
@@ -1103,7 +1294,7 @@ def _score_hot_intro(title: str, body: str, review: dict[str, Any]) -> tuple[int
         score += 1
     if review.get("pain_point_sentences"):
         score += 1
-    return min(12, score), "好的开头不靠固定模板，可以是场景、反差、问题、新闻切口或延迟亮观点，但必须把读者迅速带进问题。"
+    return min(10, score), "好的开头不靠固定模板，可以是场景、反差、问题、新闻切口或延迟亮观点，但必须把读者迅速带进问题。"
 
 
 def _score_viewpoints(review: dict[str, Any]) -> tuple[int, str]:
@@ -1119,14 +1310,14 @@ def _score_viewpoints(review: dict[str, Any]) -> tuple[int, str]:
 def _score_argument_diversity(review: dict[str, Any]) -> tuple[int, str]:
     modes = _normalize_list(review.get("viral_analysis", {}).get("argument_diversity"))
     strategies = _normalize_list(review.get("viral_analysis", {}).get("persuasion_strategies"))
-    score = min(12, 2 + len(_dedupe(modes + strategies)) * 2)
+    score = min(10, 2 + len(_dedupe(modes + strategies)) * 2)
     return score, "爆款稿不靠单向说教，至少要能在拆解、对比、案例、趋势、场景、步骤里切换 3 种以上。"
 
 
 def _score_emotion_trigger(review: dict[str, Any]) -> tuple[int, str]:
     emotion_count = len(review.get("emotion_value_sentences") or [])
     pain_count = len(review.get("pain_point_sentences") or [])
-    score = min(12, 2 + min(5, emotion_count // 2) + min(5, pain_count))
+    score = min(10, 2 + min(4, emotion_count // 2) + min(4, pain_count))
     return score, "既要刺痛现实，也要给读者被理解和被托住的感觉。"
 
 
@@ -1189,34 +1380,43 @@ def _score_style(review: dict[str, Any], body: str) -> tuple[int, str]:
         score += 1
     if any(word in body for word in ["你", "我们", "别急", "说白了"]):
         score += 1
-    return int(legacy.clamp(score, 0, 10)), "像真人写出来的稿子，应该有判断感、节奏感和去模板腔的表达。"
+    return int(legacy.clamp(score, 0, 8)), "像真人写出来的稿子，应该有判断感、节奏感和去模板腔的表达。"
 
 
 def _score_credibility(body: str, manifest: dict[str, Any], review: dict[str, Any]) -> tuple[int, str]:
+    citation = _citation_findings(body, manifest)
+    refs = _references_summary(manifest)
     source_urls = manifest.get("source_urls") or []
-    evidence_bonus = len(re.findall(r"https?://", body))
+    evidence_bonus = min(3, citation.get("inline_citation_count", 0))
     data_bonus = len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\d+倍|第\d+", body))
     argument_modes = _normalize_list(review.get("viral_analysis", {}).get("argument_diversity"))
-    score = min(10, min(4, len(source_urls) * 2) + min(3, evidence_bonus) + min(2, data_bonus) + (1 if "权威论证" in argument_modes else 0))
-    return score, "事实型内容必须经得起回溯，最好能自然带出来源和依据。"
+    score = min(8, min(3, len(source_urls)) + min(2, evidence_bonus) + min(2, data_bonus) + (1 if "权威论证" in argument_modes else 0) + (1 if refs.get("reference_count", 0) else 0))
+    if citation.get("raw_url_count", 0):
+        score = max(0, score - 2)
+    return score, "事实型内容必须经得起回溯，最好通过关键段轻引用和文末参考资料来支撑，而不是在正文堆链接。"
 
 
-def _build_quality_gates(review: dict[str, Any], blueprint: dict[str, Any], credibility_score: int) -> dict[str, bool]:
-    emotion_count = len(review.get("emotion_value_sentences") or [])
-    pain_count = len(review.get("pain_point_sentences") or [])
-    signature_count = len(review.get("viral_analysis", {}).get("signature_lines") or [])
-    argument_count = len(_normalize_list(review.get("viral_analysis", {}).get("argument_diversity")))
-    perspective_count = len(_normalize_list(review.get("viral_analysis", {}).get("perspective_shifts")))
+def _build_quality_gates(
+    review: dict[str, Any],
+    blueprint: dict[str, Any],
+    credibility_score: int,
+    *,
+    interaction_score: int,
+    template_penalty_hits: int,
+    similarity_findings: dict[str, Any],
+    citation_findings: dict[str, Any],
+) -> dict[str, bool]:
     ai_smell_hits = len(review.get("ai_smell_findings") or [])
+    editorial = review.get("editorial_review") or {}
     return {
         "viral_blueprint_complete": blueprint_complete(blueprint),
-        "emotion_value_enough": emotion_count >= EMOTION_VALUE_THRESHOLD,
-        "pain_point_enough": pain_count >= PAIN_POINT_THRESHOLD,
-        "signature_lines_enough": signature_count >= SIGNATURE_LINE_THRESHOLD,
-        "argument_diverse": argument_count >= ARGUMENT_MODE_THRESHOLD,
-        "perspective_shift_enough": perspective_count >= PERSPECTIVE_SHIFT_THRESHOLD,
+        "interaction_passed": interaction_score >= 6,
         "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD,
-        "credibility_passed": credibility_score >= CREDIBILITY_THRESHOLD,
+        "credibility_passed": credibility_score >= 5,
+        "template_penalty_passed": template_penalty_hits <= 2,
+        "similarity_passed": bool(similarity_findings.get("similarity_passed", True)),
+        "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
+        "editorial_review_passed": editorial.get("reading_desire") != "low" and editorial.get("template_risk") != "high",
     }
 
 
@@ -1253,6 +1453,12 @@ def build_score_report(
     perspective_score, perspective_note = _score_perspective(review)
     style_score, style_note = _score_style(review, body)
     credibility_score, credibility_note = _score_credibility(body, manifest, review)
+    template_findings = review.get("template_findings") or _template_findings(body, manifest)
+    similarity_findings = review.get("similarity_findings") or _similarity_findings(title, body, manifest)
+    citation_findings = review.get("citation_findings") or _citation_findings(body, manifest)
+    interaction_findings = review.get("interaction_findings") or review.get("viral_analysis") or {}
+    editorial_review = review.get("editorial_review") or _heuristic_editorial_review(title, body, review, template_findings, similarity_findings, citation_findings)
+    template_penalty_hits = len(template_findings) + len(similarity_findings.get("repeated_phrases") or [])
     breakdown = [
         {"dimension": "标题与开头爆点", "weight": 10, "score": hot_intro, "note": hot_intro_note},
         {"dimension": "核心观点与副观点", "weight": 10, "score": viewpoint_score, "note": viewpoint_note},
@@ -1267,7 +1473,15 @@ def build_score_report(
         {"dimension": "可信度与检索支撑", "weight": 8, "score": credibility_score, "note": credibility_note},
     ]
     total = sum(item["score"] for item in breakdown)
-    quality_gates = _build_quality_gates(review, blueprint, credibility_score)
+    quality_gates = _build_quality_gates(
+        review | {"editorial_review": editorial_review},
+        blueprint,
+        credibility_score,
+        interaction_score=interaction_score,
+        template_penalty_hits=template_penalty_hits,
+        similarity_findings=similarity_findings,
+        citation_findings=citation_findings,
+    )
     strengths = []
     weaknesses = []
     for item in breakdown:
@@ -1281,13 +1495,13 @@ def build_score_report(
         list(review.get("revision_priorities") or [])
         + [
             "补齐爆款蓝图，先把主观点、副观点、情绪触发点和论证方式定下来。" if not quality_gates["viral_blueprint_complete"] else "",
-            "继续补情绪价值句，让读者感到被理解和被托住。" if not quality_gates["emotion_value_enough"] else "",
-            "继续补刺痛句和现实代价，增强首屏停留与中段张力。" if not quality_gates["pain_point_enough"] else "",
-            "补案例/对比/步骤，保证至少 3 种论证方式。" if not quality_gates["argument_diverse"] else "",
-            "增加视角切换，避免整篇只从一个角度平铺。" if not quality_gates["perspective_shift_enough"] else "",
             "补互动设计：显式安排点赞共鸣点、评论问题和可转发谈资。" if interaction_score < 7 else "",
             "继续清理模板腔，压低 AI 痕迹。" if not quality_gates["de_ai_passed"] else "",
             "补来源、数据或官方依据，提升可信度。" if not quality_gates["credibility_passed"] else "",
+            "重写篇章结构和句法节奏，压低模板惩罚。" if not quality_gates["template_penalty_passed"] else "",
+            "重写开头/结尾和标题层级，主动拉开与最近文章的差异。" if not quality_gates["similarity_passed"] else "",
+            "把正文裸链接改成关键节点轻引用，并把完整来源放到文末参考资料卡片。" if not quality_gates["citation_policy_passed"] else "",
+            "先把阅读欲望、专业感和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
         ]
     )
     suggestions = {
@@ -1338,10 +1552,21 @@ def build_score_report(
         "quality_gates": quality_gates,
         "viral_blueprint": blueprint,
         "viral_analysis": review.get("viral_analysis") or {},
+        "editorial_review": editorial_review,
         "emotion_value_sentences": review.get("emotion_value_sentences") or [],
         "pain_point_sentences": review.get("pain_point_sentences") or [],
         "ai_smell_findings": review.get("ai_smell_findings") or [],
         "ai_smell_hits": ai_smell_hits,
+        "interaction_score": interaction_score,
+        "template_penalty_hits": template_penalty_hits,
+        "template_findings": template_findings,
+        "similarity_findings": similarity_findings,
+        "citation_findings": citation_findings,
+        "interaction_findings": interaction_findings,
+        "max_similarity": similarity_findings.get("max_similarity", 0),
+        "similar_articles": similarity_findings.get("similar_articles", []),
+        "repeated_phrases": similarity_findings.get("repeated_phrases", []),
+        "references_summary": _references_summary(manifest),
         "revision_rounds": revision_rounds or [],
         "best_round": max((item.get("round", 0) for item in revision_rounds or []), default=int(review.get("revision_round") or 1)),
         "stop_reason": stop_reason,
@@ -1389,6 +1614,22 @@ def markdown_review_report(review: dict[str, Any]) -> str:
         lines.append(f"- 峰值时刻：{analysis.get('peak_moment')}")
     if analysis.get("ending_interaction_design"):
         lines.append(f"- 结尾互动设计：{analysis.get('ending_interaction_design')}")
+    editorial = review.get("editorial_review") or {}
+    if editorial:
+        lines.extend(["", "## 编辑二审", ""])
+        for key in [
+            "reading_desire",
+            "professional_tone",
+            "novelty_of_viewpoint",
+            "template_risk",
+            "citation_restraint",
+            "ending_naturalness",
+            "interaction_naturalness",
+        ]:
+            if editorial.get(key):
+                lines.append(f"- {key}：{editorial.get(key)}")
+        if editorial.get("summary"):
+            lines.append(f"- 结论：{editorial.get('summary')}")
     lines.extend(["", "## 情感曲线分析", ""])
     for item in analysis.get("emotion_curve") or []:
         if isinstance(item, dict):
@@ -1438,6 +1679,17 @@ def markdown_score_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## 失败原因与必须修改项", ""])
     for item in report.get("mandatory_revisions") or ["当前版本已达发布线。"]:
         lines.append(f"- {item}")
+    if report.get("template_findings") or report.get("repeated_phrases") or report.get("citation_findings"):
+        lines.extend(["", "## 风险信号", ""])
+        for item in report.get("template_findings") or []:
+            lines.append(f"- 模板句：{item.get('pattern')}（{item.get('count')}）")
+        for item in report.get("repeated_phrases") or []:
+            lines.append(f"- 高相似短语：{item}")
+        citation = report.get("citation_findings") or {}
+        if citation:
+            lines.append(
+                f"- 引用策略：raw_urls={citation.get('raw_url_count', 0)} / inline_refs={citation.get('inline_citation_count', 0)} / refs={citation.get('reference_count', 0)}"
+            )
     suggestions = report.get("suggestions") or {}
     if suggestions.get("sample_comment_prompts") or suggestions.get("share_points"):
         lines.extend(["", "## 互动建议", ""])

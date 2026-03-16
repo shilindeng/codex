@@ -13,6 +13,7 @@
 - `review-report.json`：编辑评审结果
 - `review-report.md`：面向人读的评审摘要
 - `score-report.json`：启发式评分结果
+- `references.json`：标准化引用清单与文末引用卡片数据
 - `image-plan.json`：配图规划
 - `image-outline.json`：结构化插图大纲
 - `image-outline.md`：面向人读的插图大纲
@@ -64,6 +65,9 @@
 - `image_decision_source`
 - `image_article_category`
 - `image_auto_reason`
+- `references_path`
+- `corpus_root`
+- `max_similarity`
 
 ## `review-report.json` 关键字段
 
@@ -86,6 +90,7 @@
 - `passed`
 - `score_breakdown`
 - `quality_gates`
+- `interaction_score`
 - `score_profile`
 - `mandatory_revisions`
 - `suggestions`
@@ -94,6 +99,14 @@
 - `emotion_value_sentences`
 - `pain_point_sentences`
 - `ai_smell_hits`
+- `template_penalty_hits`
+- `max_similarity`
+- `similar_articles`
+- `repeated_phrases`
+- `references_summary`
+- `citation_findings`
+- `similarity_findings`
+- `interaction_findings`
 - `term_render_issues`
 - `layout_rigidity_notes`
 - `title_leak_check`

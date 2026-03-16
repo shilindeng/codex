@@ -66,48 +66,74 @@ class ViralEngineTests(unittest.TestCase):
         self.assertNotIn("先说结论", article)
         self.assertNotIn("最后给你一个可执行清单", article)
 
+    def test_score_report_fails_when_body_contains_raw_urls(self):
+        title = "测试标题"
+        body = "这里有一个事实依据 https://example.com/a ，但正文不该直接堆原始链接。"
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            manifest = {
+                "topic": title,
+                "audience": "大众读者",
+                "workspace": str(workspace),
+                "references_path": "references.json",
+                "source_urls": ["https://example.com/a"],
+            }
+            report = build_score_report(title, body, manifest, threshold=70)
+            self.assertFalse(report.get("quality_gates", {}).get("citation_policy_passed"))
+
     def test_score_report_has_quality_gates_and_can_pass(self):
         title = "为什么你越学越焦虑：真相是别再堆信息"
         body = "\n\n".join(
             [
-                "先说结论：焦虑的不是你学得慢，而是你把力气花错了地方。",
-                "你不是不够努力，只是方向错了。",
-                "你会发现，越忙的人越焦虑。",
-                "别急着自责，你缺的是判断。",
-                "没关系，你现在开始也来得及。",
-                "这很正常，你被信息洪流推着跑。",
-                "不是你不行，而是方法不对。",
-                "你并不需要把所有工具都学会。",
-                "你可以先把最关键的动作做到位。",
-                "至少今天，你先把一个动作做完。",
-                "先别急着追热点，你先守住自己的节奏。",
-                "很多人卡住在第一步：不知道怎么开始。",
-                "被淘汰的恐惧，会让你越学越乱。",
-                "如果你继续这样，代价是时间被浪费。",
-                "最难受的是，你努力了却没结果。",
+                "你可能也有过这种时刻：工具越看越多，收藏夹越堆越满，但真正要开始动手时，人反而更迟疑了。",
+                "问题不在信息太少，而在你总把注意力花在看起来重要、实际上不决定结果的地方。",
+                "如果你已经在这种循环里打转很久，那种疲惫不是矫情，而是注意力被不断切碎之后的自然反应。",
+                "更糟的是，你越努力补工具，越容易误以为自己离解决问题更近，结果只是把焦虑包装得更体面。",
+                "一份 GitHub Next 的开发者研究提醒过我们，真正让人疲惫的往往不是代码量，而是来回切换上下文带来的注意力流失 [1]。",
+                "Stack Overflow 的开发者调查也反复出现同一个信号：工具越来越多，判断成本没有同步下降 [2]。",
                 "",
-                "## 先把问题说透",
-                "大多数人以为学得越多越安全，但真正让人掉队的是乱学。",
-                "比如，一个团队把 2026年 的新工具都试了一遍，结果交付更慢。",
+                "## 大家真正误判了什么",
+                "很多人把“学更多”误当成安全感，但真正能降低焦虑的，从来不是信息密度，而是判断顺序。",
+                "当一个团队把新工具试了十轮，交付速度却没上来，问题通常不在努力不够，而在关键动作没有被单独拎出来。",
+                "最刺人的地方就在这里：你明明投入了更多时间，却越来越说不清自己到底为什么还在累。",
                 "",
-                "## 再给一个可执行的动作",
-                "第一步：把你最近一周最耗时的动作写下来。",
-                "第二步：删掉 80% 不产生结果的动作。",
-                "第三步：把一个动作重复到位。",
-                "官方文档 https://example.com/a 里写得很清楚，10% 的关键动作往往决定结果。",
-                "报告 https://example.com/b 也提到同样的趋势，更多细节见 https://example.com/c 。",
+                "## 真正拉开差距的分水岭",
+                "真正能带来掌控感的，不是知道更多名词，而是知道哪一类动作必须先做、哪一类动作可以暂时不做。",
+                "这句话之所以值得记住，是因为它把焦虑从情绪问题重新翻译成了排序问题。",
+                "> 不是信息不够，而是判断顺序出了错。",
+                "> 当你把注意力收回来，焦虑才会开始松动。",
+                "> 最有价值的进步，往往发生在你终于敢停掉那些看起来很努力的动作之后。",
                 "",
-                "## 最后给你一句话",
-                "> 不是信息不够，而是判断不够。",
-                "> 真正决定结果的，是你能否把关键动作重复到位。",
-                "> 普通人拼信息，高手拼判断。",
-                "作为编辑，我更想提醒你：别把努力浪费在看起来很忙的地方。",
-                "我们都希望你能从今天开始，少一点焦虑，多一点掌控感。",
+                "## 最后的判断",
+                "如果你也处在那种“越学越乱”的阶段，也许真正该问自己的不是“我还缺什么工具”，而是“我现在到底该先守住哪一个动作？”",
+                "这不是鸡汤，而是一种能帮你把注意力重新拿回来的判断。",
+                "如果是你，你会先砍掉哪一类无效动作？",
             ]
         ).strip()
-        manifest = {"topic": "学习焦虑", "audience": "大众读者", "direction": "", "source_urls": ["https://example.com/a"]}
-
-        report = build_score_report(title, body, manifest, threshold=88)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "references.json").write_text(
+                json.dumps(
+                    {
+                        "items": [
+                            {"index": 1, "url": "https://example.com/a", "title": "GitHub Next 研究", "domain": "example.com", "note": "关于上下文切换的研究"},
+                            {"index": 2, "url": "https://example.com/b", "title": "Stack Overflow 调查", "domain": "example.com", "note": "开发者使用 AI 的调查"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            manifest = {
+                "topic": "学习焦虑",
+                "audience": "大众读者",
+                "direction": "",
+                "source_urls": ["https://example.com/a", "https://example.com/b"],
+                "workspace": str(workspace),
+                "references_path": "references.json",
+            }
+            report = build_score_report(title, body, manifest, threshold=76)
         self.assertIn("quality_gates", report)
         self.assertIn("passed", report)
         self.assertTrue(any(item["dimension"] == "互动参与与社交货币" for item in report.get("score_breakdown", [])))

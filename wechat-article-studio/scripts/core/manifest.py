@@ -29,6 +29,7 @@ ARTIFACT_DEFAULTS = {
     "title_report_path": "title-report.json",
     "review_report_path": "review-report.json",
     "score_report_path": "score-report.json",
+    "references_path": "references.json",
     "image_plan_path": "image-plan.json",
     "image_outline_path": "image-outline.json",
     "image_outline_markdown_path": "image-outline.md",
@@ -47,6 +48,8 @@ relative_posix = legacy.relative_posix
 
 def ensure_manifest_schema(manifest: dict[str, Any], workspace: Path | None = None) -> dict[str, Any]:
     manifest = legacy.ensure_manifest_schema(manifest, workspace)
+    if workspace is not None:
+        manifest["workspace"] = str(workspace.resolve())
     manifest.setdefault("artifact_contract_version", 2)
     for key, value in MANIFEST_STATUS_DEFAULTS.items():
         manifest.setdefault(key, value)
