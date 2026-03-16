@@ -23,16 +23,17 @@ VIRAL_BLUEPRINT_FIELDS = [
 ]
 
 SCORE_WEIGHTS: list[tuple[str, int]] = [
-    ("标题与开头爆点", 12),
+    ("标题与开头爆点", 10),
     ("核心观点与副观点", 10),
-    ("说服策略与论证多样性", 12),
-    ("情绪触发与刺痛感", 12),
+    ("说服策略与论证多样性", 10),
+    ("情绪触发与刺痛感", 10),
     ("金句与传播句密度", 10),
+    ("互动参与与社交货币", 10),
     ("情感曲线与节奏", 8),
     ("情感层次与共鸣", 8),
     ("视角转化与认知增量", 8),
-    ("语言风格自然度", 10),
-    ("可信度与检索支撑", 10),
+    ("语言风格自然度", 8),
+    ("可信度与检索支撑", 8),
 ]
 
 DEFAULT_THRESHOLD = 88
@@ -112,9 +113,19 @@ BLUEPRINT_EXTRA_LIST_FIELDS = [
     "ending_modes",
     "voice_guardrails",
     "avoid_patterns",
+    "like_triggers",
+    "comment_triggers",
+    "share_triggers",
+    "social_currency_points",
+    "identity_labels",
+    "controversy_anchors",
+    "interaction_prompts",
 ]
 BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "article_archetype",
+    "interaction_formula",
+    "peak_moment_design",
+    "ending_interaction_design",
 ]
 
 ARCHETYPE_KEYWORDS: dict[str, list[str]] = {
@@ -147,6 +158,16 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "ending_modes": ["判断收束", "余味回扣", "风险提醒"],
         "voice_guardrails": ["少自我解释", "少模板连接词", "别把文章写成讲义", "让判断落在具体事实上"],
         "avoid_patterns": ["先说结论", "接下来我会", "最后给你一个可执行清单", "如果你只想记住一句话"],
+        "like_triggers": ["文末判断升华", "可截图金句", "让人点头的认知拨云见日"],
+        "comment_triggers": ["给出可站队的判断", "抛出一个真实会分歧的问题", "让读者忍不住补充自己的经验"],
+        "share_triggers": ["提供比热点更深一层的谈资", "帮读者表达身份与价值观", "用一句判断替读者完成表态"],
+        "social_currency_points": ["一个能在聊天里复述的新判断", "一个值得拿去解释热点的视角"],
+        "identity_labels": ["行业观察者", "普通用户", "同类决策者"],
+        "controversy_anchors": ["不要中性总结，要给一个可以被讨论甚至被反驳的靶子", "关键判断要让支持者愿意附和，反对者愿意开口"],
+        "interaction_prompts": ["如果是你，你会怎么判断？", "你更认同哪一边？"],
+        "interaction_formula": "点赞靠文末升华和金句，评论靠鲜明判断与提问，转发靠谈资和身份认同。",
+        "peak_moment_design": "中段安排一次反常识判断或趋势反转，让读者想停下来划线或转发。",
+        "ending_interaction_design": "结尾先收束判断，再留一个能让读者站队或补充经验的问题。",
         "default_sections": [
             {"heading": "大家真正误判了什么", "goal": "先把被忽略的信号说透", "evidence_need": "新闻、案例或现象对比"},
             {"heading": "真正拉开差距的分水岭", "goal": "提出主判断并拆解逻辑", "evidence_need": "数据、案例或结构拆解"},
@@ -176,6 +197,16 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "ending_modes": ["行动提示", "关键提醒", "适用边界"],
         "voice_guardrails": ["讲步骤但别像说明书", "每个动作都要解释为什么", "别堆砌空泛 checklist"],
         "avoid_patterns": ["先说结论", "这篇文章将", "综上所述", "万能清单"],
+        "like_triggers": ["讲清楚读者一直没弄明白的关键卡点", "在结尾给一个低门槛获得感", "把复杂动作说简单"],
+        "comment_triggers": ["问读者卡在哪一步", "邀请读者补充自己的踩坑经历", "留下适用边界让读者对号入座"],
+        "share_triggers": ["提供可直接转给同事/朋友的操作判断", "让读者拿去证明自己是懂门道的人", "一张可转述的方法框架"],
+        "social_currency_points": ["一套比清单更值钱的判断顺序", "一个能解释为什么做不顺的卡点视角"],
+        "identity_labels": ["新手", "实操者", "团队执行者"],
+        "controversy_anchors": ["指出常见误区，不要假装所有做法都对", "必要时让读者在两种路径之间做选择"],
+        "interaction_prompts": ["你最容易卡在哪一步？", "如果是你，你会先改哪一个动作？"],
+        "interaction_formula": "点赞靠低门槛获得感，评论靠卡点提问，转发靠实用框架和圈层认同。",
+        "peak_moment_design": "中段要出现一次“原来我一直做反了”的醒悟时刻。",
+        "ending_interaction_design": "结尾只留一两个最关键动作，并用提问促使读者说出自己的卡点。",
         "default_sections": [
             {"heading": "先别急着上手，真正的卡点在这里", "goal": "先拆误区和卡点", "evidence_need": "场景或失败案例"},
             {"heading": "把顺序理清，事情就简单了", "goal": "给出关键步骤和先后关系", "evidence_need": "步骤、示例或操作说明"},
@@ -205,6 +236,16 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "ending_modes": ["判断回扣", "迁移建议", "风险提醒"],
         "voice_guardrails": ["别把案例写成流水账", "先抓关键细节再下判断", "避免硬凑 checklist"],
         "avoid_patterns": ["先说结论", "第一第二第三机械平铺", "最后给你一个清单"],
+        "like_triggers": ["案例细节说到位", "关键判断说得准", "结尾有一记回扣"],
+        "comment_triggers": ["让读者站队案例中的关键选择", "让同行补充自己的经历", "指出一个容易争论的决策点"],
+        "share_triggers": ["提供可转述的案例洞察", "帮助读者表达自己所属圈层的判断", "给同行一个拿得出手的复盘视角"],
+        "social_currency_points": ["一个比案例本身更值得讲的判断", "一个可以迁移到别处的方法"],
+        "identity_labels": ["同行", "操盘者", "案例复盘者"],
+        "controversy_anchors": ["指出案例里最值得争议的一步", "不要只讲过程，要敢讲谁做对了谁做错了"],
+        "interaction_prompts": ["如果换成你，会在哪一步做不同选择？", "你见过更典型的类似案例吗？"],
+        "interaction_formula": "点赞靠细节与判断，评论靠站队与复盘欲，转发靠同行谈资和方法迁移。",
+        "peak_moment_design": "案例中段要有一个让读者情绪抬起来的关键转折或失误点。",
+        "ending_interaction_design": "结尾把个案抬升成通用判断，并留一个让同行想补充经历的问题。",
         "default_sections": [
             {"heading": "事情是怎么开始变味的", "goal": "给读者一个能代入的场景", "evidence_need": "案例细节"},
             {"heading": "真正的分水岭出现在这里", "goal": "拆解案例中的关键决策点", "evidence_need": "过程或对比"},
@@ -234,6 +275,16 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "ending_modes": ["轻回扣", "余味", "温和提醒"],
         "voice_guardrails": ["少大词", "少立刻下定义", "少做教练式发号施令"],
         "avoid_patterns": ["先说结论", "最后给你一个可执行清单", "鸡汤式鼓励"],
+        "like_triggers": ["一句替读者说中心事的话", "结尾温柔但不廉价的回扣", "细节共鸣"],
+        "comment_triggers": ["问一个和读者经历直接相关的问题", "让读者补充自己的类似瞬间", "让读者表达站在谁的处境里"],
+        "share_triggers": ["替读者完成情绪表达", "让读者借文章表达‘这就是我’", "贴上圈层身份标签"],
+        "social_currency_points": ["一段能代表读者心声的表述", "一个能让人转给同类人的处境判断"],
+        "identity_labels": ["打工人", "父母", "伴侣", "同类处境中的人"],
+        "controversy_anchors": ["不用强行制造对立，但可以给出让人想回应的价值判断", "让读者觉得自己的立场被看见"],
+        "interaction_prompts": ["你有没有过类似的瞬间？", "如果是你，你会怎么理解这件事？"],
+        "interaction_formula": "点赞靠被说中，评论靠补充经历，转发靠替读者表达‘我是谁’。",
+        "peak_moment_design": "中段安排一次情绪爆点或被说中的瞬间，让读者想停下来截图。",
+        "ending_interaction_design": "结尾轻回扣全文情绪，再留一个与读者自身经历直接相关的问题。",
         "default_sections": [
             {"heading": "那个让人一下子沉下去的瞬间", "goal": "建立代入感", "evidence_need": "具体场景或细节"},
             {"heading": "真正让人难受的，不是表面那件事", "goal": "把情绪背后的原因讲出来", "evidence_need": "对比或经历"},
@@ -450,6 +501,16 @@ def default_viral_blueprint(
         "ending_modes": list(profile.get("ending_modes") or []),
         "voice_guardrails": list(profile.get("voice_guardrails") or []),
         "avoid_patterns": list(profile.get("avoid_patterns") or []),
+        "like_triggers": list(profile.get("like_triggers") or []),
+        "comment_triggers": list(profile.get("comment_triggers") or []),
+        "share_triggers": list(profile.get("share_triggers") or []),
+        "social_currency_points": list(profile.get("social_currency_points") or []),
+        "identity_labels": _dedupe([audience_text, *list(profile.get("identity_labels") or [])])[:5],
+        "controversy_anchors": list(profile.get("controversy_anchors") or []),
+        "interaction_prompts": list(profile.get("interaction_prompts") or []),
+        "interaction_formula": str(profile.get("interaction_formula") or "高互动文章 = 情绪价值 + 社交货币 + 峰终体验"),
+        "peak_moment_design": str(profile.get("peak_moment_design") or ""),
+        "ending_interaction_design": str(profile.get("ending_interaction_design") or ""),
     }
 
 
@@ -569,6 +630,9 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
     output.setdefault("ending_mode", (output["viral_blueprint"].get("ending_modes") or profile.get("ending_modes") or ["判断收束"])[0])
     output.setdefault("voice_guardrails", output["viral_blueprint"].get("voice_guardrails") or profile.get("voice_guardrails") or [])
     output.setdefault("avoid_patterns", output["viral_blueprint"].get("avoid_patterns") or profile.get("avoid_patterns") or [])
+    output.setdefault("interaction_formula", output["viral_blueprint"].get("interaction_formula") or profile.get("interaction_formula") or "")
+    output.setdefault("peak_moment_design", output["viral_blueprint"].get("peak_moment_design") or profile.get("peak_moment_design") or "")
+    output.setdefault("ending_interaction_design", output["viral_blueprint"].get("ending_interaction_design") or profile.get("ending_interaction_design") or "")
     return output
 
 
@@ -583,6 +647,97 @@ def _extract_signatures(body: str) -> list[str]:
         if 10 <= legacy.cjk_len(cleaned) <= 42:
             quotes.append(cleaned)
     return [_ensure_sentence(item) for item in _dedupe(quotes)[:8]]
+
+
+INTERACTION_IDENTITY_MARKERS = [
+    "打工人", "普通人", "宝妈", "家长", "开发者", "产品经理", "运营", "创业者",
+    "管理者", "学生", "北上广深", "00后", "90后", "中年人", "职场人", "创作者",
+]
+
+
+def _extract_comment_questions(body: str, blueprint: dict[str, Any] | None = None) -> list[str]:
+    prompts = _normalize_list((blueprint or {}).get("interaction_prompts"))
+    hits: list[str] = []
+    for sentence in legacy.sentence_split(body):
+        cleaned = _clean_sentence(sentence)
+        if legacy.cjk_len(cleaned) < 8:
+            continue
+        if "？" in cleaned or "?" in cleaned or any(marker in cleaned for marker in ["你呢", "如果是你", "评论区", "你会怎么", "你怎么看"]):
+            hits.append(cleaned)
+    return _dedupe(prompts + hits)[:6]
+
+
+def _extract_social_currency_points(body: str, signature_lines: list[dict[str, Any]], blueprint: dict[str, Any] | None = None) -> list[str]:
+    prompts = _normalize_list((blueprint or {}).get("social_currency_points"))
+    hits: list[str] = []
+    for item in signature_lines[:4]:
+        text = str(item.get("text") or "").strip()
+        if text:
+            hits.append(text)
+    for sentence in legacy.sentence_split(body):
+        cleaned = _clean_sentence(sentence)
+        if legacy.cjk_len(cleaned) < 12:
+            continue
+        if any(marker in cleaned for marker in ["真正", "误判", "信号", "分水岭", "判断", "真相", "你以为", "看起来"]):
+            hits.append(cleaned)
+    return _dedupe(prompts + hits)[:6]
+
+
+def _extract_identity_labels(body: str, blueprint: dict[str, Any] | None = None) -> list[str]:
+    labels = _normalize_list((blueprint or {}).get("identity_labels"))
+    for marker in INTERACTION_IDENTITY_MARKERS:
+        if marker in body:
+            labels.append(marker)
+    return _dedupe(labels)[:6]
+
+
+def _extract_controversy_anchors(body: str, blueprint: dict[str, Any] | None = None) -> list[str]:
+    anchors = _normalize_list((blueprint or {}).get("controversy_anchors"))
+    for sentence in legacy.sentence_split(body):
+        cleaned = _clean_sentence(sentence)
+        if legacy.cjk_len(cleaned) < 10:
+            continue
+        if any(re.search(pattern, cleaned) for pattern in [r"不是.+而是", r"别再", r"大多数人", r"你以为", r"看起来.+其实", r"真正"]):
+            anchors.append(cleaned)
+    return _dedupe(anchors)[:6]
+
+
+def _interaction_design(body: str, blueprint: dict[str, Any] | None, signature_lines: list[dict[str, Any]]) -> dict[str, Any]:
+    body = body or ""
+    paragraphs = [block.strip() for block in legacy.list_paragraphs(body) if block.strip()]
+    ending_blocks = paragraphs[-2:] if paragraphs else []
+    ending_snapshot = " ".join(ending_blocks)
+    like_triggers = _dedupe(
+        _normalize_list((blueprint or {}).get("like_triggers"))
+        + [item.get("text") or "" for item in signature_lines[:3]]
+        + ([ending_blocks[-1]] if ending_blocks else [])
+    )[:6]
+    comment_triggers = _extract_comment_questions(body, blueprint)
+    share_triggers = _dedupe(
+        _normalize_list((blueprint or {}).get("share_triggers"))
+        + _extract_social_currency_points(body, signature_lines, blueprint)[:2]
+    )[:6]
+    social_currency_points = _extract_social_currency_points(body, signature_lines, blueprint)
+    identity_labels = _extract_identity_labels(body, blueprint)
+    controversy_anchors = _extract_controversy_anchors(body, blueprint)
+    peak_hint = str((blueprint or {}).get("peak_moment_design") or "").strip()
+    if not peak_hint:
+        peak_hint = signature_lines[0]["text"] if signature_lines else extract_summary(body, 80)
+    ending_design = str((blueprint or {}).get("ending_interaction_design") or "").strip()
+    if not ending_design:
+        ending_design = ending_snapshot or "结尾需要把情绪和判断收束到最值得互动的一点上。"
+    peak_end_present = bool(peak_hint and ending_snapshot)
+    return {
+        "like_triggers": like_triggers,
+        "comment_triggers": comment_triggers,
+        "share_triggers": share_triggers,
+        "social_currency_points": social_currency_points,
+        "identity_labels": identity_labels,
+        "controversy_anchors": controversy_anchors,
+        "peak_moment": peak_hint,
+        "ending_interaction_design": ending_design,
+        "peak_end_present": peak_end_present,
+    }
 
 
 def _extract_sentences_by_markers(body: str, markers: list[str], *, require_you: bool = False) -> list[str]:
@@ -731,6 +886,7 @@ def build_heuristic_review(
     emotion_curve = _emotion_curve_from_body(body, headings)
     emotion_layers = _emotion_layers(body)
     style_traits = _style_traits(body, blueprint)
+    interaction_design = _interaction_design(body, blueprint, signature_lines)
     strengths: list[str] = []
     issues: list[str] = []
     if len(signature_lines) >= SIGNATURE_LINE_THRESHOLD:
@@ -749,6 +905,10 @@ def build_heuristic_review(
         strengths.append("论证方式不是单一说教，具备拆解与对比。")
     else:
         issues.append("论证方式偏单一，需要补案例、对比或步骤。")
+    if len(interaction_design.get("comment_triggers") or []) >= 1 and len(interaction_design.get("share_triggers") or []) >= 1:
+        strengths.append("文章已经具备评论触发点和转发谈资。")
+    else:
+        issues.append("互动设计偏弱，缺少让读者想评论、想转发的明确触发点。")
     if ai_smell_findings:
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
@@ -787,6 +947,14 @@ def build_heuristic_review(
             "argument_diversity": argument_modes[:6],
             "perspective_shifts": perspective_shifts[:5],
             "style_traits": style_traits[:6],
+            "like_triggers": interaction_design["like_triggers"],
+            "comment_triggers": interaction_design["comment_triggers"],
+            "share_triggers": interaction_design["share_triggers"],
+            "social_currency_points": interaction_design["social_currency_points"],
+            "identity_labels": interaction_design["identity_labels"],
+            "controversy_anchors": interaction_design["controversy_anchors"],
+            "peak_moment": interaction_design["peak_moment"],
+            "ending_interaction_design": interaction_design["ending_interaction_design"],
         },
         "emotion_value_sentences": emotion_value_sentences[:8],
         "pain_point_sentences": pain_point_sentences[:8],
@@ -968,6 +1136,28 @@ def _score_signature(review: dict[str, Any]) -> tuple[int, str]:
     return score, "金句要足够短、够准、能被截图和复述。"
 
 
+def _score_interaction_design(review: dict[str, Any], body: str) -> tuple[int, str]:
+    analysis = review.get("viral_analysis", {}) or {}
+    like_triggers = _normalize_list(analysis.get("like_triggers"))
+    comment_triggers = _normalize_list(analysis.get("comment_triggers"))
+    share_triggers = _normalize_list(analysis.get("share_triggers"))
+    social_currency = _normalize_list(analysis.get("social_currency_points"))
+    identity_labels = _normalize_list(analysis.get("identity_labels"))
+    controversy = _normalize_list(analysis.get("controversy_anchors"))
+    peak = str(analysis.get("peak_moment") or "").strip()
+    ending = str(analysis.get("ending_interaction_design") or "").strip()
+    score = 2
+    score += min(2, max(0, len(like_triggers) - 1))
+    score += min(2, len(comment_triggers))
+    score += min(2, max(0, len(share_triggers) + len(social_currency) - 1) // 2)
+    score += 1 if identity_labels else 0
+    score += 1 if controversy else 0
+    score += 2 if peak and ending else 0
+    if re.search(r"[？?]", body):
+        score += 1
+    return min(10, score), "高互动内容要同时具备点赞共鸣、评论触发、转发谈资，以及峰终体验。"
+
+
 def _score_emotion_curve(review: dict[str, Any], body: str) -> tuple[int, str]:
     curve_count = len(review.get("viral_analysis", {}).get("emotion_curve") or [])
     paragraph_count = len(legacy.list_paragraphs(body))
@@ -1057,22 +1247,24 @@ def build_score_report(
     argument_score, argument_note = _score_argument_diversity(review)
     emotion_score, emotion_note = _score_emotion_trigger(review)
     signature_score, signature_note = _score_signature(review)
+    interaction_score, interaction_note = _score_interaction_design(review, body)
     curve_score, curve_note = _score_emotion_curve(review, body)
     layers_score, layers_note = _score_emotion_layers(review)
     perspective_score, perspective_note = _score_perspective(review)
     style_score, style_note = _score_style(review, body)
     credibility_score, credibility_note = _score_credibility(body, manifest, review)
     breakdown = [
-        {"dimension": "标题与开头爆点", "weight": 12, "score": hot_intro, "note": hot_intro_note},
+        {"dimension": "标题与开头爆点", "weight": 10, "score": hot_intro, "note": hot_intro_note},
         {"dimension": "核心观点与副观点", "weight": 10, "score": viewpoint_score, "note": viewpoint_note},
-        {"dimension": "说服策略与论证多样性", "weight": 12, "score": argument_score, "note": argument_note},
-        {"dimension": "情绪触发与刺痛感", "weight": 12, "score": emotion_score, "note": emotion_note},
+        {"dimension": "说服策略与论证多样性", "weight": 10, "score": argument_score, "note": argument_note},
+        {"dimension": "情绪触发与刺痛感", "weight": 10, "score": emotion_score, "note": emotion_note},
         {"dimension": "金句与传播句密度", "weight": 10, "score": signature_score, "note": signature_note},
+        {"dimension": "互动参与与社交货币", "weight": 10, "score": interaction_score, "note": interaction_note},
         {"dimension": "情感曲线与节奏", "weight": 8, "score": curve_score, "note": curve_note},
         {"dimension": "情感层次与共鸣", "weight": 8, "score": layers_score, "note": layers_note},
         {"dimension": "视角转化与认知增量", "weight": 8, "score": perspective_score, "note": perspective_note},
-        {"dimension": "语言风格自然度", "weight": 10, "score": style_score, "note": style_note},
-        {"dimension": "可信度与检索支撑", "weight": 10, "score": credibility_score, "note": credibility_note},
+        {"dimension": "语言风格自然度", "weight": 8, "score": style_score, "note": style_note},
+        {"dimension": "可信度与检索支撑", "weight": 8, "score": credibility_score, "note": credibility_note},
     ]
     total = sum(item["score"] for item in breakdown)
     quality_gates = _build_quality_gates(review, blueprint, credibility_score)
@@ -1093,6 +1285,7 @@ def build_score_report(
             "继续补刺痛句和现实代价，增强首屏停留与中段张力。" if not quality_gates["pain_point_enough"] else "",
             "补案例/对比/步骤，保证至少 3 种论证方式。" if not quality_gates["argument_diverse"] else "",
             "增加视角切换，避免整篇只从一个角度平铺。" if not quality_gates["perspective_shift_enough"] else "",
+            "补互动设计：显式安排点赞共鸣点、评论问题和可转发谈资。" if interaction_score < 7 else "",
             "继续清理模板腔，压低 AI 痕迹。" if not quality_gates["de_ai_passed"] else "",
             "补来源、数据或官方依据，提升可信度。" if not quality_gates["credibility_passed"] else "",
         ]
@@ -1115,6 +1308,10 @@ def build_score_report(
         )[:4],
         "sample_gold_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:3]]
         or _normalize_list(blueprint.get("target_quotes"))[:3],
+        "sample_comment_prompts": _normalize_list(review.get("viral_analysis", {}).get("comment_triggers"))
+        or _normalize_list(blueprint.get("interaction_prompts"))[:3],
+        "share_points": _normalize_list(review.get("viral_analysis", {}).get("social_currency_points"))
+        or _normalize_list(blueprint.get("social_currency_points"))[:3],
         "style_adjustments": _dedupe(
             [
                 "不同小节换不同进入方式，别把整篇写成同一套判断句模板。",
@@ -1177,6 +1374,21 @@ def markdown_review_report(review: dict[str, Any]) -> str:
     lines.extend(["", "## 金句", ""])
     for item in analysis.get("signature_lines") or []:
         lines.append(f"> {item.get('text') if isinstance(item, dict) else item}")
+    lines.extend(["", "## 互动设计", ""])
+    for label, key in [
+        ("点赞触发点", "like_triggers"),
+        ("评论触发点", "comment_triggers"),
+        ("转发触发点", "share_triggers"),
+        ("社交谈资", "social_currency_points"),
+        ("身份标签", "identity_labels"),
+        ("争议靶点", "controversy_anchors"),
+    ]:
+        items = _normalize_list(analysis.get(key))
+        lines.append(f"- {label}：{'、'.join(items) if items else '无'}")
+    if analysis.get("peak_moment"):
+        lines.append(f"- 峰值时刻：{analysis.get('peak_moment')}")
+    if analysis.get("ending_interaction_design"):
+        lines.append(f"- 结尾互动设计：{analysis.get('ending_interaction_design')}")
     lines.extend(["", "## 情感曲线分析", ""])
     for item in analysis.get("emotion_curve") or []:
         if isinstance(item, dict):
@@ -1226,6 +1438,13 @@ def markdown_score_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## 失败原因与必须修改项", ""])
     for item in report.get("mandatory_revisions") or ["当前版本已达发布线。"]:
         lines.append(f"- {item}")
+    suggestions = report.get("suggestions") or {}
+    if suggestions.get("sample_comment_prompts") or suggestions.get("share_points"):
+        lines.extend(["", "## 互动建议", ""])
+        for item in suggestions.get("sample_comment_prompts") or []:
+            lines.append(f"- 评论引导：{item}")
+        for item in suggestions.get("share_points") or []:
+            lines.append(f"- 转发谈资：{item}")
     lines.extend(["", "## 下一轮改稿优先级", ""])
     for item in (report.get("suggestions") or {}).get("revision_priorities") or ["优先守住当前爆点和节奏。"]:
         lines.append(f"- {item}")

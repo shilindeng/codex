@@ -13,7 +13,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 
-from core.viral import build_score_report, infer_article_archetype, normalize_outline_payload  # noqa: E402
+from core.viral import build_score_report, default_viral_blueprint, infer_article_archetype, normalize_outline_payload  # noqa: E402
 from core.workflow import collect_publish_blockers, _run_revision_loop  # noqa: E402
 import legacy_studio as legacy  # noqa: E402
 from providers.text.openai_compatible import placeholder_article, placeholder_outline  # noqa: E402
@@ -43,6 +43,22 @@ class ViralEngineTests(unittest.TestCase):
             research={},
         )
         self.assertEqual(archetype, "tutorial")
+
+    def test_blueprint_contains_interaction_design_fields(self):
+        blueprint = default_viral_blueprint(
+            topic="为什么好内容不一定高互动",
+            title="为什么好内容不一定高互动",
+            angle="",
+            audience="大众读者",
+            research={},
+            style_signals=[],
+        )
+        self.assertIn("like_triggers", blueprint)
+        self.assertIn("comment_triggers", blueprint)
+        self.assertIn("share_triggers", blueprint)
+        self.assertIn("social_currency_points", blueprint)
+        self.assertIn("interaction_formula", blueprint)
+        self.assertTrue(blueprint.get("peak_moment_design"))
 
     def test_placeholder_article_avoids_fixed_conclusion_and_checklist(self):
         title = "AI 产品为什么越来越像内容战争"
@@ -94,6 +110,7 @@ class ViralEngineTests(unittest.TestCase):
         report = build_score_report(title, body, manifest, threshold=88)
         self.assertIn("quality_gates", report)
         self.assertIn("passed", report)
+        self.assertTrue(any(item["dimension"] == "互动参与与社交货币" for item in report.get("score_breakdown", [])))
         # This sample should be able to pass both total score and gates.
         self.assertTrue(bool(report.get("passed")))
 

@@ -275,8 +275,11 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "sections 每项包含 heading, goal, evidence_need。"
                     "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns。"
                     "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
-                    "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals。"
+                    "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals, "
+                    "like_triggers, comment_triggers, share_triggers, social_currency_points, identity_labels, controversy_anchors, interaction_prompts, "
+                    "interaction_formula, peak_moment_design, ending_interaction_design。"
                     "不要把所有文章都规划成“一句话结论 + 三段方法 + 执行清单”。要根据题材判断是分析评论、教程指南、案例拆解还是叙事观察。"
+                    "规划时显式思考：点赞靠什么、评论靠什么、转发靠什么，以及中段的峰值时刻和结尾的互动收束如何设计。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -301,6 +304,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                 "content": (
                     "你是写 10w+ 公众号长文的资深作者兼总编。输出 Markdown 正文，不要解释。"
                     "必须消费输入里的 outline 与 viral_blueprint，但不能把它们机械翻译成模板文章。"
+                    "牢记：高互动文章 = 情绪价值（共鸣/争议） + 社交货币（谈资/身份） + 峰终体验。"
                     "写作要求："
                     "1. 允许用场景、新闻、反差、细节、人物、问题等不同方式开头，不要默认使用“先说结论”“如果你只想记住一句话”“这篇文章会”。"
                     "2. 结尾不默认给 checklist；只有当题材明显是教程/方法文时，才给动作。分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束。"
@@ -308,6 +312,9 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "4. 段落短但不能碎，句式要有长短变化；禁用首先/其次/最后/综上所述等模板连接词。"
                     "5. 多用具体场景、案例、对比、引用和事实支撑，不要空喊观点。"
                     "6. 不要自我解释写作结构，不要出现“接下来我会”“下面我们来看”。"
+                    "7. 中段必须设计一个让读者想停下来划线、点赞或争辩的峰值时刻。"
+                    "8. 结尾要么升华成一句值得点赞/转发的判断，要么留下一个和读者自身强相关、会激发评论的问题。"
+                    "9. 让文章至少提供一个可转述的社交谈资和一个可贴身份的表达点，但不要低级钓鱼。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -332,9 +339,11 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "字段必须包含 summary, findings, strengths, issues, platform_notes, viral_analysis, "
                     "emotion_value_sentences, pain_point_sentences, ai_smell_findings, revision_priorities。"
                     "viral_analysis 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
-                    "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits。"
+                    "signature_lines, emotion_curve, emotion_layers, argument_diversity, perspective_shifts, style_traits, "
+                    "like_triggers, comment_triggers, share_triggers, social_currency_points, identity_labels, controversy_anchors, peak_moment, ending_interaction_design。"
                     "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
                     "请重点识别：文章是否落入固定模板（如先说结论、篇章自我说明、结尾万能清单、每节都同一种句式起手）。"
+                    "同时判断：这篇文章为什么值得点赞、为什么会引发评论、为什么会被转发；如果缺失，请明确指出。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -372,6 +381,11 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "优先修复最影响阅读完成度和传播力的 3 个问题，但不要用固定模板去“提分”。"
                     "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
                     "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
+                    "改稿时必须补足互动设计："
+                    "1. 至少一个让人想点赞的金句或升华句。"
+                    "2. 至少一个自然触发评论的问题、站队点或经验补充点。"
+                    "3. 至少一个值得转发的谈资、身份标签或可复述判断。"
+                    "4. 中段要有峰值，结尾要有收束。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
