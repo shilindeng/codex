@@ -262,6 +262,24 @@ def _extract_body_urls(body: str) -> list[str]:
     return normalize_urls(urls)
 
 
+def normalize_publication_body(title: str, body: str) -> str:
+    normalized = body or ""
+    # Strip templated gold-quote labels while preserving the actual quote text.
+    normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
+
+    # Remove markdown callout reference blocks; the system will render a unified references section.
+    normalized = re.sub(
+        r"(?ms)^\s*>\s*\[!(?:TIP|NOTE)\]\s*(?:参考资料|参考来源|参考与延伸).*?(?=^\s*(?:#|$)|\Z)",
+        "",
+        normalized,
+    )
+
+    intro_blocks, sections = legacy.split_sections(normalized)
+    filtered_sections = [section for section in sections if not legacy.is_reference_heading(section.get("heading", ""))]
+    normalized = legacy.reconstruct_body(intro_blocks, filtered_sections).strip() + "\n"
+    return normalized
+
+
 def build_references_payload(workspace: Path, manifest: dict[str, Any], body: str) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -374,6 +392,7 @@ def sync_article_reference_policy(workspace: Path, manifest: dict[str, Any]) -> 
     meta, body = split_frontmatter(raw)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     body = strip_leading_h1(body, title)
+    body = normalize_publication_body(title, body)
     normalized_body, findings = apply_reference_policy(workspace, manifest, title, body)
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(normalized_body)
     if normalized_body != body or not (workspace / "references.json").exists():

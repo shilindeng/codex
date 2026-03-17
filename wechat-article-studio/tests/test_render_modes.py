@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 import legacy_studio as legacy  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
+from core.workflow import normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
 
 
@@ -89,6 +90,20 @@ class RenderModeTests(unittest.TestCase):
         decision = choose_layout_style("auto", signals, {"viral_blueprint": {"article_archetype": "commentary"}})
         self.assertEqual(decision.style, "magazine")
 
+    def test_commentary_title_with_ru_he_is_not_misclassified_as_tutorial(self):
+        signals = analyze_content_signals("这是一篇分析稿。", "md")
+        decision = choose_layout_style(
+            "auto",
+            signals,
+            {
+                "selected_title": "APP已死，Agent当立：AI如何终结图标时代",
+                "summary": "这不是教程，而是一次行业信号拆解。",
+                "image_controls": {"preset": "editorial-grain"},
+                "audience": "职场人/创业者/产品经理/开发者",
+            },
+        )
+        self.assertEqual(decision.style, "magazine")
+
     def test_render_appends_reference_cards_without_raw_urls(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -135,6 +150,85 @@ class RenderModeTests(unittest.TestCase):
             self.assertIn("官方文档", wechat_html)
             self.assertIn("查看原文", wechat_html)
             self.assertNotIn(">https://example.com/a<", wechat_html)
+
+    def test_publication_cleanup_removes_quote_labels_and_manual_reference_block(self):
+        body = "\n".join(
+            [
+                "正文开头",
+                "",
+                "> 金句 1：当用户把决定权交给你，你就不能只提供功能，你得提供解释。",
+                "",
+                "## 结尾",
+                "",
+                "留个问题：如果是你，你会怎么选？",
+                "",
+                "> [!TIP] 参考资料",
+                "> 1) 某来源：[1]",
+                "> 2) 某论文：[2]",
+            ]
+        )
+        cleaned = normalize_publication_body("测试标题", body)
+        self.assertNotIn("金句 1：", cleaned)
+        self.assertIn("当用户把决定权交给你", cleaned)
+        self.assertNotIn("[!TIP] 参考资料", cleaned)
+        self.assertNotIn("某来源：[1]", cleaned)
+
+    def test_render_strips_gold_quote_labels_and_manual_reference_blocks_from_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "摘要",
+                        "article_path": "article.md",
+                        "assembled_path": "assembled.md",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "assembled.md").write_text(
+                "\n".join(
+                    [
+                        "正文开头",
+                        "",
+                        "> 金句 1：一句重要判断。",
+                        "",
+                        "## 结尾",
+                        "",
+                        "留个问题：如果是你，你会怎么选？",
+                        "",
+                        "> [!TIP] 参考资料",
+                        "> 1) 某来源：[1]",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "references.json").write_text(
+                json.dumps(
+                    {"items": [{"index": 1, "url": "https://example.com/a", "title": "官方文档", "domain": "example.com", "note": ""}]},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
+            self.assertNotIn("金句 1：", wechat_html)
+            self.assertNotIn("提示</strong> 参考资料", wechat_html)
+            self.assertIn("参考资料", wechat_html)
 
 
 if __name__ == "__main__":

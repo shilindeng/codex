@@ -320,6 +320,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "9. 让文章至少提供一个可转述的社交谈资和一个可贴身份的表达点，但不要低级钓鱼。"
                     "10. 必须遵守引用策略：正文不要裸贴 URL；只允许在关键事实段落后用 [1][2] 这类轻引用，完整来源放文末参考资料。"
                     "11. 必须避开输入 recent_phrase_blacklist 里的高频套话和结构。"
+                    "12. 不要输出“金句 1：”“金句 2：”这类标签，也不要手写“参考资料”区块或 [!TIP] 参考资料 callout。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -394,6 +395,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "4. 中段要有峰值，结尾要有收束。"
                     "5. 必须去掉正文裸 URL，改成关键节点轻引用或文末参考资料卡片。"
                     "6. 必须避开输入 recent_phrase_blacklist 中的开头、结尾和桥接套话。"
+                    "7. 删除“金句 1/2/3”标签，不要手写参考资料段或参考资料 callout。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

@@ -7,6 +7,7 @@ import textwrap
 from pathlib import Path
 from urllib.parse import urlparse
 
+import legacy_studio as legacy
 from core.artifacts import extract_summary, read_json, read_text, split_frontmatter, strip_leading_h1, write_text
 from core.layout import (
     DEFAULT_ACCENT_COLOR,
@@ -118,6 +119,20 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str
     return "\n".join(cards)
 
 
+def normalize_publication_markdown(title: str, body: str) -> str:
+    normalized = body or ""
+    normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
+    normalized = re.sub(
+        r"(?ms)^\s*>\s*\[!(?:TIP|NOTE)\]\s*(?:参考资料|参考来源|参考与延伸).*?(?=^\s*(?:#|$)|\Z)",
+        "",
+        normalized,
+    )
+    intro_blocks, sections = legacy.split_sections(normalized)
+    sections = [section for section in sections if not legacy.is_reference_heading(section.get("heading", ""))]
+    rebuilt = legacy.reconstruct_body(intro_blocks, sections).strip()
+    return (rebuilt + "\n") if rebuilt else ""
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -137,6 +152,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     input_format_arg = getattr(args, "input_format", "auto")
     fmt = detect_input_format(input_path.name, str(input_format_arg), body)
     if fmt == "md":
+        body = normalize_publication_markdown(title, body)
         content_source = highlight_technical_terms_markdown(body)
         content_html = markdown_to_html(content_source)
     else:

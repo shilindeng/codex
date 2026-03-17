@@ -267,6 +267,27 @@ def _article_archetype(manifest: dict[str, Any]) -> str:
         value = _normalize_key(str(blueprint.get("article_archetype") or ""))
         if value:
             return value
+    corpus = " ".join(
+        [
+            str(manifest.get("selected_title") or ""),
+            str(manifest.get("summary") or ""),
+            str(manifest.get("topic") or ""),
+        ]
+    )
+    scores = {
+        "tutorial": len(re.findall(r"教程|指南|手把手|步骤|SOP|模板|上手|实操", corpus)) * 2 + len(re.findall(r"如何|怎么", corpus)),
+        "case-study": len(re.findall(r"案例|复盘|拆解|项目|公司|产品", corpus)),
+        "narrative": len(re.findall(r"故事|经历|生活|关系|焦虑|情绪|职场", corpus)),
+        "commentary": len(re.findall(r"为什么|真相|趋势|信号|机会|风险|拐点|时代|当立|已死|判断", corpus)),
+    }
+    if scores["tutorial"] >= 3 and scores["tutorial"] > scores["commentary"]:
+        return "tutorial"
+    if scores["case-study"] >= 2:
+        return "case-study"
+    if scores["narrative"] >= 2 and scores["narrative"] > scores["commentary"]:
+        return "narrative"
+    if scores["commentary"] >= 1:
+        return "commentary"
     return ""
 
 
@@ -363,13 +384,23 @@ def choose_layout_style(requested: str, content_signals: ContentSignals, manifes
     if archetype in _ARCHETYPE_TO_LAYOUT_STYLE:
         base = _ARCHETYPE_TO_LAYOUT_STYLE[archetype]
 
+    if preset in {"editorial-grain", "retro", "luxury-minimal"} and not content_signals.has_table and not content_signals.has_code_block:
+        return LayoutDecision(style="magazine", reason=f"editorial_preset={preset} -> magazine")
+
     audience = str(manifest.get("audience") or "")
     audience_business = any(keyword in audience for keyword in _AUDIENCE_BUSINESS_KEYWORDS)
-    if content_signals.has_table or audience_business:
+    if content_signals.has_table:
         boosted = "business"
         return LayoutDecision(
             style=boosted,
-            reason=f"boost_business(table={content_signals.has_table},audience={audience_business}) preset={preset or 'none'} base={base}",
+            reason=f"boost_business(table={content_signals.has_table}) preset={preset or 'none'} base={base}",
+        )
+
+    if audience_business and (preset in {"professional-corporate", "minimal"} or archetype == "case-study"):
+        boosted = "business"
+        return LayoutDecision(
+            style=boosted,
+            reason=f"boost_business(audience={audience_business},archetype={archetype or 'none'}) preset={preset or 'none'} base={base}",
         )
 
     if archetype == "tutorial" and content_signals.list_item_count >= 4:
@@ -847,9 +878,9 @@ class _Sanitizer(HTMLParser):
         base = f"color:{t.heading};font-weight:800;line-height:1.45;"
         if self._theme.key == "magazine":
             if level == "h2":
-                return base + f"margin:38px 0 14px;font-size:24px;letter-spacing:0.2px;border-bottom:1px solid {t.line};padding-bottom:8px;"
+                return base + "margin:40px 0 16px;font-size:24px;letter-spacing:0.28px;border-bottom:1px solid #e8dbc8;padding-bottom:10px;"
             if level == "h3":
-                return base + "margin:28px 0 10px;font-size:19px;"
+                return base + "margin:30px 0 12px;font-size:19px;color:#3f3328;"
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "poster":
             if level == "h2":
@@ -859,9 +890,9 @@ class _Sanitizer(HTMLParser):
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "business":
             if level == "h2":
-                return base + f"margin:34px 0 14px;font-size:22px;padding-left:10px;border-left:4px solid {self._accent};"
+                return base + f"margin:36px 0 16px;font-size:22px;padding:8px 0 8px 12px;border-left:5px solid {self._accent};background:linear-gradient(90deg, rgba(29,78,216,0.08), rgba(29,78,216,0));"
             if level == "h3":
-                return base + "margin:26px 0 10px;font-size:18px;"
+                return base + "margin:28px 0 12px;font-size:18px;color:#18355f;"
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "cards":
             if level == "h2":
@@ -871,21 +902,21 @@ class _Sanitizer(HTMLParser):
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "warm":
             if level == "h2":
-                return base + f"margin:34px 0 14px;font-size:22px;padding-left:10px;border-left:4px solid {self._accent};"
+                return base + f"margin:36px 0 16px;font-size:22px;padding:8px 0 8px 12px;border-left:5px solid {self._accent};background:linear-gradient(90deg, rgba(217,119,6,0.10), rgba(217,119,6,0));"
             if level == "h3":
-                return base + "margin:26px 0 10px;font-size:18px;"
+                return base + "margin:28px 0 12px;font-size:18px;color:#7c4d12;"
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "blueprint":
             if level == "h2":
-                return base + f"margin:34px 0 14px;font-size:22px;padding-left:10px;border-left:4px solid {self._accent};background:{t.soft2};padding-top:6px;padding-bottom:6px;"
+                return base + f"margin:36px 0 16px;font-size:22px;padding-left:12px;border-left:5px solid {self._accent};background:{t.soft2};padding-top:8px;padding-bottom:8px;"
             if level == "h3":
-                return base + "margin:26px 0 10px;font-size:18px;"
+                return base + "margin:28px 0 12px;font-size:18px;color:#21406e;"
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "tech":
             if level == "h2":
-                return base + f"margin:34px 0 14px;font-size:22px;padding-left:10px;border-left:4px solid {self._accent};"
+                return base + f"margin:36px 0 16px;font-size:22px;padding:8px 0 8px 12px;border-left:5px solid {self._accent};background:linear-gradient(90deg, rgba(14,165,233,0.09), rgba(14,165,233,0));"
             if level == "h3":
-                return base + "margin:26px 0 10px;font-size:18px;"
+                return base + "margin:28px 0 12px;font-size:18px;color:#11657f;"
             return base + "margin:22px 0 8px;font-size:17px;"
         # clean default
         if level == "h2":
@@ -897,7 +928,7 @@ class _Sanitizer(HTMLParser):
     def _style_for_tag(self, tag: str, attrs: dict[str, str]) -> str:
         t = self._theme
         if tag == "p":
-            return f"margin:14px 0;line-height:1.9;font-size:16px;color:{t.text};letter-spacing:0.1px;"
+            return f"margin:15px 0;line-height:1.92;font-size:16px;color:{t.text};letter-spacing:0.08px;"
         if tag in {"h2", "h3", "h4"}:
             return self._theme_heading_style(tag)
         if tag == "ul":
@@ -929,6 +960,10 @@ class _Sanitizer(HTMLParser):
             )
             if tone:
                 base += f"border-left:4px solid {self._accent};"
+            if t.key == "magazine":
+                base += "box-shadow:none;"
+            if t.key in {"business", "tech", "blueprint"}:
+                base += "box-shadow:0 10px 24px rgba(15,23,42,0.05);"
             return base
         if tag == "a":
             return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(15,23,42,0.12);"
@@ -947,6 +982,10 @@ class _Sanitizer(HTMLParser):
             if t.key in {"business", "tech"}:
                 shadow = "0 8px 22px rgba(15,23,42,0.05)"
                 radius = t.radius_sm
+            if t.key == "magazine":
+                shadow = "0 14px 28px rgba(90,72,38,0.08)"
+            if t.key == "warm":
+                shadow = "0 12px 26px rgba(180,120,40,0.10)"
             return (
                 "display:block;width:100%;height:auto;margin:22px auto 18px;"
                 f"border-radius:{radius};box-shadow:{shadow};"
