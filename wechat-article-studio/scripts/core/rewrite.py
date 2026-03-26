@@ -173,7 +173,9 @@ def generate_revision_candidate(
             "style_signals": manifest.get("style_signals") or [],
             "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
             "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
+            "editorial_blueprint": manifest.get("editorial_blueprint") or {},
         }
         result = provider.revise_article(context)
         provider_name = result.provider

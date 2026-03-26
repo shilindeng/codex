@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.editorial_strategy import normalize_editorial_blueprint
 
 
 VIRAL_BLUEPRINT_FIELDS = [
@@ -647,6 +648,17 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
     output["angle"] = angle
     output["sections"] = normalized_sections
     output["viral_blueprint"] = normalize_viral_blueprint(output.get("viral_blueprint"), context | {"selected_title": title, "angle": angle})
+    output["editorial_blueprint"] = normalize_editorial_blueprint(
+        output.get("editorial_blueprint") or context.get("editorial_blueprint"),
+        context
+        | {
+            "topic": str(context.get("topic") or title),
+            "selected_title": title,
+            "title": title,
+            "direction": angle,
+            "article_archetype": output["viral_blueprint"].get("article_archetype") or profile["article_archetype"],
+        },
+    )
     output.setdefault("article_archetype", output["viral_blueprint"].get("article_archetype") or profile["article_archetype"])
     output.setdefault("opening_mode", (output["viral_blueprint"].get("opening_modes") or profile.get("opening_modes") or ["场景切口"])[0])
     output.setdefault("ending_mode", (output["viral_blueprint"].get("ending_modes") or profile.get("ending_modes") or ["判断收束"])[0])
@@ -866,19 +878,34 @@ def _workspace_from_manifest(manifest: dict[str, Any]) -> Path | None:
 
 
 def _recent_corpus_articles(manifest: dict[str, Any], limit: int = 20) -> list[Path]:
-    root_raw = str(manifest.get("corpus_root") or "").strip()
-    if not root_raw:
-        return []
-    root = Path(root_raw)
-    if not root.exists():
+    roots_raw = manifest.get("corpus_roots")
+    roots: list[Path] = []
+    if isinstance(roots_raw, list):
+        for raw in roots_raw:
+            item = str(raw or "").strip()
+            if item:
+                roots.append(Path(item))
+    if not roots:
+        root_raw = str(manifest.get("corpus_root") or "").strip()
+        if root_raw:
+            roots.append(Path(root_raw))
+    if not roots:
         return []
     current_workspace = _workspace_from_manifest(manifest)
     items: list[Path] = []
-    for path in root.rglob("article.md"):
-        resolved = path.resolve()
-        if current_workspace and current_workspace.resolve() in resolved.parents:
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists():
             continue
-        items.append(resolved)
+        for path in root.rglob("article.md"):
+            resolved = path.resolve()
+            if current_workspace and current_workspace.resolve() in resolved.parents:
+                continue
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(resolved)
     items.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
     return items[:limit]
 
@@ -915,6 +942,23 @@ def _template_findings(body: str, manifest: dict[str, Any]) -> list[dict[str, An
         hits = body.count(compact)
         if hits:
             findings.append({"pattern": compact, "count": hits, "evidence": compact})
+    summary = manifest.get("recent_corpus_summary") or {}
+    if isinstance(summary, dict):
+        for item in summary.get("overused_title_patterns") or []:
+            key = str(item.get("key") or "").strip()
+            label = str(item.get("label") or key).strip()
+            if key and (key in {"why-think-clear", "danger-not-but", "year-not-but"}):
+                findings.append({"pattern": f"title-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
+        for item in summary.get("overused_opening_patterns") or []:
+            key = str(item.get("key") or "").strip()
+            label = str(item.get("label") or key).strip()
+            if key and key in {"reader-scene", "many-people-misread", "recent-realization"}:
+                findings.append({"pattern": f"opening-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
+        for item in summary.get("overused_ending_patterns") or []:
+            key = str(item.get("key") or "").strip()
+            label = str(item.get("label") or key).strip()
+            if key and key in {"question-close", "comment-invite"}:
+                findings.append({"pattern": f"ending-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
     return findings
 
 

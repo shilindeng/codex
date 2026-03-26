@@ -31,6 +31,16 @@ def _is_hex_color(value: str) -> bool:
     return bool(_HEX_COLOR_RE.match((value or "").strip()))
 
 
+def _hex_to_rgba(value: str, alpha: float) -> str:
+    color = (value or "").strip()
+    if not _is_hex_color(color):
+        color = DEFAULT_ACCENT_COLOR
+    red = int(color[1:3], 16)
+    green = int(color[3:5], 16)
+    blue = int(color[5:7], 16)
+    return f"rgba({red},{green},{blue},{alpha:.2f})"
+
+
 def _normalize_key(value: str) -> str:
     return (value or "").strip().lower().replace("_", "-")
 
@@ -360,7 +370,13 @@ class LayoutDecision:
     reason: str
 
 
-def choose_layout_style(requested: str, content_signals: ContentSignals, manifest: dict[str, Any]) -> LayoutDecision:
+def choose_layout_style(
+    requested: str,
+    content_signals: ContentSignals,
+    manifest: dict[str, Any],
+    *,
+    rich_blocks: Iterable[str] = (),
+) -> LayoutDecision:
     req = _normalize_key(requested or "auto")
     if req and req != "auto":
         if req not in THEMES:
@@ -384,11 +400,37 @@ def choose_layout_style(requested: str, content_signals: ContentSignals, manifes
     if archetype in _ARCHETYPE_TO_LAYOUT_STYLE:
         base = _ARCHETYPE_TO_LAYOUT_STYLE[archetype]
 
+    audience = str(manifest.get("audience") or "")
+    audience_business = any(keyword in audience for keyword in _AUDIENCE_BUSINESS_KEYWORDS)
+    normalized_rich_blocks = {item for item in (_normalize_key(str(value)) for value in rich_blocks) if item}
+    rich_note = ",".join(sorted(normalized_rich_blocks)) or "none"
+
+    if normalized_rich_blocks.intersection({"timeline", "compare"}):
+        if audience_business or archetype == "case-study" or content_signals.has_table:
+            return LayoutDecision(style="business", reason=f"rich_blocks={rich_note} audience_business={audience_business} -> business")
+        return LayoutDecision(style="blueprint", reason=f"rich_blocks={rich_note} archetype={archetype or 'none'} -> blueprint")
+
+    if "steps" in normalized_rich_blocks:
+        if audience_business or archetype == "case-study":
+            return LayoutDecision(style="business", reason=f"rich_blocks={rich_note} audience_business={audience_business} -> business")
+        return LayoutDecision(style="tech", reason=f"rich_blocks={rich_note} archetype={archetype or 'none'} -> tech")
+
+    if "dialogue" in normalized_rich_blocks:
+        if archetype in {"narrative", ""}:
+            return LayoutDecision(style="warm", reason=f"rich_blocks={rich_note} archetype={archetype or 'none'} -> warm")
+        return LayoutDecision(style="cards", reason=f"rich_blocks={rich_note} archetype={archetype or 'none'} -> cards")
+
+    if "quote" in normalized_rich_blocks and archetype == "commentary":
+        return LayoutDecision(style="magazine", reason=f"rich_blocks={rich_note} archetype={archetype} -> magazine")
+
+    if "stats" in normalized_rich_blocks:
+        if audience_business or archetype == "case-study":
+            return LayoutDecision(style="business", reason=f"rich_blocks={rich_note} audience_business={audience_business} -> business")
+        return LayoutDecision(style="poster", reason=f"rich_blocks={rich_note} archetype={archetype or 'none'} -> poster")
+
     if preset in {"editorial-grain", "retro", "luxury-minimal"} and not content_signals.has_table and not content_signals.has_code_block:
         return LayoutDecision(style="magazine", reason=f"editorial_preset={preset} -> magazine")
 
-    audience = str(manifest.get("audience") or "")
-    audience_business = any(keyword in audience for keyword in _AUDIENCE_BUSINESS_KEYWORDS)
     if content_signals.has_table:
         boosted = "business"
         return LayoutDecision(
@@ -688,12 +730,46 @@ _ALLOWED_TAGS = {
     "td",
     "img",
     "a",
+    "section",
+    "span",
     "strong",
     "em",
     "del",
     "sup",
     "sub",
 }
+
+_WX_RICH_ROLES = {
+    "steps",
+    "steps-item",
+    "steps-index",
+    "steps-content",
+    "timeline",
+    "timeline-item",
+    "timeline-time",
+    "timeline-dot",
+    "timeline-content",
+    "compare",
+    "compare-header",
+    "compare-row",
+    "compare-head-left",
+    "compare-head-right",
+    "compare-left",
+    "compare-right",
+    "dialogue",
+    "dialogue-bubble",
+    "dialogue-speaker",
+    "dialogue-text",
+    "quote-card",
+    "quote-mark",
+    "quote-text",
+    "quote-author",
+    "stats-grid",
+    "stat-card",
+    "stat-value",
+    "stat-label",
+}
+_WX_SIDES = {"left", "right"}
 
 
 _CALLOUT_TAG_MAP = {
@@ -798,6 +874,8 @@ class _Sanitizer(HTMLParser):
                 attr_map["style"] = style
             # tone is only for internal styling; do not output it in WeChat HTML
             attr_map.pop("data-wx-tone", None)
+            attr_map.pop("data-wx-role", None)
+            attr_map.pop("data-wx-side", None)
         if tag_name in _VOID_TAGS:
             self._out.append("<" + tag_name + self._format_attrs(attr_map) + " />")
             return
@@ -863,6 +941,14 @@ class _Sanitizer(HTMLParser):
             tone = (raw.get("data-wx-tone") or "").strip().lower()
             if tone in {"tip", "takeaway", "warning", "checklist", "mythfact"}:
                 keep["data-wx-tone"] = tone
+        if tag in {"section", "p", "span"}:
+            role = (raw.get("data-wx-role") or "").strip().lower()
+            if role in _WX_RICH_ROLES:
+                keep["data-wx-role"] = role
+            if tag == "section":
+                side = (raw.get("data-wx-side") or "").strip().lower()
+                if side in _WX_SIDES:
+                    keep["data-wx-side"] = side
         return keep
 
     def _format_attrs(self, attrs: dict[str, str]) -> str:
@@ -925,8 +1011,93 @@ class _Sanitizer(HTMLParser):
             return base + "margin:26px 0 10px;font-size:18px;"
         return base + "margin:22px 0 8px;font-size:17px;"
 
+    def _style_for_wx_role(self, tag: str, attrs: dict[str, str]) -> str | None:
+        t = self._theme
+        role = (attrs.get("data-wx-role") or "").strip().lower()
+        if not role:
+            return None
+        accent_soft = _hex_to_rgba(self._accent, 0.12)
+        accent_soft_strong = _hex_to_rgba(self._accent, 0.18)
+        accent_tint = _hex_to_rgba(self._accent, 0.08)
+        outline = f"1px solid {t.line}"
+        if tag == "section" and role == "steps":
+            return f"margin:22px 0;padding:18px 18px 6px;border-radius:{t.radius};background:{t.soft};border:{outline};"
+        if tag == "section" and role == "steps-item":
+            return "display:flex;align-items:flex-start;gap:12px;margin:0 0 12px;"
+        if tag == "span" and role == "steps-index":
+            return (
+                "display:inline-flex;align-items:center;justify-content:center;"
+                f"min-width:30px;height:30px;border-radius:999px;background:{self._accent};"
+                "color:#ffffff;font-size:14px;font-weight:800;line-height:30px;flex-shrink:0;"
+            )
+        if tag == "span" and role == "steps-content":
+            return f"display:block;flex:1;color:{t.text};line-height:1.85;padding-top:2px;"
+        if tag == "section" and role == "timeline":
+            return f"margin:22px 0;padding:18px 18px 6px;border-radius:{t.radius};background:{t.soft};border:{outline};"
+        if tag == "section" and role == "timeline-item":
+            return "display:flex;align-items:flex-start;gap:12px;margin:0 0 12px;"
+        if tag == "span" and role == "timeline-time":
+            return f"display:inline-block;min-width:72px;color:{self._accent};font-size:13px;font-weight:800;line-height:1.8;flex-shrink:0;"
+        if tag == "span" and role == "timeline-dot":
+            return f"display:inline-block;color:{self._accent};font-size:12px;line-height:1.8;flex-shrink:0;"
+        if tag == "span" and role == "timeline-content":
+            return f"display:block;flex:1;padding-left:12px;border-left:2px solid {accent_soft_strong};color:{t.text};line-height:1.85;"
+        if tag == "section" and role == "compare":
+            return f"margin:22px 0;border:{outline};border-radius:{t.radius};overflow:hidden;background:#ffffff;"
+        if tag == "section" and role == "compare-header":
+            return f"display:flex;background:{t.soft2};"
+        if tag == "section" and role == "compare-row":
+            return f"display:flex;border-top:1px solid {t.line};"
+        if tag == "span" and role in {"compare-head-left", "compare-head-right"}:
+            return f"display:block;flex:1;padding:12px 14px;color:{t.heading};line-height:1.5;font-size:14px;font-weight:800;"
+        if tag == "span" and role == "compare-left":
+            return f"display:block;flex:1;padding:12px 14px;color:{t.muted};line-height:1.75;font-size:14px;font-weight:600;"
+        if tag == "span" and role == "compare-right":
+            return f"display:block;flex:1;padding:12px 14px;color:{t.text};line-height:1.75;font-size:14px;font-weight:700;"
+        if tag == "section" and role == "dialogue":
+            return f"margin:22px 0;padding:18px;border-radius:{t.radius};background:{t.soft};border:{outline};"
+        if tag == "section" and role == "dialogue-bubble":
+            side = (attrs.get("data-wx-side") or "left").strip().lower()
+            bubble_bg = "#ffffff" if side == "left" else accent_tint
+            radius = "18px 18px 18px 8px" if side == "left" else "18px 18px 8px 18px"
+            margin = "0 18% 12px 0" if side == "left" else "0 0 12px 18%"
+            return (
+                f"margin:{margin};padding:12px 14px;border-radius:{radius};background:{bubble_bg};"
+                f"border:1px solid {accent_soft};box-shadow:0 8px 22px rgba(15,23,42,0.04);"
+            )
+        if tag == "p" and role == "dialogue-speaker":
+            return f"margin:0 0 4px;color:{t.muted};font-size:12px;font-weight:700;"
+        if tag == "p" and role == "dialogue-text":
+            return f"margin:0;color:{t.text};font-size:15px;line-height:1.82;"
+        if tag == "section" and role == "quote-card":
+            return (
+                f"margin:24px 0;padding:22px;border-radius:{t.radius};background:{t.soft2};border:{outline};"
+                "box-shadow:0 14px 32px rgba(15,23,42,0.05);"
+            )
+        if tag == "p" and role == "quote-mark":
+            return f"margin:0 0 8px;color:{self._accent};font-size:28px;line-height:1;font-weight:800;"
+        if tag == "p" and role == "quote-text":
+            return f"margin:0;color:{t.heading};font-size:17px;line-height:1.9;font-weight:700;letter-spacing:0.08px;"
+        if tag == "p" and role == "quote-author":
+            return f"margin:10px 0 0;color:{t.muted};font-size:13px;line-height:1.6;"
+        if tag == "section" and role == "stats-grid":
+            return "display:flex;flex-wrap:wrap;gap:12px;margin:22px 0;"
+        if tag == "section" and role == "stat-card":
+            return (
+                f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-radius:{t.radius};"
+                f"background:{t.soft};border:{outline};"
+            )
+        if tag == "p" and role == "stat-value":
+            return f"margin:0;color:{self._accent};font-size:28px;line-height:1.15;font-weight:900;"
+        if tag == "p" and role == "stat-label":
+            return f"margin:8px 0 0;color:{t.muted};font-size:13px;line-height:1.7;"
+        return None
+
     def _style_for_tag(self, tag: str, attrs: dict[str, str]) -> str:
         t = self._theme
+        role_style = self._style_for_wx_role(tag, attrs)
+        if role_style is not None:
+            return role_style
         if tag == "p":
             return f"margin:15px 0;line-height:1.92;font-size:16px;color:{t.text};letter-spacing:0.08px;"
         if tag in {"h2", "h3", "h4"}:

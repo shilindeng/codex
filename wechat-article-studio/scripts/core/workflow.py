@@ -27,6 +27,11 @@ from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
 from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
+from core.editorial_strategy import (
+    generate_diverse_title_variants,
+    normalize_editorial_blueprint,
+    summarize_recent_corpus,
+)
 from core.render import cmd_render as legacy_render
 from core.rewrite import generate_revision_candidate
 from core.viral import (
@@ -160,21 +165,36 @@ def normalize_urls(values: list[str]) -> list[str]:
     return urls
 
 
-def detect_corpus_root(workspace: Path) -> Path | None:
+def detect_corpus_roots(workspace: Path) -> list[Path]:
     env_root = (legacy.os.getenv("WECHAT_JOBS_ROOT") or "").strip()
     candidates: list[Path] = []
     if env_root:
-        candidates.append(Path(env_root).expanduser().resolve())
-    candidates.append(Path(r"D:\vibe-coding\codex\wechat-jobs"))
-    candidates.append(workspace.parent / "wechat-jobs")
+        for raw in re.split(r"[;,]", env_root):
+            item = raw.strip()
+            if item:
+                candidates.append(Path(item).expanduser())
+    candidates.extend(
+        [
+            Path(r"D:\vibe-coding\codex\.wechat-jobs"),
+            Path(r"D:\vibe-coding\codex\wechat-jobs"),
+            workspace.parent / ".wechat-jobs",
+            workspace.parent / "wechat-jobs",
+        ]
+    )
+    seen: set[str] = set()
+    roots: list[Path] = []
     for candidate in candidates:
         try:
             resolved = candidate.resolve()
         except OSError:
             continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
         if resolved.exists() and resolved.is_dir():
-            return resolved
-    return None
+            roots.append(resolved)
+    return roots
 
 
 def _normalize_phrase(text: str) -> str:
@@ -183,19 +203,25 @@ def _normalize_phrase(text: str) -> str:
     return compact
 
 
-def recent_article_paths(corpus_root: Path | None, current_workspace: Path, limit: int = RECENT_CORPUS_LIMIT) -> list[Path]:
-    if corpus_root is None or not corpus_root.exists():
+def recent_article_paths(corpus_roots: list[Path], current_workspace: Path, limit: int = RECENT_CORPUS_LIMIT) -> list[Path]:
+    if not corpus_roots:
         return []
     current_workspace = current_workspace.resolve()
     articles: list[Path] = []
-    for path in corpus_root.rglob("article.md"):
-        try:
-            resolved = path.resolve()
-        except OSError:
-            continue
-        if current_workspace in resolved.parents:
-            continue
-        articles.append(resolved)
+    seen: set[str] = set()
+    for corpus_root in corpus_roots:
+        for path in corpus_root.rglob("article.md"):
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if current_workspace in resolved.parents:
+                continue
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            articles.append(resolved)
     articles.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
     return articles[:limit]
 
@@ -222,13 +248,15 @@ def collect_recent_phrase_blacklist(paths: list[Path]) -> list[str]:
 
 
 def attach_corpus_context(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    corpus_root = detect_corpus_root(workspace)
-    if corpus_root is None:
+    corpus_roots = detect_corpus_roots(workspace)
+    if not corpus_roots:
         manifest["corpus_root"] = ""
+        manifest["corpus_roots"] = []
         manifest["recent_phrase_blacklist"] = []
         manifest["recent_article_titles"] = []
+        manifest["recent_corpus_summary"] = {}
         return manifest
-    article_paths = recent_article_paths(corpus_root, workspace)
+    article_paths = recent_article_paths(corpus_roots, workspace)
     titles: list[str] = []
     for path in article_paths[:8]:
         try:
@@ -238,9 +266,12 @@ def attach_corpus_context(workspace: Path, manifest: dict[str, Any]) -> dict[str
         except OSError:
             title = path.parent.name
         titles.append(str(title))
-    manifest["corpus_root"] = str(corpus_root)
+    corpus_summary = summarize_recent_corpus(article_paths)
+    manifest["corpus_root"] = str(corpus_roots[0])
+    manifest["corpus_roots"] = [str(item) for item in corpus_roots]
     manifest["recent_phrase_blacklist"] = collect_recent_phrase_blacklist(article_paths)
     manifest["recent_article_titles"] = titles
+    manifest["recent_corpus_summary"] = corpus_summary
     return manifest
 
 
@@ -478,6 +509,25 @@ def current_viral_blueprint(workspace: Path, manifest: dict[str, Any], ideation:
     )
 
 
+def current_editorial_blueprint(workspace: Path, manifest: dict[str, Any], ideation: dict[str, Any] | None = None) -> dict[str, Any]:
+    ideation = ideation or load_ideation(workspace)
+    outline_meta = ideation.get("outline_meta") or {}
+    existing = outline_meta.get("editorial_blueprint") or ideation.get("editorial_blueprint") or manifest.get("editorial_blueprint")
+    return normalize_editorial_blueprint(
+        existing,
+        {
+            "topic": manifest.get("topic") or ideation.get("topic") or manifest.get("selected_title") or "",
+            "selected_title": ideation.get("selected_title") or manifest.get("selected_title") or "",
+            "direction": manifest.get("direction") or ideation.get("direction") or "",
+            "audience": manifest.get("audience") or "大众读者",
+            "research": load_research(workspace),
+            "article_archetype": (current_viral_blueprint(workspace, manifest, ideation).get("article_archetype") or ""),
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+        },
+    )
+
+
 def persist_style_samples(workspace: Path, manifest: dict[str, Any], sample_values: list[str] | None) -> dict[str, Any]:
     merged = list(manifest.get("style_sample_paths") or [])
     merged.extend(sample_values or [])
@@ -558,10 +608,35 @@ def select_scored_title(
     selected_title: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = list(ideation.get("titles") or [])
-    ranked_titles, selected = legacy.rank_title_candidates(candidates, topic, audience, angle, selected_title)
+    recent_corpus_summary = manifest.get("recent_corpus_summary") or {}
+    recent_title_patterns = [str(item.get("key") or "") for item in (recent_corpus_summary.get("overused_title_patterns") or []) if item.get("key")]
+    ranked_titles, selected = legacy.rank_title_candidates(
+        candidates,
+        topic,
+        audience,
+        angle,
+        selected_title,
+        recent_titles=manifest.get("recent_article_titles") or [],
+        recent_title_patterns=recent_title_patterns,
+    )
     if not selected or not selected.get("title_gate_passed", False):
-        boosted_candidates = candidates + legacy.generate_hot_title_variants(topic, angle, audience)
-        ranked_titles, selected = legacy.rank_title_candidates(boosted_candidates, topic, audience, angle, selected_title)
+        boosted_candidates = candidates + generate_diverse_title_variants(
+            topic,
+            angle,
+            audience,
+            editorial_blueprint=manifest.get("editorial_blueprint") or {},
+            recent_titles=manifest.get("recent_article_titles") or [],
+            recent_corpus_summary=recent_corpus_summary if isinstance(recent_corpus_summary, dict) else {},
+        )
+        ranked_titles, selected = legacy.rank_title_candidates(
+            boosted_candidates,
+            topic,
+            audience,
+            angle,
+            selected_title,
+            recent_titles=manifest.get("recent_article_titles") or [],
+            recent_title_patterns=recent_title_patterns,
+        )
     chosen_title = selected_title or (selected.get("title") if selected else topic)
     if selected_title:
         selected_report = legacy.title_dimension_score(selected_title, audience, angle)
@@ -658,6 +733,7 @@ def cmd_research(args: argparse.Namespace) -> int:
 def cmd_titles(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_corpus_context(workspace, manifest)
     provider = require_live_text_provider("titles")
     research = load_research(workspace)
     topic = manifest.get("topic") or research.get("topic") or "未命名主题"
@@ -670,6 +746,10 @@ def cmd_titles(args: argparse.Namespace) -> int:
             "angle": manifest.get("direction") or research.get("angle") or "",
             "count": count,
             "research": research,
+            "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+            "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+            "editorial_blueprint": current_editorial_blueprint(workspace, manifest),
         }
     )
     ideation = load_ideation(workspace)
@@ -721,6 +801,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
     research = load_research(workspace)
     ideation = load_ideation(workspace)
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
+    editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
     result = provider.generate_outline(
         {
             "topic": manifest.get("topic") or research.get("topic") or "",
@@ -733,8 +814,10 @@ def cmd_outline(args: argparse.Namespace) -> int:
             "style_signals": manifest.get("style_signals") or [],
             "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
             "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
             "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "editorial_blueprint": editorial_blueprint,
         }
     )
     outline = normalize_outline_payload(
@@ -746,7 +829,9 @@ def cmd_outline(args: argparse.Namespace) -> int:
             "direction": manifest.get("direction") or research.get("angle") or "",
             "research": research,
             "style_signals": manifest.get("style_signals") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "editorial_blueprint": editorial_blueprint,
         },
     )
     outline.setdefault("title", selected_title)
@@ -781,6 +866,7 @@ def cmd_write(args: argparse.Namespace) -> int:
         outline_lines = [line.strip("- ").strip() for line in read_input_file(args.outline_file).splitlines() if line.strip()]
         outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
+    editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
     outline_meta = normalize_outline_payload(
         outline_meta,
         {
@@ -790,7 +876,9 @@ def cmd_write(args: argparse.Namespace) -> int:
             "direction": manifest.get("direction") or research.get("angle") or "",
             "research": research,
             "style_signals": manifest.get("style_signals") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "editorial_blueprint": editorial_blueprint,
         },
     )
     result = provider.generate_article(
@@ -803,13 +891,14 @@ def cmd_write(args: argparse.Namespace) -> int:
             "research": research,
             "outline": outline_meta or {"sections": ideation.get("outline") or []},
             "viral_blueprint": outline_meta.get("viral_blueprint") or current_viral_blueprint(workspace, manifest, ideation),
-            "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
             "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
             "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
             "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "editorial_blueprint": outline_meta.get("editorial_blueprint") or editorial_blueprint,
         }
     )
     body = str(result.payload).strip()
@@ -863,11 +952,12 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "summary": meta.get("summary") or manifest.get("summary") or extract_summary(body),
                 "article_body": body,
                 "viral_blueprint": blueprint,
-                "editorial_blueprint": (load_ideation(workspace).get("outline_meta") or {}).get("editorial_blueprint") or {},
+                "editorial_blueprint": current_editorial_blueprint(workspace, manifest),
                 "style_samples": manifest.get("style_sample_paths") or [],
                 "style_signals": manifest.get("style_signals") or [],
                 "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
                 "recent_article_titles": manifest.get("recent_article_titles") or [],
+                "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
                 "corpus_root": manifest.get("corpus_root") or "",
                 "revision_round": int(manifest.get("revision_round") or 1),
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
@@ -1440,7 +1530,9 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
                 "style_signals": manifest.get("style_signals") or [],
                 "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
                 "recent_article_titles": manifest.get("recent_article_titles") or [],
+                "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
+                "editorial_blueprint": current_editorial_blueprint(workspace, manifest, ideation),
             },
         )
         ideation["outline_meta"] = outline_meta
@@ -1459,6 +1551,9 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
         )
         ideation["viral_blueprint"] = blueprint
         manifest["viral_blueprint"] = blueprint
+        editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+        ideation["editorial_blueprint"] = editorial_blueprint
+        manifest["editorial_blueprint"] = editorial_blueprint
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = title
     manifest["content_mode"] = manifest.get("content_mode") or "tech-balanced"
@@ -1481,9 +1576,18 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                     "angle": angle,
                     "count": 4,
                     "research": research,
+                    "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+                    "recent_article_titles": manifest.get("recent_article_titles") or [],
+                    "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+                    "editorial_blueprint": current_editorial_blueprint(workspace, manifest, ideation),
                 }
             )
-            titles = result.payload[:4] if isinstance(result.payload, list) else result.payload.get("titles", [])
+            if isinstance(result.payload, list):
+                titles = result.payload[:4]
+            elif isinstance(result.payload, dict):
+                titles = (result.payload.get("candidates") or result.payload.get("titles") or [])[:4]
+            else:
+                titles = []
             ideation.update(
                 {
                     "topic": topic,
@@ -1499,7 +1603,14 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                 {
                     "topic": topic,
                     "direction": angle,
-                    "titles": legacy.generate_hot_title_variants(topic, angle, audience),
+                    "titles": generate_diverse_title_variants(
+                        topic,
+                        angle,
+                        audience,
+                        editorial_blueprint=current_editorial_blueprint(workspace, manifest, ideation),
+                        recent_titles=manifest.get("recent_article_titles") or [],
+                        recent_corpus_summary=manifest.get("recent_corpus_summary") or {},
+                    ),
                     "updated_at": now_iso(),
                     "provider": "local-heuristic",
                     "model": "builtin",
@@ -1539,6 +1650,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
 
     ideation = load_ideation(workspace)
     if not ideation.get("titles"):
+        default_editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
         title_result = provider.generate_titles(
             {
                 "topic": topic,
@@ -1548,9 +1660,16 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "research": research,
                 "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
                 "recent_article_titles": manifest.get("recent_article_titles") or [],
+                "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+                "editorial_blueprint": default_editorial_blueprint,
             }
         )
-        titles = title_result.payload[:3] if isinstance(title_result.payload, list) else title_result.payload.get("titles", [])
+        if isinstance(title_result.payload, list):
+            titles = title_result.payload[:3]
+        elif isinstance(title_result.payload, dict):
+            titles = (title_result.payload.get("candidates") or title_result.payload.get("titles") or [])[:3]
+        else:
+            titles = []
         ideation.update(
             {
                 "topic": topic,
@@ -1569,6 +1688,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
 
     outline_meta = dict(ideation.get("outline_meta") or {})
     if not outline_meta.get("sections"):
+        default_editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
         outline_result = provider.generate_outline(
             {
                 "topic": topic,
@@ -1581,8 +1701,10 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "style_signals": manifest.get("style_signals") or [],
                 "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
                 "recent_article_titles": manifest.get("recent_article_titles") or [],
+                "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
                 "corpus_root": manifest.get("corpus_root") or "",
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
+                "editorial_blueprint": default_editorial_blueprint,
             }
         )
         outline_meta = normalize_outline_payload(
@@ -1594,7 +1716,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "direction": angle,
                 "research": research,
                 "style_signals": manifest.get("style_signals") or [],
+                "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
+                "editorial_blueprint": default_editorial_blueprint,
             },
         )
         if not outline_meta.get("sections"):
@@ -1623,13 +1747,14 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "research": research,
             "outline": outline_meta or {"sections": ideation.get("outline") or []},
             "viral_blueprint": outline_meta.get("viral_blueprint") or current_viral_blueprint(workspace, manifest, ideation),
-            "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
             "style_samples": manifest.get("style_sample_paths") or [],
             "style_signals": manifest.get("style_signals") or [],
             "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
             "recent_article_titles": manifest.get("recent_article_titles") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
             "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "editorial_blueprint": outline_meta.get("editorial_blueprint") or current_editorial_blueprint(workspace, manifest, ideation),
         }
     )
     body = str(article_result.payload).strip()

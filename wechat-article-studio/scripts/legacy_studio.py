@@ -30,6 +30,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+from core.editorial_strategy import title_template_key
+
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
@@ -1695,10 +1697,14 @@ def rank_title_candidates(
     audience: str,
     angle: str,
     selected_title: str = "",
+    recent_titles: list[str] | None = None,
+    recent_title_patterns: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     scored: list[dict[str, Any]] = []
     seen: set[str] = set()
     candidates = list(titles or [])
+    recent_titles = [str(item or "").strip() for item in (recent_titles or []) if str(item or "").strip()]
+    recent_title_patterns = [str(item or "").strip() for item in (recent_title_patterns or []) if str(item or "").strip()]
     if topic and all((item.get("title") or "").strip() != topic.strip() for item in candidates):
         candidates.append({"title": topic, "strategy": "原始主题", "audience_fit": audience, "risk_note": "作为原始 topic 参与标题评分。"})
     if selected_title and all((item.get("title") or "").strip() != selected_title.strip() for item in candidates):
@@ -1709,14 +1715,25 @@ def rank_title_candidates(
             continue
         seen.add(title)
         report = title_dimension_score(title, audience, angle)
+        template_key = title_template_key(title)
+        repeat_penalty = 0
+        if title in recent_titles:
+            repeat_penalty += 12
+        if recent_titles and any(title.startswith(prefix[:10]) for prefix in recent_titles[:6] if len(prefix) >= 10):
+            repeat_penalty += 3
+        if template_key and template_key in recent_title_patterns:
+            repeat_penalty += 6
+        final_score = max(0, int(report["total_score"]) - repeat_penalty)
         scored.append(
             {
                 **item,
                 "title": title,
-                "title_score": report["total_score"],
-                "title_gate_passed": report["passed"],
+                "title_score": final_score,
+                "title_gate_passed": final_score >= report["threshold"],
                 "title_score_breakdown": report["score_breakdown"],
                 "title_score_threshold": report["threshold"],
+                "title_template_key": template_key,
+                "title_repeat_penalty": repeat_penalty,
             }
         )
     scored.sort(key=lambda item: (item.get("title_gate_passed", False), item.get("title_score", 0)), reverse=True)

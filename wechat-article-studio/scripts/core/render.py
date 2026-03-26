@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 import legacy_studio as legacy
 from core.artifacts import extract_summary, read_json, read_text, split_frontmatter, strip_leading_h1, write_text
+from core.editorial import enhance_content_html
 from core.layout import (
     DEFAULT_ACCENT_COLOR,
     THEMES,
@@ -159,13 +160,15 @@ def cmd_render(args: argparse.Namespace) -> int:
         content_source = body
         content_html = content_source
 
+    content_html, rich_blocks = enhance_content_html(content_html, manifest)
+
     reference_cards_html = build_reference_cards_html(workspace, manifest)
     if reference_cards_html:
         content_html = content_html + "\n" + reference_cards_html
 
     signals = analyze_content_signals(content_source if fmt == "md" else content_html, fmt)
     layout_style_arg = getattr(args, "layout_style", "auto")
-    layout_decision = choose_layout_style(str(layout_style_arg), signals, manifest)
+    layout_decision = choose_layout_style(str(layout_style_arg), signals, manifest, rich_blocks=rich_blocks)
     chosen_style = layout_decision.style
 
     accent_arg = getattr(args, "accent_color", DEFAULT_ACCENT_COLOR) or DEFAULT_ACCENT_COLOR
@@ -175,7 +178,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     def plain_text_from_html(value: str) -> str:
         cleaned = re.sub(r"<[^>]+>", " ", value or "")
-        cleaned = re.sub(r"\\s+", " ", cleaned).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         return cleaned
 
     preview_html = apply_callout_blocks(content_html)
@@ -223,6 +226,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     manifest["wechat_html_path"] = relative_posix(wechat_output, workspace)
     manifest["layout_style"] = chosen_style
     manifest["layout_style_reason"] = layout_decision.reason
+    manifest["layout_rich_blocks"] = rich_blocks
     manifest["accent_color"] = accent_decision.accent
     manifest["accent_color_reason"] = accent_decision.reason
     manifest["render_input_format"] = fmt

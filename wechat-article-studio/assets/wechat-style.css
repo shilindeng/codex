@@ -242,6 +242,208 @@ body {
   background: var(--soft);
 }
 
+.wx-content [data-wx-role="steps"],
+.wx-content [data-wx-role="timeline"],
+.wx-content [data-wx-role="dialogue"] {
+  margin: 22px 0;
+  padding: 18px 18px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.wx-content [data-wx-role="steps-item"],
+.wx-content [data-wx-role="timeline-item"] {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.wx-content [data-wx-role="steps-index"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 30px;
+  flex-shrink: 0;
+}
+
+.wx-content [data-wx-role="steps-content"] {
+  flex: 1;
+  padding-top: 2px;
+  line-height: 1.85;
+}
+
+.wx-content [data-wx-role="timeline-time"] {
+  display: inline-block;
+  min-width: 72px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.8;
+  flex-shrink: 0;
+}
+
+.wx-content [data-wx-role="timeline-dot"] {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.8;
+  flex-shrink: 0;
+}
+
+.wx-content [data-wx-role="timeline-content"] {
+  flex: 1;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+  line-height: 1.85;
+}
+
+.wx-content [data-wx-role="compare"] {
+  margin: 22px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.wx-content [data-wx-role="compare-header"],
+.wx-content [data-wx-role="compare-row"] {
+  display: flex;
+}
+
+.wx-content [data-wx-role="compare-header"] {
+  background: var(--soft-2);
+}
+
+.wx-content [data-wx-role="compare-row"] + [data-wx-role="compare-row"] {
+  border-top: 1px solid var(--line);
+}
+
+.wx-content [data-wx-role="compare-head-left"],
+.wx-content [data-wx-role="compare-head-right"],
+.wx-content [data-wx-role="compare-left"],
+.wx-content [data-wx-role="compare-right"] {
+  flex: 1;
+  padding: 12px 14px;
+  line-height: 1.75;
+  font-size: 14px;
+}
+
+.wx-content [data-wx-role="compare-head-left"],
+.wx-content [data-wx-role="compare-head-right"] {
+  color: var(--heading);
+  font-weight: 800;
+}
+
+.wx-content [data-wx-role="compare-left"] {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.wx-content [data-wx-role="compare-right"] {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.wx-content [data-wx-role="dialogue-bubble"] {
+  margin: 0 18% 12px 0;
+  padding: 12px 14px;
+  border-radius: 18px 18px 18px 8px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+}
+
+.wx-content [data-wx-role="dialogue-bubble"][data-wx-side="right"] {
+  margin: 0 0 12px 18%;
+  border-radius: 18px 18px 8px 18px;
+  background: var(--soft-2);
+}
+
+.wx-content [data-wx-role="dialogue-speaker"] {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wx-content [data-wx-role="dialogue-text"] {
+  margin: 0;
+  line-height: 1.82;
+  font-size: 15px;
+}
+
+.wx-content [data-wx-role="quote-card"] {
+  margin: 24px 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft-2);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.05);
+}
+
+.wx-content [data-wx-role="quote-mark"] {
+  margin: 0 0 8px;
+  color: var(--accent);
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.wx-content [data-wx-role="quote-text"] {
+  margin: 0;
+  color: var(--heading);
+  font-size: 17px;
+  line-height: 1.9;
+  font-weight: 700;
+}
+
+.wx-content [data-wx-role="quote-author"] {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.wx-content [data-wx-role="stats-grid"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 22px 0;
+}
+
+.wx-content [data-wx-role="stat-card"] {
+  box-sizing: border-box;
+  flex: 1 1 160px;
+  min-width: 140px;
+  padding: 18px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.wx-content [data-wx-role="stat-value"] {
+  margin: 0;
+  color: var(--accent);
+  font-size: 28px;
+  line-height: 1.15;
+  font-weight: 900;
+}
+
+.wx-content [data-wx-role="stat-label"] {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
 .wx-article.wx-theme-magazine .wx-title {
   font-size: 31px;
   line-height: 1.24;
