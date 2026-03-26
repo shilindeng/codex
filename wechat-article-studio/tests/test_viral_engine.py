@@ -140,6 +140,32 @@ class ViralEngineTests(unittest.TestCase):
         # This sample should be able to pass both total score and gates.
         self.assertTrue(bool(report.get("passed")))
 
+    def test_score_report_flags_outline_like_ai_copy(self):
+        title = "为什么很多团队做不好 AI 落地"
+        body = "\n\n".join(
+            [
+                "很多人一上来就想做 AI 落地。",
+                "很多人以为问题只是工具不够。",
+                "很多人后来又去补更多工具。",
+                "",
+                "## 为什么第一步总会错",
+                "如果你现在很焦虑，那就说明你还没有想清楚。",
+                "",
+                "## 为什么第二步还是会错",
+                "如果你继续这样做，结果通常也不会太好。",
+                "",
+                "## 为什么最后还是没结果",
+                "如果你还想继续推进，那就先别急着下结论。",
+            ]
+        ).strip()
+        report = build_score_report(title, body, {"topic": title, "audience": "大众读者", "direction": "", "source_urls": []}, threshold=70)
+        self.assertFalse(report.get("quality_gates", {}).get("depth_passed"))
+        self.assertFalse(report.get("quality_gates", {}).get("structure_passed"))
+        patterns = {item.get("type") for item in report.get("ai_smell_findings") or []}
+        self.assertIn("outline_like", patterns)
+        self.assertIn("repeated_starter", patterns)
+        self.assertTrue(any("补现场、案例和反方边界" in item for item in report.get("mandatory_revisions", [])))
+
     def test_publish_blockers_include_quality_gate_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

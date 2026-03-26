@@ -80,9 +80,9 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
         "",
         blueprint.get('core_viewpoint') or '真正决定传播效果的，不是信息堆积，而是文章有没有带出新的判断。',
         "",
-        "很多公众号稿件的问题，不是信息不够，而是写法太像模板：开头一眼能猜到，结尾一眼能看穿，读完没有余味。",
+        "那种 AI 味最重的稿子，往往不是写得太短，而是全篇都像一组正确但无感的提纲：没有现场、没有人物、没有代价，也没有边界。",
         "",
-        "真正能留下来的文章，往往不是上来就把答案喊出来，而是先把读者带进那个具体的问题和处境。",
+        "真正能留下来的文章，往往不是上来就把答案喊出来，而是先把读者带进那个具体的问题和处境，再用事实和判断把事情讲透。",
         "",
     ]
     for section in (normalized_outline.get("sections") or []):
@@ -96,7 +96,7 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
                 "",
                 "把这一段写实，写到读者能立刻看见场景、理解代价，并带走一个更稳的判断。",
                 "",
-                "写这一节时，尽量补一处具体细节、一处对比或案例，以及一句值得被记住的判断。",
+                "写这一节时，至少补一处具体细节、一处对比或案例，以及一句值得被记住的判断；如果能补一个反方或边界，这一节会更像真人写出来的。",
                 "",
             ]
         )
@@ -289,6 +289,8 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "规划时显式思考：点赞靠什么、评论靠什么、转发靠什么，以及中段的峰值时刻和结尾的互动收束如何设计。"
                     "必须给出 primary_interaction_goal 和 secondary_interaction_goal，禁止三种互动目标同时拉满。"
                     "必须避开输入中的 recent_phrase_blacklist；如果 recent_corpus_summary 提示某种标题模式、开头模式、结尾模式或小标题模式已经过度出现，就不要再复用。"
+                    "大纲必须主动分配深度：至少有一个“现场/案例/具体瞬间”章节，一个“误判/反方/边界”章节，一个“最后判断/收束”章节。"
+                    "不要让所有小标题都长得像同一类问句、编号句或判断句。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -330,6 +332,10 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "11. 必须避开输入 recent_phrase_blacklist 里的高频套话和结构。"
                     "12. 如果 recent_corpus_summary 提示某种标题模式、开头模式、结尾模式或小标题模式已经过度出现，必须主动换路数。"
                     "13. 不要输出“金句 1：”“金句 2：”这类标签，也不要手写“参考资料”区块或 [!TIP] 参考资料 callout。"
+                    "14. 正文必须至少满足这些硬要求：前 2~3 段里出现一个具体场景/动作/瞬间；中段至少出现一处案例、数据或事实支撑；全文至少出现一处反方、误判或适用边界。"
+                    "15. 至少保留 1~2 段真正展开的分析段，不要所有段落都短到像提纲卡片。"
+                    "16. 不要让多个段落反复用“很多人/你可能/如果你”起手；同一篇里这种起手最多各用一次。"
+                    "17. 小标题之间要有句法变化，不要整篇都是同一类问句、同一类编号句或同一类判断句。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -359,6 +365,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
                     "请重点识别：文章是否落入固定模板（如先说结论、篇章自我说明、结尾万能清单、每节都同一种句式起手）。"
                     "如果输入 recent_corpus_summary 显示这篇稿子的标题、开头、结尾或小标题模式撞上近期高频套路，要明确指出。"
+                    "还要重点判断：有没有具体场景/动作/瞬间，有没有事实或案例托底，有没有反方或适用边界，段落是否过碎像提纲，多个段落是否反复同一种起手。"
                     "同时判断：这篇文章为什么值得点赞、为什么会引发评论、为什么会被转发；如果缺失，请明确指出。"
                     "editorial_review 必须包含 reading_desire, professional_tone, novelty_of_viewpoint, template_risk, citation_restraint, ending_naturalness, interaction_naturalness, summary。"
                 ),
@@ -408,6 +415,8 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "6. 必须避开输入 recent_phrase_blacklist 中的开头、结尾和桥接套话。"
                     "7. 如果 recent_corpus_summary 显示标题、开头、结尾或小标题模式撞上近期高频套路，必须顺手换骨架。"
                     "8. 删除“金句 1/2/3”标签，不要手写参考资料段或参考资料 callout。"
+                    "9. 如果原稿缺少现场、案例、反方或边界，请优先补这几类内容，而不是继续加抽象判断。"
+                    "10. 如果原稿段落过碎，请合并出一两段真正展开的分析段；如果多个段落起手一样，请重写起手。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

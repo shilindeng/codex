@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -132,6 +133,83 @@ BLUEPRINT_EXTRA_LIST_FIELDS = [
     "controversy_anchors",
     "interaction_prompts",
 ]
+
+SCENE_MARKERS = [
+    "那一刻",
+    "当时",
+    "会议室",
+    "办公室",
+    "工位",
+    "浏览器",
+    "屏幕",
+    "白板",
+    "消息弹出来",
+    "刚坐下",
+    "凌晨",
+    "晚上",
+    "中午",
+    "有人",
+    "一个团队",
+    "一个同事",
+    "那天",
+]
+
+DETAIL_MARKERS = [
+    "邮件",
+    "表格",
+    "链接",
+    "文档",
+    "截图",
+    "工单",
+    "客户",
+    "老板",
+    "同事",
+    "群里",
+    "版本",
+    "按钮",
+    "流程",
+    "页面",
+    "表单",
+]
+
+COUNTERPOINT_MARKERS = [
+    "但这不代表",
+    "但这不等于",
+    "但问题是",
+    "可真正的问题",
+    "另一面是",
+    "反过来",
+    "例外是",
+    "边界在于",
+    "前提是",
+    "误区在于",
+    "别把",
+    "不是",
+    "而是",
+]
+
+EVIDENCE_MARKERS = [
+    "数据显示",
+    "研究",
+    "报告",
+    "官方",
+    "案例",
+    "复盘",
+    "例如",
+    "比如",
+    "根据",
+]
+
+COMMON_PARAGRAPH_STARTERS = {
+    "很多人",
+    "你可能",
+    "如果你",
+    "真正的",
+    "问题是",
+    "这件事",
+    "先说",
+    "接下来",
+}
 BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "article_archetype",
     "primary_interaction_goal",
@@ -852,6 +930,95 @@ def _style_traits(body: str, blueprint: dict[str, Any] | None = None) -> list[st
     return _dedupe(traits)[:6]
 
 
+def _clean_block_text(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"^#{1,6}\s+", "", text.strip())
+    text = re.sub(r"^>\s*", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _body_paragraphs(body: str) -> list[str]:
+    return [_clean_block_text(block) for block in legacy.list_paragraphs(body) if _clean_block_text(block)]
+
+
+def _paragraph_start_token(paragraph: str) -> str:
+    value = _clean_block_text(paragraph)
+    for starter in sorted(COMMON_PARAGRAPH_STARTERS, key=len, reverse=True):
+        if value.startswith(starter):
+            return starter
+    match = re.match(r"[\u4e00-\u9fffA-Za-z0-9]{2,6}", value)
+    return (match.group(0) if match else value[:4]).strip()
+
+
+def _heading_monotony(headings: list[dict[str, Any]]) -> dict[str, Any]:
+    values = [_clean_block_text(item.get("text") or "") for item in headings if _clean_block_text(item.get("text") or "")]
+    if len(values) < 3:
+        return {"monotony": False, "reason": "", "count": 0}
+    question_like = sum(1 for item in values if item.startswith("为什么") or item.endswith("？") or item.endswith("?"))
+    enumerated = sum(1 for item in values if re.match(r"^(第[一二三四五六七八九十\d]+|[一二三四五六七八九十\d]+[、.])", item))
+    starter_counts = Counter(_paragraph_start_token(item) for item in values)
+    top_token, top_count = starter_counts.most_common(1)[0]
+    if question_like >= 3:
+        return {"monotony": True, "reason": "小标题连续使用“为什么/问句”推进", "count": question_like}
+    if enumerated >= 3:
+        return {"monotony": True, "reason": "小标题连续使用编号/枚举推进", "count": enumerated}
+    if top_count >= max(3, len(values) - 1):
+        return {"monotony": True, "reason": f"小标题起手过于一致：{top_token}", "count": top_count}
+    return {"monotony": False, "reason": "", "count": 0}
+
+
+def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[str, Any]:
+    paragraphs = _body_paragraphs(body)
+    headings = legacy.extract_headings(body)
+    sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body) if sentence.strip()]
+    scene_paragraphs = [item for item in paragraphs if any(marker in item for marker in SCENE_MARKERS)]
+    detail_paragraphs = [
+        item
+        for item in paragraphs
+        if any(marker in item for marker in DETAIL_MARKERS) or re.search(r"\d{4}年|\d+(?:\.\d+)?%|\d+倍|\[\d+\]", item)
+    ]
+    evidence_paragraphs = [
+        item
+        for item in paragraphs
+        if any(marker in item for marker in EVIDENCE_MARKERS) or re.search(r"\[\d+\]|\d{4}年|\d+(?:\.\d+)?%|\d+倍", item)
+    ]
+    counterpoint_paragraphs = [item for item in paragraphs if any(marker in item for marker in COUNTERPOINT_MARKERS)]
+    long_paragraphs = [item for item in paragraphs if 55 <= legacy.cjk_len(item) <= 180]
+    short_paragraphs = [item for item in paragraphs if legacy.cjk_len(item) <= 18]
+    starters = Counter(_paragraph_start_token(item) for item in paragraphs if _paragraph_start_token(item))
+    repeated_starters = [
+        {"token": token, "count": count}
+        for token, count in starters.most_common()
+        if (token in COMMON_PARAGRAPH_STARTERS and count >= 3) or count >= 4
+    ]
+    heading_monotony = _heading_monotony(headings)
+    outline_like = len(paragraphs) >= 5 and len(short_paragraphs) >= max(3, int(len(paragraphs) * 0.45)) and len(long_paragraphs) <= 1
+    sentence_range = (max(sentence_lengths) - min(sentence_lengths)) if sentence_lengths else 0
+    return {
+        "paragraph_count": len(paragraphs),
+        "scene_paragraph_count": len(scene_paragraphs),
+        "detail_paragraph_count": len(detail_paragraphs),
+        "evidence_paragraph_count": len(evidence_paragraphs),
+        "counterpoint_paragraph_count": len(counterpoint_paragraphs),
+        "long_paragraph_count": len(long_paragraphs),
+        "short_paragraph_count": len(short_paragraphs),
+        "sentence_length_range": sentence_range,
+        "repeated_starters": repeated_starters[:5],
+        "repeated_starter_count": len(repeated_starters),
+        "heading_monotony": bool(heading_monotony.get("monotony")),
+        "heading_monotony_reason": str(heading_monotony.get("reason") or ""),
+        "outline_like": outline_like,
+        "scene_examples": scene_paragraphs[:2],
+        "evidence_examples": evidence_paragraphs[:2],
+        "counterpoint_examples": counterpoint_paragraphs[:2],
+        "editorial_style_hint": str((blueprint or {}).get("style_key") or ""),
+    }
+
+
 def _ai_smell_findings(body: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for phrase in getattr(legacy, "AI_STYLE_PHRASES", []) or []:
@@ -866,6 +1033,29 @@ def _ai_smell_findings(body: str) -> list[dict[str, Any]]:
             findings.append({"type": "long_sentence_cluster", "pattern": "long_sentence", "count": len(long_sentences), "evidence": f"{len(long_sentences)} 个长句"})
     if body.count("首先") + body.count("其次") + body.count("最后") >= 2:
         findings.append({"type": "enumeration_voice", "pattern": "首先/其次/最后", "count": body.count("首先") + body.count("其次") + body.count("最后"), "evidence": "枚举式模板推进"})
+    signals = _depth_signals(body)
+    if signals.get("outline_like"):
+        findings.append({"type": "outline_like", "pattern": "outline_like", "count": 1, "evidence": "段落过碎，像提纲或卡片拼接"})
+    repeated_starters = signals.get("repeated_starters") or []
+    if repeated_starters:
+        sample = repeated_starters[0]
+        findings.append(
+            {
+                "type": "repeated_starter",
+                "pattern": str(sample.get("token") or "repeated-starter"),
+                "count": int(sample.get("count") or 0),
+                "evidence": f"段落起手重复：{sample.get('token')}",
+            }
+        )
+    if signals.get("heading_monotony"):
+        findings.append(
+            {
+                "type": "heading_monotony",
+                "pattern": "heading_monotony",
+                "count": 1,
+                "evidence": str(signals.get("heading_monotony_reason") or "小标题模式过于单一"),
+            }
+        )
     return findings
 
 
@@ -1028,12 +1218,13 @@ def _heuristic_editorial_review(
     citation: dict[str, Any],
 ) -> dict[str, Any]:
     intro = " ".join(_first_paragraphs(body, limit=2))
-    reading_desire = "high" if ("？" in intro or any(word in intro for word in ["你可能", "最近", "刷到", "某天", "为什么"])) else "medium"
+    depth = review.get("depth_signals") or _depth_signals(body)
+    reading_desire = "high" if ("？" in intro or any(word in intro for word in ["你可能", "最近", "刷到", "某天", "为什么"]) or depth.get("scene_paragraph_count", 0) >= 1) else "medium"
     if legacy.cjk_len(intro) < 40:
         reading_desire = "low"
-    professional_tone = "high" if len(template_findings) <= 1 else "medium"
-    novelty = "high" if any(word in body for word in ["误判", "分水岭", "真相", "被忽略", "拐点"]) else "medium"
-    template_risk = "high" if len(template_findings) >= 3 or similarity.get("max_similarity", 0) > 0.42 else "medium" if template_findings else "low"
+    professional_tone = "high" if len(template_findings) <= 1 and not depth.get("outline_like") else "medium"
+    novelty = "high" if any(word in body for word in ["误判", "分水岭", "真相", "被忽略", "拐点"]) and depth.get("counterpoint_paragraph_count", 0) >= 1 else "medium"
+    template_risk = "high" if len(template_findings) >= 3 or similarity.get("max_similarity", 0) > 0.42 or depth.get("repeated_starter_count", 0) >= 3 else "medium" if template_findings else "low"
     citation_restraint = "high" if citation.get("raw_url_count", 0) == 0 else "low"
     ending = " ".join(legacy.list_paragraphs(body)[-2:])
     ending_naturalness = "high" if ending and not re.search(r"最后给你一个可执行清单|如果你只想记住一句话", ending) else "low"
@@ -1093,6 +1284,7 @@ def build_heuristic_review(
     emotion_curve = _emotion_curve_from_body(body, headings)
     emotion_layers = _emotion_layers(body)
     style_traits = _style_traits(body, blueprint)
+    depth_signals = _depth_signals(body, blueprint)
     interaction_design = _interaction_design(body, blueprint, signature_lines)
     similarity_findings = _similarity_findings(title, body, manifest)
     citation_findings = _citation_findings(body, manifest)
@@ -1114,6 +1306,22 @@ def build_heuristic_review(
         strengths.append("论证方式不是单一说教，具备拆解与对比。")
     else:
         issues.append("论证方式偏单一，需要补案例、对比或步骤。")
+    if depth_signals.get("scene_paragraph_count", 0) >= 1 and depth_signals.get("detail_paragraph_count", 0) >= 2:
+        strengths.append("文中有具体现场和细节，读者更容易代入。")
+    else:
+        issues.append("缺少能让人看见画面的现场和细节，读起来更像观点提纲。")
+    if depth_signals.get("evidence_paragraph_count", 0) >= 2:
+        strengths.append("关键判断有事实、案例或数字托底，不容易飘。")
+    else:
+        issues.append("事实、案例或数字支撑偏少，文章容易只剩态度没有抓手。")
+    if depth_signals.get("counterpoint_paragraph_count", 0) >= 1:
+        strengths.append("文章有反方、误判或边界讨论，层次更完整。")
+    else:
+        issues.append("缺少反方、误判或适用边界，整篇容易显得单向输出。")
+    if not depth_signals.get("outline_like"):
+        strengths.append("段落不是纯卡片式罗列，正文展开感还在。")
+    else:
+        issues.append("段落过碎，像提纲拼接，缺少真正展开后的分析段。")
     if len(interaction_design.get("comment_triggers") or []) >= 1 and len(interaction_design.get("share_triggers") or []) >= 1:
         strengths.append("文章已经具备评论触发点和转发谈资。")
     else:
@@ -1122,6 +1330,8 @@ def build_heuristic_review(
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
         strengths.append("整体语言相对自然，没有明显模板腔堆积。")
+    if depth_signals.get("repeated_starter_count", 0) >= 3:
+        issues.append("段落起手反复撞在同一类句式上，读者很容易闻到 AI 味。")
     if similarity_findings.get("max_similarity", 0) > 0.42:
         issues.append("与近期已生成文章相似度过高，存在明显同质化风险。")
     if citation_findings.get("raw_url_count", 0) > 0:
@@ -1136,6 +1346,10 @@ def build_heuristic_review(
             "补情绪价值句，让读者感到被理解" if len(emotion_value_sentences) < EMOTION_VALUE_THRESHOLD else "",
             "补案例/对比/步骤，提升论证多样性" if len(argument_modes) < ARGUMENT_MODE_THRESHOLD else "",
             "补金句与可截图传播句" if len(signature_lines) < SIGNATURE_LINE_THRESHOLD else "",
+            "补一个具体场景和几个带画面的细节，别让正文只剩观点" if depth_signals.get("scene_paragraph_count", 0) < 1 or depth_signals.get("detail_paragraph_count", 0) < 2 else "",
+            "补真实案例、数字或来源，让关键判断有托底" if depth_signals.get("evidence_paragraph_count", 0) < 2 else "",
+            "补反方、误判或适用边界，别把文章写成单向宣讲" if depth_signals.get("counterpoint_paragraph_count", 0) < 1 else "",
+            "重写段落节奏，至少保留一两段真正展开的分析段" if depth_signals.get("outline_like") else "",
             "清理模板连接词，继续去 AI 味" if ai_smell_findings else "",
             "打散固定开头和结尾套路，别再回到一句话结论 + 万能清单" if any("先说结论" in str(item.get("evidence") or "") or "最后给你一个可执行清单" in str(item.get("evidence") or "") for item in ai_smell_findings) else "",
             "去掉正文裸链接，把引用收敛到关键节点和文末参考资料卡片" if citation_findings.get("raw_url_count", 0) else "",
@@ -1179,6 +1393,7 @@ def build_heuristic_review(
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
         "interaction_findings": interaction_design,
+        "depth_signals": depth_signals,
         "editorial_review": editorial_review,
         "revision_priorities": revision_priorities,
         "revision_round": revision_round,
@@ -1327,12 +1542,15 @@ def normalize_review_payload(
 
 def _score_hot_intro(title: str, body: str, review: dict[str, Any]) -> tuple[int, str]:
     intro = legacy.intro_text(body)
+    depth = review.get("depth_signals") or _depth_signals(body)
     score = 3
     score += min(3, legacy.count_occurrences(title, getattr(legacy, "TITLE_CURIOSITY_WORDS", [])))
     score += min(2, legacy.count_occurrences(intro, getattr(legacy, "HOOK_WORDS", [])))
     if any(word in intro for word in PAIN_POINT_MARKERS):
         score += 2
     if any(word in intro for word in ["你可能", "刷到", "某天", "看到", "结果是", "但真正", "多数人"]):
+        score += 1
+    if depth.get("scene_paragraph_count", 0) >= 1:
         score += 1
     if "?" in intro or "？" in intro:
         score += 1
@@ -1354,7 +1572,11 @@ def _score_viewpoints(review: dict[str, Any]) -> tuple[int, str]:
 def _score_argument_diversity(review: dict[str, Any]) -> tuple[int, str]:
     modes = _normalize_list(review.get("viral_analysis", {}).get("argument_diversity"))
     strategies = _normalize_list(review.get("viral_analysis", {}).get("persuasion_strategies"))
-    score = min(10, 2 + len(_dedupe(modes + strategies)) * 2)
+    depth = review.get("depth_signals") or {}
+    score = min(10, 1 + len(_dedupe(modes + strategies)) * 2)
+    score += min(2, int(depth.get("evidence_paragraph_count") or 0))
+    score += 1 if depth.get("counterpoint_paragraph_count", 0) else 0
+    score += 1 if depth.get("scene_paragraph_count", 0) else 0
     return score, "爆款稿不靠单向说教，至少要能在拆解、对比、案例、趋势、场景、步骤里切换 3 种以上。"
 
 
@@ -1396,11 +1618,16 @@ def _score_interaction_design(review: dict[str, Any], body: str) -> tuple[int, s
 def _score_emotion_curve(review: dict[str, Any], body: str) -> tuple[int, str]:
     curve_count = len(review.get("viral_analysis", {}).get("emotion_curve") or [])
     paragraph_count = len(legacy.list_paragraphs(body))
+    depth = review.get("depth_signals") or _depth_signals(body)
     score = 2
     if curve_count >= 3:
         score += 4
     if 6 <= paragraph_count <= 20:
         score += 2
+    if depth.get("long_paragraph_count", 0) >= 1 and depth.get("short_paragraph_count", 0) >= 2:
+        score += 1
+    if not depth.get("outline_like"):
+        score += 1
     return min(8, score), "情绪推进要有起伏，可以从悬念/刺痛/代入走向理解，再落到判断、余味或行动。"
 
 
@@ -1419,11 +1646,18 @@ def _score_perspective(review: dict[str, Any]) -> tuple[int, str]:
 def _score_style(review: dict[str, Any], body: str) -> tuple[int, str]:
     ai_hits = len(review.get("ai_smell_findings") or [])
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body)]
+    depth = review.get("depth_signals") or _depth_signals(body)
     score = 8 - min(4, ai_hits * 2)
     if sentence_lengths and max(sentence_lengths) - min(sentence_lengths) >= 12:
         score += 1
     if any(word in body for word in ["你", "我们", "别急", "说白了"]):
         score += 1
+    if depth.get("repeated_starter_count", 0) >= 3:
+        score -= 2
+    if depth.get("heading_monotony"):
+        score -= 1
+    if depth.get("outline_like"):
+        score -= 1
     return int(legacy.clamp(score, 0, 8)), "像真人写出来的稿子，应该有判断感、节奏感和去模板腔的表达。"
 
 
@@ -1434,7 +1668,16 @@ def _score_credibility(body: str, manifest: dict[str, Any], review: dict[str, An
     evidence_bonus = min(3, citation.get("inline_citation_count", 0))
     data_bonus = len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\d+倍|第\d+", body))
     argument_modes = _normalize_list(review.get("viral_analysis", {}).get("argument_diversity"))
-    score = min(8, min(3, len(source_urls)) + min(2, evidence_bonus) + min(2, data_bonus) + (1 if "权威论证" in argument_modes else 0) + (1 if refs.get("reference_count", 0) else 0))
+    depth = review.get("depth_signals") or _depth_signals(body)
+    score = min(
+        8,
+        min(3, len(source_urls))
+        + min(2, evidence_bonus)
+        + min(2, data_bonus)
+        + (1 if "权威论证" in argument_modes else 0)
+        + (1 if refs.get("reference_count", 0) else 0)
+        + (1 if depth.get("evidence_paragraph_count", 0) >= 2 else 0),
+    )
     if citation.get("raw_url_count", 0):
         score = max(0, score - 2)
     return score, "事实型内容必须经得起回溯，最好通过关键段轻引用和文末参考资料来支撑，而不是在正文堆链接。"
@@ -1452,11 +1695,23 @@ def _build_quality_gates(
 ) -> dict[str, bool]:
     ai_smell_hits = len(review.get("ai_smell_findings") or [])
     editorial = review.get("editorial_review") or {}
+    depth = review.get("depth_signals") or {}
     return {
         "viral_blueprint_complete": blueprint_complete(blueprint),
         "interaction_passed": interaction_score >= 6,
         "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD,
         "credibility_passed": credibility_score >= 5,
+        "depth_passed": bool(
+            depth.get("scene_paragraph_count", 0) >= 1
+            and depth.get("evidence_paragraph_count", 0) >= 1
+            and depth.get("counterpoint_paragraph_count", 0) >= 1
+            and not depth.get("outline_like")
+        ),
+        "structure_passed": bool(
+            depth.get("repeated_starter_count", 0) <= 2
+            and not depth.get("heading_monotony")
+            and (depth.get("long_paragraph_count", 0) >= 1 or depth.get("paragraph_count", 0) <= 4)
+        ),
         "template_penalty_passed": template_penalty_hits <= 2,
         "similarity_passed": bool(similarity_findings.get("similarity_passed", True)),
         "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
@@ -1502,6 +1757,7 @@ def build_score_report(
     citation_findings = review.get("citation_findings") or _citation_findings(body, manifest)
     interaction_findings = review.get("interaction_findings") or review.get("viral_analysis") or {}
     editorial_review = review.get("editorial_review") or _heuristic_editorial_review(title, body, review, template_findings, similarity_findings, citation_findings)
+    depth_signals = review.get("depth_signals") or _depth_signals(body, blueprint)
     template_penalty_hits = len(template_findings) + len(similarity_findings.get("repeated_phrases") or [])
     breakdown = [
         {"dimension": "标题与开头爆点", "weight": 10, "score": hot_intro, "note": hot_intro_note},
@@ -1518,7 +1774,7 @@ def build_score_report(
     ]
     total = sum(item["score"] for item in breakdown)
     quality_gates = _build_quality_gates(
-        review | {"editorial_review": editorial_review},
+        review | {"editorial_review": editorial_review, "depth_signals": depth_signals},
         blueprint,
         credibility_score,
         interaction_score=interaction_score,
@@ -1536,17 +1792,19 @@ def build_score_report(
             weaknesses.append(f"{item['dimension']}偏弱：{item['note']}")
     failed_gates = [name for name, ok in quality_gates.items() if not ok]
     mandatory_revisions = _dedupe(
-        list(review.get("revision_priorities") or [])
-        + [
+        [
             "补齐爆款蓝图，先把主观点、副观点、情绪触发点和论证方式定下来。" if not quality_gates["viral_blueprint_complete"] else "",
             "补互动设计：显式安排点赞共鸣点、评论问题和可转发谈资。" if interaction_score < 7 else "",
             "继续清理模板腔，压低 AI 痕迹。" if not quality_gates["de_ai_passed"] else "",
             "补来源、数据或官方依据，提升可信度。" if not quality_gates["credibility_passed"] else "",
+            "补现场、案例和反方边界，让文章真正立起来。" if not quality_gates["depth_passed"] else "",
+            "打散段落起手和小标题模式，避免整篇像同一套模板复印。" if not quality_gates["structure_passed"] else "",
             "重写篇章结构和句法节奏，压低模板惩罚。" if not quality_gates["template_penalty_passed"] else "",
             "重写开头/结尾和标题层级，主动拉开与最近文章的差异。" if not quality_gates["similarity_passed"] else "",
             "把正文裸链接改成关键节点轻引用，并把完整来源放到文末参考资料卡片。" if not quality_gates["citation_policy_passed"] else "",
             "先把阅读欲望、专业感和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
         ]
+        + list(review.get("revision_priorities") or [])
     )
     suggestions = {
         "opening_directions": _dedupe(
@@ -1575,6 +1833,8 @@ def build_score_report(
                 "不同小节换不同进入方式，别把整篇写成同一套判断句模板。",
                 "让每一节至少出现一句能刺痛读者、点醒读者或安顿读者的话。",
                 "补对比、案例或细节，避免只讲观点不讲场景。",
+                "至少留一段真正展开的分析段，不要所有段落都像卡片。",
+                "主动写出反方、误判或适用边界，文章才会更像真人判断。",
             ]
         ),
         "failed_quality_gates": failed_gates,
@@ -1607,6 +1867,7 @@ def build_score_report(
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
         "interaction_findings": interaction_findings,
+        "depth_signals": depth_signals,
         "max_similarity": similarity_findings.get("max_similarity", 0),
         "similar_articles": similarity_findings.get("similar_articles", []),
         "repeated_phrases": similarity_findings.get("repeated_phrases", []),
