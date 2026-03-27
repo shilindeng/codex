@@ -242,12 +242,13 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                    "你是微信公众号标题编辑。只输出 JSON 对象，字段 candidates 为数组；每项包含 title, strategy, audience_fit, risk_note。"
-                    "必须同时给出不同气质的标题，不要 3 个标题只是同一模板换词。"
-                    "如果输入里带有 editorial_blueprint，标题风格必须服从它；如果 recent_corpus_summary 显示某类标题模式已经高频出现，禁止继续复用。"
-                    "不要默认产出“为什么大多数人…”“真正危险的不是…而是…”“先想清 3 件事”这类熟模板。"
-                ),
-            },
+                "你是微信公众号标题编辑。只输出 JSON 对象，字段 candidates 为数组；每项包含 title, strategy, audience_fit, risk_note。"
+                "必须同时给出不同气质的标题，不要 3 个标题只是同一模板换词。"
+                "如果输入里带有 editorial_blueprint，标题风格必须服从它；如果 recent_corpus_summary 显示某类标题模式已经高频出现，禁止继续复用。"
+                "如果输入里带有 author_memory/playbook_summary/lesson_patterns，优先服从这些作者偏好和人工改稿结论。"
+                "不要默认产出“为什么大多数人…”“真正危险的不是…而是…”“先想清 3 件事”这类熟模板。"
+            ),
+        },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]
         content = self._request(prompt, {"type": "json_object"})
@@ -278,7 +279,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "你是资深微信公众号总编。只输出 JSON。"
                     "字段必须包含 title, angle, sections, viral_blueprint, editorial_blueprint。"
                     "sections 每项包含 heading, goal, evidence_need。"
-                    "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns。"
+                    "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns, must_have_elements, heading_variation_rule, paragraph_variation_rule, generation_guardrails, preflight_checklist。"
                     "editorial_blueprint 必须包含 style_key, style_label, summary, title_strategy, opening_strategy, body_strategy, heading_strategy, evidence_strategy, ending_strategy, paragraph_rhythm, language_texture, forbidden_moves, preferred_devices。"
                     "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
                     "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals, "
@@ -289,6 +290,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "规划时显式思考：点赞靠什么、评论靠什么、转发靠什么，以及中段的峰值时刻和结尾的互动收束如何设计。"
                     "必须给出 primary_interaction_goal 和 secondary_interaction_goal，禁止三种互动目标同时拉满。"
                     "必须避开输入中的 recent_phrase_blacklist；如果 recent_corpus_summary 提示某种标题模式、开头模式、结尾模式或小标题模式已经过度出现，就不要再复用。"
+                    "如果输入包含 author_memory，请把其中的 playbook_summary、voice_fingerprint、lesson_patterns 当成硬偏好，优先于你的通用写作习惯。"
                     "大纲必须主动分配深度：至少有一个“现场/案例/具体瞬间”章节，一个“误判/反方/边界”章节，一个“最后判断/收束”章节。"
                     "不要让所有小标题都长得像同一类问句、编号句或判断句。"
                 ),
@@ -316,6 +318,8 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "你是写 10w+ 公众号长文的资深作者兼总编。输出 Markdown 正文，不要解释。"
                     "必须消费输入里的 outline 与 viral_blueprint，但不能把它们机械翻译成模板文章。"
                     "输入里的 editorial_blueprint 是硬约束：标题气质、开头方式、正文推进、小标题写法、证据组织和结尾方式都要服从它。"
+                    "如果输入带有 author_memory，就把它当成作者作战卡：先服从 playbook_summary、voice_fingerprint、lesson_patterns，再考虑通用爆款经验。"
+                    "输入里的 must_have_elements、generation_guardrails、preflight_checklist、heading_variation_rule、paragraph_variation_rule 都是生成阶段硬约束。输出前先自查，再给最终正文。"
                     "牢记：高互动文章 = 情绪价值（共鸣/争议） + 社交货币（谈资/身份） + 峰终体验。"
                     "优先服务输入中的 primary_interaction_goal，只把 secondary_interaction_goal 作为辅助，不要三种互动全开。"
                     "写作要求："
@@ -365,6 +369,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
                     "请重点识别：文章是否落入固定模板（如先说结论、篇章自我说明、结尾万能清单、每节都同一种句式起手）。"
                     "如果输入 recent_corpus_summary 显示这篇稿子的标题、开头、结尾或小标题模式撞上近期高频套路，要明确指出。"
+                    "如果输入包含 author_memory，要同时判断这篇稿子有没有偏离作者自己的写法和人工改稿偏好。"
                     "还要重点判断：有没有具体场景/动作/瞬间，有没有事实或案例托底，有没有反方或适用边界，段落是否过碎像提纲，多个段落是否反复同一种起手。"
                     "同时判断：这篇文章为什么值得点赞、为什么会引发评论、为什么会被转发；如果缺失，请明确指出。"
                     "editorial_review 必须包含 reading_desire, professional_tone, novelty_of_viewpoint, template_risk, citation_restraint, ending_naturalness, interaction_naturalness, summary。"
@@ -404,6 +409,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "必须保留原文事实边界，不要编造数据。"
                     "优先修复最影响阅读完成度和传播力的 3 个问题，但不要用固定模板去“提分”。"
                     "如果输入给了 editorial_blueprint，就按它改，不要改回最常见的分析评论腔。"
+                    "如果输入给了 author_memory，必须优先贴近作者自己的 playbook_summary、voice_fingerprint 和 lesson_patterns。"
                     "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
                     "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
                     "改稿时必须补足互动设计："

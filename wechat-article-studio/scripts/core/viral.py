@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
-from core.editorial_strategy import normalize_editorial_blueprint
+from core.editorial_strategy import (
+    ending_pattern_key,
+    heading_pattern_key,
+    normalize_editorial_blueprint,
+    opening_pattern_key,
+    title_template_key,
+)
 
 
 VIRAL_BLUEPRINT_FIELDS = [
@@ -46,7 +52,7 @@ PAIN_POINT_THRESHOLD = 4
 SIGNATURE_LINE_THRESHOLD = 3
 ARGUMENT_MODE_THRESHOLD = 3
 PERSPECTIVE_SHIFT_THRESHOLD = 2
-AI_SMELL_THRESHOLD = 2
+AI_SMELL_THRESHOLD = 1
 CREDIBILITY_THRESHOLD = 6
 KNOWN_TEMPLATE_PHRASES = [
     "这很正常，你不是一个人",
@@ -209,6 +215,31 @@ COMMON_PARAGRAPH_STARTERS = {
     "这件事",
     "先说",
     "接下来",
+}
+
+COMMON_SENTENCE_OPENERS = {
+    "很多人",
+    "你可能",
+    "如果你",
+    "真正的",
+    "问题是",
+    "说白了",
+    "换句话说",
+    "这件事",
+    "先说",
+    "但真正",
+    "与此同时",
+}
+
+SEVERE_AI_SMELL_TYPES = {
+    "template_phrase",
+    "enumeration_voice",
+    "outline_like",
+    "repeated_starter",
+    "repeated_sentence_opener",
+    "heading_monotony",
+    "author_phrase",
+    "author_starter",
 }
 BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "article_archetype",
@@ -737,6 +768,7 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
             "article_archetype": output["viral_blueprint"].get("article_archetype") or profile["article_archetype"],
         },
     )
+    author_memory = context.get("author_memory") or {}
     output.setdefault("article_archetype", output["viral_blueprint"].get("article_archetype") or profile["article_archetype"])
     output.setdefault("opening_mode", (output["viral_blueprint"].get("opening_modes") or profile.get("opening_modes") or ["场景切口"])[0])
     output.setdefault("ending_mode", (output["viral_blueprint"].get("ending_modes") or profile.get("ending_modes") or ["判断收束"])[0])
@@ -745,6 +777,46 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
     output.setdefault("interaction_formula", output["viral_blueprint"].get("interaction_formula") or profile.get("interaction_formula") or "")
     output.setdefault("peak_moment_design", output["viral_blueprint"].get("peak_moment_design") or profile.get("peak_moment_design") or "")
     output.setdefault("ending_interaction_design", output["viral_blueprint"].get("ending_interaction_design") or profile.get("ending_interaction_design") or "")
+    output.setdefault(
+        "must_have_elements",
+        [
+            "前 2~3 段里必须出现一个具体场景、动作或瞬间。",
+            "中段必须出现一处案例、数据或事实托底。",
+            "全文必须出现一处反方、误判或适用边界。",
+            "至少保留一段真正展开的分析段，不要整篇卡片化。",
+        ],
+    )
+    output.setdefault(
+        "heading_variation_rule",
+        "小标题至少用两种不同句法，不要整篇都是问句、整篇都是编号句，或整篇都用同一起手。",
+    )
+    output.setdefault(
+        "paragraph_variation_rule",
+        "不要让多个段落重复用“很多人 / 如果你 / 你可能 / 说白了”这类熟起手。",
+    )
+    output.setdefault(
+        "generation_guardrails",
+        _dedupe(
+            _normalize_list(output.get("voice_guardrails"))
+            + _normalize_list(output.get("avoid_patterns"))
+            + _normalize_list(author_memory.get("playbook_summary"))
+            + [f"避免使用：{item}" for item in _normalize_list(author_memory.get("phrase_blacklist"))[:4]]
+            + [f"避免这种起手：{item}" for item in _normalize_list(author_memory.get("sentence_starters_to_avoid"))[:4]]
+        )[:12],
+    )
+    output.setdefault(
+        "preflight_checklist",
+        _dedupe(
+            [
+                "检查是否复用了固定开头、固定结尾或固定小标题模式。",
+                "检查是否出现作者记忆里明确避开的句式。",
+                "检查是否有具体场景、证据托底、反方边界和展开分析段。",
+                "检查段落起手是否在打转。",
+                "检查小标题是否至少有两种句法。",
+            ]
+            + _normalize_list(author_memory.get("lesson_patterns"))
+        )[:10],
+    )
     return output
 
 
@@ -954,6 +1026,29 @@ def _paragraph_start_token(paragraph: str) -> str:
     return (match.group(0) if match else value[:4]).strip()
 
 
+def _sentence_opening_token(sentence: str) -> str:
+    value = _clean_block_text(sentence)
+    for starter in sorted(COMMON_SENTENCE_OPENERS, key=len, reverse=True):
+        if value.startswith(starter):
+            return starter
+    match = re.match(r"[\u4e00-\u9fffA-Za-z0-9]{2,6}", value)
+    return (match.group(0) if match else value[:4]).strip()
+
+
+def _author_memory(manifest: dict[str, Any]) -> dict[str, Any]:
+    payload = manifest.get("author_memory") or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _ai_smell_gate_hits(findings: list[dict[str, Any]]) -> int:
+    hits = 0
+    for item in findings or []:
+        finding_type = str(item.get("type") or "")
+        if finding_type in SEVERE_AI_SMELL_TYPES:
+            hits += 1
+    return hits
+
+
 def _heading_monotony(headings: list[dict[str, Any]]) -> dict[str, Any]:
     values = [_clean_block_text(item.get("text") or "") for item in headings if _clean_block_text(item.get("text") or "")]
     if len(values) < 3:
@@ -962,11 +1057,11 @@ def _heading_monotony(headings: list[dict[str, Any]]) -> dict[str, Any]:
     enumerated = sum(1 for item in values if re.match(r"^(第[一二三四五六七八九十\d]+|[一二三四五六七八九十\d]+[、.])", item))
     starter_counts = Counter(_paragraph_start_token(item) for item in values)
     top_token, top_count = starter_counts.most_common(1)[0]
-    if question_like >= 3:
+    if question_like >= max(2, len(values) - 1):
         return {"monotony": True, "reason": "小标题连续使用“为什么/问句”推进", "count": question_like}
-    if enumerated >= 3:
+    if enumerated >= max(2, len(values) - 1):
         return {"monotony": True, "reason": "小标题连续使用编号/枚举推进", "count": enumerated}
-    if top_count >= max(3, len(values) - 1):
+    if top_count >= max(2, len(values) - 1):
         return {"monotony": True, "reason": f"小标题起手过于一致：{top_token}", "count": top_count}
     return {"monotony": False, "reason": "", "count": 0}
 
@@ -974,7 +1069,8 @@ def _heading_monotony(headings: list[dict[str, Any]]) -> dict[str, Any]:
 def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[str, Any]:
     paragraphs = _body_paragraphs(body)
     headings = legacy.extract_headings(body)
-    sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body) if sentence.strip()]
+    sentences = [sentence for sentence in legacy.sentence_split(body) if sentence.strip()]
+    sentence_lengths = [legacy.cjk_len(sentence) for sentence in sentences]
     scene_paragraphs = [item for item in paragraphs if any(marker in item for marker in SCENE_MARKERS)]
     detail_paragraphs = [
         item
@@ -993,7 +1089,13 @@ def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[s
     repeated_starters = [
         {"token": token, "count": count}
         for token, count in starters.most_common()
-        if (token in COMMON_PARAGRAPH_STARTERS and count >= 3) or count >= 4
+        if (token in COMMON_PARAGRAPH_STARTERS and count >= 2) or count >= 3
+    ]
+    sentence_openers = Counter(_sentence_opening_token(item) for item in sentences if _sentence_opening_token(item))
+    repeated_sentence_openers = [
+        {"token": token, "count": count}
+        for token, count in sentence_openers.most_common()
+        if (token in COMMON_SENTENCE_OPENERS and count >= 2) or count >= 4
     ]
     heading_monotony = _heading_monotony(headings)
     outline_like = len(paragraphs) >= 5 and len(short_paragraphs) >= max(3, int(len(paragraphs) * 0.45)) and len(long_paragraphs) <= 1
@@ -1009,6 +1111,8 @@ def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[s
         "sentence_length_range": sentence_range,
         "repeated_starters": repeated_starters[:5],
         "repeated_starter_count": len(repeated_starters),
+        "repeated_sentence_openers": repeated_sentence_openers[:5],
+        "repeated_sentence_opener_count": len(repeated_sentence_openers),
         "heading_monotony": bool(heading_monotony.get("monotony")),
         "heading_monotony_reason": str(heading_monotony.get("reason") or ""),
         "outline_like": outline_like,
@@ -1019,11 +1123,13 @@ def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[s
     }
 
 
-def _ai_smell_findings(body: str) -> list[dict[str, Any]]:
+def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for phrase in getattr(legacy, "AI_STYLE_PHRASES", []) or []:
         hit_count = body.count(phrase)
         if not hit_count:
+            continue
+        if len(str(phrase)) <= 2 and hit_count < 2:
             continue
         findings.append({"type": "template_phrase", "pattern": phrase, "count": hit_count, "evidence": phrase})
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body)]
@@ -1037,14 +1143,23 @@ def _ai_smell_findings(body: str) -> list[dict[str, Any]]:
     if signals.get("outline_like"):
         findings.append({"type": "outline_like", "pattern": "outline_like", "count": 1, "evidence": "段落过碎，像提纲或卡片拼接"})
     repeated_starters = signals.get("repeated_starters") or []
-    if repeated_starters:
-        sample = repeated_starters[0]
+    for sample in repeated_starters[:2]:
         findings.append(
             {
                 "type": "repeated_starter",
                 "pattern": str(sample.get("token") or "repeated-starter"),
                 "count": int(sample.get("count") or 0),
                 "evidence": f"段落起手重复：{sample.get('token')}",
+            }
+        )
+    repeated_sentence_openers = signals.get("repeated_sentence_openers") or []
+    for sample in repeated_sentence_openers[:2]:
+        findings.append(
+            {
+                "type": "repeated_sentence_opener",
+                "pattern": str(sample.get("token") or "repeated-sentence-opener"),
+                "count": int(sample.get("count") or 0),
+                "evidence": f"句子起手重复：{sample.get('token')}",
             }
         )
     if signals.get("heading_monotony"):
@@ -1056,6 +1171,21 @@ def _ai_smell_findings(body: str) -> list[dict[str, Any]]:
                 "evidence": str(signals.get("heading_monotony_reason") or "小标题模式过于单一"),
             }
         )
+    memory = _author_memory(manifest or {})
+    for phrase in memory.get("phrase_blacklist") or []:
+        compact = str(phrase or "").strip()
+        hits = body.count(compact)
+        if not compact or not hits:
+            continue
+        findings.append({"type": "author_phrase", "pattern": compact, "count": hits, "evidence": f"作者记忆明确避开：{compact}"})
+    paragraphs = _body_paragraphs(body)
+    for starter in memory.get("sentence_starters_to_avoid") or []:
+        compact = str(starter or "").strip()
+        if not compact:
+            continue
+        hits = sum(1 for item in paragraphs if _clean_block_text(item).startswith(compact))
+        if hits:
+            findings.append({"type": "author_starter", "pattern": compact, "count": hits, "evidence": f"作者记忆明确避开这种起手：{compact}"})
     return findings
 
 
@@ -1122,8 +1252,17 @@ def _jaccard_similarity(left: str, right: str) -> float:
     return round(len(left_set & right_set) / max(1, len(left_set | right_set)), 3)
 
 
-def _template_findings(body: str, manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    phrases = list(dict.fromkeys([*KNOWN_TEMPLATE_PHRASES, *list(manifest.get("recent_phrase_blacklist") or [])]))
+def _template_findings(title: str, body: str, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    memory = _author_memory(manifest)
+    phrases = list(
+        dict.fromkeys(
+            [
+                *KNOWN_TEMPLATE_PHRASES,
+                *list(manifest.get("recent_phrase_blacklist") or []),
+                *list(memory.get("phrase_blacklist") or []),
+            ]
+        )
+    )
     findings: list[dict[str, Any]] = []
     for phrase in phrases:
         compact = str(phrase or "").strip()
@@ -1134,21 +1273,42 @@ def _template_findings(body: str, manifest: dict[str, Any]) -> list[dict[str, An
             findings.append({"pattern": compact, "count": hits, "evidence": compact})
     summary = manifest.get("recent_corpus_summary") or {}
     if isinstance(summary, dict):
+        title_pattern = title_template_key(title or manifest.get("selected_title") or "")
+        paragraphs = _body_paragraphs(body)
+        opening_patterns = [opening_pattern_key(item) for item in paragraphs[:2] if opening_pattern_key(item) not in {"none", "generic"}]
+        ending_pattern = ending_pattern_key(paragraphs[-1]) if paragraphs else "none"
+        heading_patterns = [
+            heading_pattern_key(item.get("text") or "")
+            for item in legacy.extract_headings(body)[:6]
+            if heading_pattern_key(item.get("text") or "") not in {"none", "generic"}
+        ]
         for item in summary.get("overused_title_patterns") or []:
             key = str(item.get("key") or "").strip()
             label = str(item.get("label") or key).strip()
-            if key and (key in {"why-think-clear", "danger-not-but", "year-not-but"}):
+            if key and key == title_pattern:
                 findings.append({"pattern": f"title-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
         for item in summary.get("overused_opening_patterns") or []:
             key = str(item.get("key") or "").strip()
             label = str(item.get("label") or key).strip()
-            if key and key in {"reader-scene", "many-people-misread", "recent-realization"}:
+            if key and key in opening_patterns:
                 findings.append({"pattern": f"opening-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
         for item in summary.get("overused_ending_patterns") or []:
             key = str(item.get("key") or "").strip()
             label = str(item.get("label") or key).strip()
-            if key and key in {"question-close", "comment-invite"}:
+            if key and key == ending_pattern:
                 findings.append({"pattern": f"ending-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
+        for item in summary.get("overused_heading_patterns") or []:
+            key = str(item.get("key") or "").strip()
+            label = str(item.get("label") or key).strip()
+            if key and key in heading_patterns:
+                findings.append({"pattern": f"heading-pattern:{key}", "count": int(item.get("count") or 0), "evidence": label})
+    for starter in memory.get("sentence_starters_to_avoid") or []:
+        compact = str(starter or "").strip()
+        if not compact:
+            continue
+        hits = sum(1 for item in _body_paragraphs(body) if _clean_block_text(item).startswith(compact))
+        if hits:
+            findings.append({"pattern": f"author-starter:{compact}", "count": hits, "evidence": compact})
     return findings
 
 
@@ -1157,7 +1317,7 @@ def _similarity_findings(title: str, body: str, manifest: dict[str, Any]) -> dic
     current_end = " ".join(legacy.list_paragraphs(body)[-2:])
     current_headings = " ".join(item.get("text") or "" for item in legacy.extract_headings(body)[:6])
     similar_articles: list[dict[str, Any]] = []
-    repeated_phrases = [item["pattern"] for item in _template_findings(body, manifest)]
+    repeated_phrases = [item["pattern"] for item in _template_findings(title, body, manifest)]
     max_similarity = 0.0
     for path in _recent_corpus_articles(manifest):
         try:
@@ -1179,7 +1339,7 @@ def _similarity_findings(title: str, body: str, manifest: dict[str, Any]) -> dic
         "max_similarity": round(max_similarity, 3),
         "similar_articles": similar_articles[:5],
         "repeated_phrases": repeated_phrases[:10],
-        "similarity_passed": max_similarity <= 0.42 and len(repeated_phrases) <= 2,
+        "similarity_passed": max_similarity <= 0.38 and len(repeated_phrases) <= 1,
     }
 
 
@@ -1224,7 +1384,15 @@ def _heuristic_editorial_review(
         reading_desire = "low"
     professional_tone = "high" if len(template_findings) <= 1 and not depth.get("outline_like") else "medium"
     novelty = "high" if any(word in body for word in ["误判", "分水岭", "真相", "被忽略", "拐点"]) and depth.get("counterpoint_paragraph_count", 0) >= 1 else "medium"
-    template_risk = "high" if len(template_findings) >= 3 or similarity.get("max_similarity", 0) > 0.42 or depth.get("repeated_starter_count", 0) >= 3 else "medium" if template_findings else "low"
+    template_risk = (
+        "high"
+        if len(template_findings) >= 2
+        or similarity.get("max_similarity", 0) > 0.38
+        or depth.get("repeated_starter_count", 0) >= 2
+        or depth.get("repeated_sentence_opener_count", 0) >= 2
+        or depth.get("heading_monotony")
+        else "medium" if template_findings else "low"
+    )
     citation_restraint = "high" if citation.get("raw_url_count", 0) == 0 else "low"
     ending = " ".join(legacy.list_paragraphs(body)[-2:])
     ending_naturalness = "high" if ending and not re.search(r"最后给你一个可执行清单|如果你只想记住一句话", ending) else "low"
@@ -1278,8 +1446,8 @@ def build_heuristic_review(
     emotion_value_sentences = _sentence_objects(body, _extract_sentences_by_markers(body, EMOTION_VALUE_MARKERS, require_you=True), "给读者情绪价值")
     pain_point_sentences = _sentence_objects(body, _extract_sentences_by_markers(body, PAIN_POINT_MARKERS), "刺痛读者处境")
     signature_lines = _sentence_objects(body, _extract_signatures(body), "可截图传播")
-    ai_smell_findings = _ai_smell_findings(body)
-    template_findings = _template_findings(body, manifest)
+    ai_smell_findings = _ai_smell_findings(body, manifest)
+    template_findings = _template_findings(title, body, manifest)
     perspective_shifts = _perspective_shifts(body, blueprint)
     emotion_curve = _emotion_curve_from_body(body, headings)
     emotion_layers = _emotion_layers(body)
@@ -1644,20 +1812,33 @@ def _score_perspective(review: dict[str, Any]) -> tuple[int, str]:
 
 
 def _score_style(review: dict[str, Any], body: str) -> tuple[int, str]:
-    ai_hits = len(review.get("ai_smell_findings") or [])
+    findings = review.get("ai_smell_findings") or []
+    ai_hits = len(findings)
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body)]
     depth = review.get("depth_signals") or _depth_signals(body)
-    score = 8 - min(4, ai_hits * 2)
+    penalty = 0
+    for item in findings:
+        finding_type = str(item.get("type") or "")
+        count = int(item.get("count") or 0)
+        if finding_type in {"repeated_starter", "repeated_sentence_opener", "heading_monotony", "author_phrase", "author_starter"}:
+            penalty += max(2, min(3, count))
+        elif finding_type in {"outline_like", "enumeration_voice"}:
+            penalty += 2
+        else:
+            penalty += 1
+    score = 8 - min(7, penalty)
     if sentence_lengths and max(sentence_lengths) - min(sentence_lengths) >= 12:
         score += 1
     if any(word in body for word in ["你", "我们", "别急", "说白了"]):
         score += 1
-    if depth.get("repeated_starter_count", 0) >= 3:
+    if depth.get("repeated_starter_count", 0) >= 2:
+        score -= 2
+    if depth.get("repeated_sentence_opener_count", 0) >= 2:
         score -= 2
     if depth.get("heading_monotony"):
-        score -= 1
+        score -= 2
     if depth.get("outline_like"):
-        score -= 1
+        score -= 2
     return int(legacy.clamp(score, 0, 8)), "像真人写出来的稿子，应该有判断感、节奏感和去模板腔的表达。"
 
 
@@ -1693,7 +1874,7 @@ def _build_quality_gates(
     similarity_findings: dict[str, Any],
     citation_findings: dict[str, Any],
 ) -> dict[str, bool]:
-    ai_smell_hits = len(review.get("ai_smell_findings") or [])
+    ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     editorial = review.get("editorial_review") or {}
     depth = review.get("depth_signals") or {}
     return {
@@ -1708,11 +1889,12 @@ def _build_quality_gates(
             and not depth.get("outline_like")
         ),
         "structure_passed": bool(
-            depth.get("repeated_starter_count", 0) <= 2
+            depth.get("repeated_starter_count", 0) <= 1
+            and depth.get("repeated_sentence_opener_count", 0) <= 1
             and not depth.get("heading_monotony")
             and (depth.get("long_paragraph_count", 0) >= 1 or depth.get("paragraph_count", 0) <= 4)
         ),
-        "template_penalty_passed": template_penalty_hits <= 2,
+        "template_penalty_passed": template_penalty_hits <= 1,
         "similarity_passed": bool(similarity_findings.get("similarity_passed", True)),
         "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
         "editorial_review_passed": editorial.get("reading_desire") != "low" and editorial.get("template_risk") != "high",
@@ -1752,13 +1934,15 @@ def build_score_report(
     perspective_score, perspective_note = _score_perspective(review)
     style_score, style_note = _score_style(review, body)
     credibility_score, credibility_note = _score_credibility(body, manifest, review)
-    template_findings = review.get("template_findings") or _template_findings(body, manifest)
+    template_findings = review.get("template_findings") or _template_findings(title, body, manifest)
     similarity_findings = review.get("similarity_findings") or _similarity_findings(title, body, manifest)
     citation_findings = review.get("citation_findings") or _citation_findings(body, manifest)
     interaction_findings = review.get("interaction_findings") or review.get("viral_analysis") or {}
     editorial_review = review.get("editorial_review") or _heuristic_editorial_review(title, body, review, template_findings, similarity_findings, citation_findings)
     depth_signals = review.get("depth_signals") or _depth_signals(body, blueprint)
-    template_penalty_hits = len(template_findings) + len(similarity_findings.get("repeated_phrases") or [])
+    template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
+        similarity_findings.get("repeated_phrases") or []
+    )
     breakdown = [
         {"dimension": "标题与开头爆点", "weight": 10, "score": hot_intro, "note": hot_intro_note},
         {"dimension": "核心观点与副观点", "weight": 10, "score": viewpoint_score, "note": viewpoint_note},
@@ -1840,7 +2024,7 @@ def build_score_report(
         "failed_quality_gates": failed_gates,
         "revision_priorities": list(review.get("revision_priorities") or []),
     }
-    ai_smell_hits = len(review.get("ai_smell_findings") or [])
+    ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     passed = total >= threshold and all(quality_gates.values())
     return {
         "title": title,
@@ -1986,6 +2170,7 @@ def markdown_score_report(report: dict[str, Any]) -> str:
         lines.append(f"- {item}")
     if report.get("template_findings") or report.get("repeated_phrases") or report.get("citation_findings"):
         lines.extend(["", "## 风险信号", ""])
+        lines.append(f"- 模板惩罚计数：`{report.get('template_penalty_hits', 0)}`")
         for item in report.get("template_findings") or []:
             lines.append(f"- 模板句：{item.get('pattern')}（{item.get('count')}）")
         for item in report.get("repeated_phrases") or []:
@@ -2010,6 +2195,7 @@ def markdown_score_report(report: dict[str, Any]) -> str:
     lines.append(f"- 刺痛句：`{len(report.get('pain_point_sentences') or [])}`")
     lines.append(f"- 金句：`{len(report.get('candidate_quotes') or [])}`")
     lines.append(f"- AI 味命中：`{report.get('ai_smell_hits', 0)}`")
+    lines.append(f"- 重复起手信号：`{(report.get('depth_signals') or {}).get('repeated_starter_count', 0)}` 段落 / `{(report.get('depth_signals') or {}).get('repeated_sentence_opener_count', 0)}` 句子")
     revision_rounds = report.get("revision_rounds") or []
     if revision_rounds:
         lines.extend(["", "## 多轮修正记录", ""])

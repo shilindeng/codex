@@ -1,60 +1,57 @@
 ---
 name: wechat-article-studio
-description: 高质量微信公众号图文内容创作与草稿发布技能。覆盖选题调研、标题提案、正文写作、编辑评审、启发式评分、配图规划、公众号排版、草稿箱发布与发布验收。Use when the user asks to create, improve, score, illustrate, format, verify, or publish a WeChat Official Account article / 公众号文章 / 公众号图文, or when the task involves 微信公众号草稿箱、封面图、信息图、插图、Markdown 转公众号 HTML、发布验收。
+description: 高质量微信公众号图文内容创作与草稿发布技能。覆盖选题发现、标题生成、作者风格记忆、正文写作、编辑评审、评分改写、配图规划、公众号排版、草稿箱发布与发布验收。Use when the user asks to create, improve, score, imitate a style for, de-AI, format, verify, or publish a WeChat Official Account article / 公众号文章 / 公众号图文，或当任务涉及热点选题、历史去重、风格作战卡、人工改稿学习、Markdown 转公众号 HTML、封面图/信息图/插图、公众号草稿箱与发布验收。
 ---
 
 # WeChat Article Studio
 
-面向微信公众号图文的端到端 skill。核心目标是把“选题 -> 写作 -> 评审 -> 评分 -> 配图 -> 排版 -> 草稿发布 -> 回读验收”沉淀成平台无关的标准工作目录与 CLI。
+面向微信公众号内容生产的端到端 skill。目标不是“写出一篇能看完的文章”，而是让系统稳定产出：
 
-## 语言
+- 选题更有新意，不跟最近语料撞车
+- 正文更像真人作者，不像统一模板
+- 结构有呼吸感，不是固定句式和固定节奏
+- 每次写完都能继续学习，而不是下次重新随机发挥
 
-- 匹配用户语言。
-- 面向微信公众号时，默认产出简体中文内容。
+## 核心原则
 
-## 快速规则
+- 先判断这篇该怎么写，再动笔。
+- 先读近期语料和作者记忆，再决定标题、开头、小标题、正文推进和结尾。
+- 不靠“多加几条禁止规则”赌结果；要显式建立 `editorial_blueprint`。
+- 事实、数据、新闻、产品能力、政策变化，必须联网核验或基于用户给出的来源。
+- 默认优先 `hosted-run --to render`；只有用户明确要求且文本 provider 已配置时，才优先 `run --to render`。
+- 只有在用户明确确认时，才允许 `--to publish --confirmed-publish`。
 
-- 所有脚本位于 `scripts/`，统一入口是 `python {SKILL_DIR}/scripts/studio.py <subcommand> ...`
-- 事实、数据、趋势、产品信息相关内容必须联网核验或基于用户提供来源。
-- 在 Codex / ClaudeCode / OpenClaw 中，默认由宿主 agent 直接生成 research、标题、大纲、正文，不要求用户填写文本模型配置。
-- 默认把 `D:\vibe-coding\codex\.wechat-jobs` 与 `D:\vibe-coding\codex\wechat-jobs` 一并视为历史语料池；做标题、大纲、正文时都要参考最近文章，主动避开高频重复的标题模板、开头句式、结尾句式与小标题结构。
-- 当用户没有明确主题、只说“开始 / 开启公众号创作”时：先跑 `discover-topics` 联网发现热点选题与评分；必须让用户先选定编号/方向，再进入后续写作与配图流程。
-- 默认优先走 `hosted-run --to render`；只有在用户明确要求且文本 provider 已配置时，才优先走 `run --to render`。
-- 只有在用户明确确认时才允许 `--to publish --confirmed-publish`。
-- 正式发布前必须满足：
-  - 工作目录已记录 `publish_intent=true`（仅在显式确认发布后才会写入）
-  - 显式传入 `--confirmed-publish`
-  - 已生成 `article.wechat.html`
-- 当前工作目录不存在 placeholder research / review / article 回退痕迹
-- `score-report.json` 必须过线，且 `quality_gates` 全部通过（含互动设计、去模板、去同质化、引用策略、去 AI 味、可信度等硬门槛）
-- `gemini-web` 仅可在用户明确同意后显式启用，不作为默认自动后端。
-- `run/hosted-run` 默认启用多轮回炉（每轮 `review -> score -> revise(promote) -> 再 review/score`），上限可用 `--max-revision-rounds` 调整（默认 3）。
-- 如需注入仿写风格/高表现样本，可用 `--style-sample path/to/sample.md`（可重复）。
-- 正文默认不只追求“阅读量”，还要显式设计互动潜力：点赞共鸣点、评论触发点、转发谈资、身份标签与峰终体验。
-- 每篇文章都要先定 `editorial_blueprint`，再写正文。`editorial_blueprint` 至少要明确：标题气质、开头方式、正文推进、小标题写法、证据组织、结尾收束、禁用套路。不要把它当可有可无的附属字段。
-- 写作风格必须轮换，不要总落回同一类“分析评论腔”。优先在这些风格里做内容匹配与轮换：信号简报、反常识短论、案例备忘录、现场观察、误区拆解、实操打法、公开信、追问答辩。
-- 正文不是只避开旧模板就算合格。至少还要同时满足这几项：前 2~3 段里有一个具体场景/动作/瞬间；中段有案例、数据或事实托底；全文至少写出一处反方、误判或适用边界。
-- 不允许整篇都写成“短句卡片 + 判断口号”。至少保留 1~2 段真正展开的分析段，让读者能感到作者真的把问题讲透了。
-- 段落起手和小标题句法都要控制重复。不要让多个段落反复以“很多人 / 你可能 / 如果你”起手，也不要让所有小标题都是同一类问句、编号句或判断句。
-- 如用户指定统一图片主题，优先使用 `--image-preset`，让封面图、信息图、正文插图共享同一风格预设。
-- 若用户未明确指定图片主题、图片类型、风格模式或布局家族，不要擅自写死默认 preset / type / layout；应根据文章内容、文风、受众与章节语义自动决策。
-- 默认图片密度使用 `balanced`；除非用户明确要求更少/更多图片，否则保持读者友好的图文密度。
-- `--image-style-mode` 不再默认写死；未显式传入时，由系统自动在 `uniform` 与 `mixed-by-type` 之间选择。
-- 如用户希望图片更偏流程图、对比图、时间轴、仪表板等版式，优先使用 `--image-layout-family` 约束布局家族。
-- 如用户在正文中使用 `<!-- image:... -->` 标记，优先按文内标记控制某一章节的配图数量、跳过与图型。
-- 正文不要堆原始 URL；关键事实只保留轻引用 `[1][2]`，完整来源统一放到文末“参考资料”卡片。
-- 平台适配只影响触发与提示方式，不改变工作目录产物结构。
+## 完成标准
 
-## 最小工作流
+完成不是“写完正文”。
 
-```bash
-python {SKILL_DIR}/scripts/studio.py hosted-run \
-  --workspace <job-dir> \
-  --topic "<主题>" \
-  --to render
-```
+一篇可交付的稿子，至少同时满足：
 
-如需先找热点选题：
+- 标题没有撞上最近高频标题模板
+- 前 2~3 段里有具体场景、动作或瞬间
+- 中段至少有一处案例、数据或事实托底
+- 全文至少有一处反方、误判或适用边界
+- 至少保留 1~2 段真正展开的分析段，不是整篇卡片句
+- 多个段落起手和小标题句法没有明显重复
+- `review-report.json`、`score-report.json`、`quality_gates` 全部过线
+- 发布前已实际跑通渲染、配图、验收链路
+
+## 默认工作流
+
+### 1. 先读作者记忆
+
+进入工作区后，优先读取这些信息：
+
+- 近期语料：自动扫描 `WECHAT_JOBS_ROOT`、`D:\vibe-coding\codex\.wechat-jobs`、`D:\vibe-coding\codex\wechat-jobs`
+- 工作区中的 `style-playbook.json` / `style-playbook.md`
+- 工作区中的 `author-lessons.json`
+- 用户显式传入的 `--style-sample`
+
+系统会自动把这些信息汇总成 `author_memory`，用于约束标题、结构、文风和改稿方向。
+
+### 2. 用户没给主题时，先做选题发现
+
+如果用户只说“开始 / 开启公众号创作 / 帮我找选题”，先运行：
 
 ```bash
 python {SKILL_DIR}/scripts/studio.py discover-topics \
@@ -65,144 +62,147 @@ python {SKILL_DIR}/scripts/studio.py discover-topics \
   --focus ai-tech
 ```
 
-说明：
+要求：
 
-- `--provider auto` 回退顺序：Google News RSS -> Custom RSS -> Tavily（如有 `TAVILY_API_KEY`）。
-- `custom-rss` 可用 `--rss-url ...` 或环境变量 `DISCOVERY_RSS_URLS`（逗号分隔）配置 RSS/Atom 源。
-- `--focus ai-tech`（默认）只关注 AI/科技互联网热点；如需全量热点，用 `--focus all`。
+- 结合最近语料的标题、关键词和结构，自动给热点候选做“重复风险”降权
+- 候选不仅看热度，也看讨论价值、证据潜力、是否值得展开
+- 默认先让用户选编号/方向，再进入正文写作
+- 如果用户明确说“你自己选”，再直接选综合分最高的一项
 
-选中候选后继续（写入 `manifest.json`，后续 `hosted-run/run` 会沿用）：
+### 3. 用户给了样本时，先建风格作战卡
 
-```bash
-python {SKILL_DIR}/scripts/studio.py select-topic \
-  --workspace <job-dir> \
-  --index 1 \
-  --angle-index 1
-```
-
-如需补强“可信度与检索支撑”，可运行：
+如果用户说“像这个账号写”“先学我的风格”“按这些样本来”，先运行：
 
 ```bash
-python {SKILL_DIR}/scripts/studio.py evidence \
+python {SKILL_DIR}/scripts/studio.py build-playbook \
   --workspace <job-dir> \
-  --auto-search
+  --style-sample path/to/sample-a.md \
+  --style-sample path/to/sample-b.md
 ```
 
-如果宿主 agent 已经写好了正文，也可以显式导入：
+它会生成：
+
+- `style-playbook.json`
+- `style-playbook.md`
+
+作用：
+
+- 提取标题偏好、开头习惯、结尾习惯、文风指纹、重复句式风险
+- 让后续标题、大纲、正文、评审、改写都优先服从这份作者记忆
+
+### 4. 用户给了人工终稿时，先学习改稿偏好
+
+如果用户说“这是我改过的版本，学一下”“以后按这个调性来”，运行：
+
+```bash
+python {SKILL_DIR}/scripts/studio.py learn-edits \
+  --workspace <job-dir> \
+  --draft <ai-draft.md> \
+  --final <human-final.md>
+```
+
+它会把人工修改沉淀进：
+
+- `author-lessons.json`
+
+后续写作和改稿必须优先服从这些高频偏好，而不是回到通用“公众号爆款腔”。
+
+### 5. 写前先定两份蓝图
+
+每篇文章都要先明确：
+
+- `viral_blueprint`
+- `editorial_blueprint`
+
+其中 `editorial_blueprint` 不是装饰字段，它必须决定：
+
+- 标题气质
+- 开头方式
+- 正文推进
+- 小标题写法
+- 证据组织
+- 结尾收束
+- 本篇明确禁止复用的套路
+
+### 6. 再进入正文、评审、改写、配图
+
+默认流程：
 
 ```bash
 python {SKILL_DIR}/scripts/studio.py hosted-run \
   --workspace <job-dir> \
   --topic "<主题>" \
-  --article-file <agent-generated-markdown> \
   --to render
 ```
 
-如需正式发布：
+系统会自动继续：
+
+- 评分
+- 多轮回炉改写
+- 图片规划
+- 图片生成
+- 汇总插图
+- 渲染 `article.html` / `article.wechat.html`
+
+只有当用户明确确认时，才继续：
 
 ```bash
 python {SKILL_DIR}/scripts/studio.py hosted-run \
   --workspace <job-dir> \
   --topic "<主题>" \
-  --article-file <agent-generated-markdown> \
   --to publish \
   --confirmed-publish
 ```
 
-如果宿主环境明确提供文本 API 配置，才使用：
+## 写作硬约束
 
-```bash
-python {SKILL_DIR}/scripts/studio.py run \
-  --workspace <job-dir> \
-  --topic "<主题>" \
-  --to render
-```
+- 不要默认把每篇文章都写成“先说结论 + 三段方法 + 最后清单”
+- 不要默认产出“为什么大多数人……”“真正危险的不是……而是……”“先想清 3 件事”这些旧模板
+- 不要让多个段落反复用“很多人 / 你可能 / 如果你”起手
+- 不要让整篇小标题都长成同一种问句、编号句或判断句
+- 不要整篇只剩短句卡片，必须有展开分析段
+- 不要堆裸 URL；正文只留轻引用 `[1][2]`，完整来源放文末参考资料卡片
+- 不要手写“金句 1/2/3”标签，不要手写参考资料 callout
+- 教程稿才优先动作化结尾；分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束
 
-说明：
+## 常用命令
 
-- 纯 CLI 场景下，`run / research / titles / outline / write` 缺少文本 API 配置会直接失败，不再静默产出 placeholder 稿。
-- `review / score` 在无文本 API 时允许走本地启发式评审与评分，但不会达到发布门槛。
-- `hosted-run` 只有在已提供正文（`article.md` 或 `--article-file`）时，才允许无文本 API 继续；若要自动补正文，仍需要可用文本 API。
-
-## 核心命令
-
-- `research`：生成 `research.json`
-- `titles`：生成标题候选并更新 `ideation.json`
-- `outline`：生成大纲并更新 `ideation.json`
+- `research`：写入 `research.json`
+- `discover-topics`：联网发现热点并生成可写候选
+- `select-topic`：把选中的主题/角度写回 `manifest.json`
+- `titles`：生成标题候选并自动做去重准入
+- `outline`：生成大纲、`viral_blueprint`、`editorial_blueprint`
 - `write`：生成 `article.md`
-- `review`：生成 `review-report.json` 和 `review-report.md`
-- `score`：运行启发式评分 + `quality_gates`，并记录模板风险、相似度、引用策略与多轮回炉信息
-- `revise`：生成改写稿（多轮回炉时为 `article-rewrite-rN.md`，同时保留 `article-rewrite.md` 指向最新一版）
-- `select-topic`：从 `topic-discovery.json` 选择候选编号并写入 `manifest.json`
-- `discover-topics`：联网发现最近 12/24 小时热点新闻与可写选题
-- `evidence`：抽取/补齐来源证据句，生成 `evidence-report.json` 与 `evidence.md`
-- `hosted-run`：宿主 agent 直出正文，再自动继续评分、改写、配图、排版、发布
-- `run`：从 research 串到 render，必要时再进入 publish
-- `publish` / `verify-draft`：微信草稿箱发布与回读验收
-- `ideate` / `draft` / `all`：兼容模式入口
-
-## 图片参数速查
-
-- `--image-preset`：统一主题预设，决定整篇文章的风格母体。
-- `--image-style-mode`：风格模式：`uniform`（统一）或 `mixed-by-type`（按类型混合）；未传时由系统自动判断。
-- `--image-preset-cover / --image-preset-infographic / --image-preset-inline`：仅在 `mixed-by-type` 下生效，分别控制封面/信息图/正文插图的预设。
-- `--image-density`：配图密度，默认 `balanced`。
-- `--image-layout-family`：布局家族偏好，用于约束信息图/流程图/对比图的构图路径。
-- `--image-theme / --image-style / --image-mood`：少量覆盖统一主题的局部视觉表达。
-- `--custom-visual-brief`：补充额外视觉要求。
-- `--inline-count`：显式要求正文插图数量。
-
-## 排版参数速查
-
-- `--layout-style`：排版主题：`auto|clean|cards|magazine|business|warm|poster|tech|blueprint`（默认 `auto`，会参考文章结构与 `manifest.image_controls` 自动选型）。
-- `--input-format`：输入格式：`auto|md|html`（默认 `auto`；HTML 会抽取 `<body>` 并净化后再排版）。
-- 主题排版在 `article.html` 与 `article.wechat.html` 均表现为外层底色 + 内层白卡（更接近流行公众号阅读体验）。
-
-## 排版组件（可选）
-
-在 Markdown 中用引用块标记信息卡片（更像公众号编辑稿），示例：
-
-```md
-> [!TAKEAWAY] 一句话结论
-> 结论内容尽量短、可截图。
-
-> [!TIP] 实操提示
-> 给读者一个马上能做的动作。
-
-> [!WARNING] 常见坑
-> 提醒读者别踩坑。
-```
-
-支持标签：`TIP`、`TAKEAWAY`、`WARNING`、`CHECKLIST`、`MYTHFACT`（大小写不敏感）。
+- `review`：生成编辑评审报告
+- `score`：运行评分与质量门槛
+- `revise`：按评审结果改写，支持 `de-ai`
+- `build-playbook`：从风格样本生成作者风格作战卡
+- `learn-edits`：从人工改稿里学习偏好
+- `hosted-run`：宿主 agent 写正文，CLI 继续执行后半流程
+- `run`：文本 provider 负责正文与后半流程
+- `publish` / `verify-draft`：公众号草稿箱发布与回读验收
 
 ## 推荐操作习惯
 
-1. 先用 `hosted-run --to render --dry-run-images` 验证整条链路。
-2. 如果用户没有主题，先用 `discover-topics` 生成可选方向。
-3. 标题不要直接等于 topic，优先看 `title-report.md` 中通过准入的标题。
-4. 如果目标是高互动稿，先确认题材更偏“分析评论 / 教程指南 / 案例拆解 / 叙事观察”哪一类，再决定开头和结尾策略。
-5. 正文至少显式设计 4 个点：点赞句、评论问题、转发谈资、峰终收束。
-6. 写完后先看 `review-report.md` 里的编辑二审，再看 `score-report.md` 里的模板/相似度/引用风险。
-7. 如果要精修图片，先看 `image-outline.md` 和 `prompts/images/*.md`。
-8. 如果要判断为什么这篇文章会偏某种出图风格，先看 `image-strategy.json`。
-9. 再执行真实 `generate-images`。
-10. 发布前先 `--dry-run-publish`。
+1. 先用 `hosted-run --to render --dry-run-images` 跑通整条链路。
+2. 如果用户强调“别再像 AI 写的”，优先补 `build-playbook` 或 `learn-edits`，不要只靠 `revise --mode de-ai`。
+3. 如果近期文章开始越来越像，先看 `title-report.json`、`recent_corpus_summary`、`author_memory`，再决定是否重写。
+4. 如果用户给了历史高表现样本，先把样本转成 `style-playbook`，再写正文。
+5. 改稿后再跑一次 `review + score`，不要把第一次低分稿直接推进到配图和发布。
 
 ## 何时读 reference
 
 - 流程与停点：读 `references/workflow.md`
 - 命令输入输出矩阵：读 `references/command-matrix.md`
-- 工作目录标准产物：读 `references/artifact-contract.md`
-- 文本/图片/发布 provider 契约：读 `references/provider-contract.md`
+- 产物契约：读 `references/artifact-contract.md`
 - 评分标准：读 `references/scoring-rubric.md`
-- 图片系统：读 `references/image-system.md`
-- 图片 prompt 体系：读 `references/image-prompting.md`
+- 来源归因与轻引用：读 `references/attribution.md`
+- 图片系统与 prompt：读 `references/image-system.md`、`references/image-prompting.md`
 - 微信草稿 API：读 `references/wechat-draft-api.md`
-- 来源归因与引用：读 `references/attribution.md`
 
 ## 平台适配
 
 - Codex：保留 `agents/openai.yaml`
 - ClaudeCode：读 `scripts/adapters/claudecode.md`
 - OpenClaw：读 `scripts/adapters/openclaw.md`
-- OpenCode：不提供专有目录；只要平台能运行 Python CLI 并消费标准工作目录产物，即可按同一方式接入
+- 只要宿主平台能运行 Python CLI，并消费标准工作目录产物，就能接入

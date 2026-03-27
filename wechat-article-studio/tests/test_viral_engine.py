@@ -166,6 +166,40 @@ class ViralEngineTests(unittest.TestCase):
         self.assertIn("repeated_starter", patterns)
         self.assertTrue(any("补现场、案例和反方边界" in item for item in report.get("mandatory_revisions", [])))
 
+    def test_score_report_respects_author_memory_blacklist(self):
+        title = "一个看上去没问题但其实很模板的稿子"
+        body = "\n\n".join(
+            [
+                "如果你最近也在关注这件事，你会发现很多人都在重复同一种判断。",
+                "如果你最近继续往下看，你还会看到同一种展开方式。",
+                "",
+                "## 为什么这件事重要？",
+                "说白了，这件事的本质并不复杂。",
+                "",
+                "## 为什么很多人会误判？",
+                "说白了，问题不在信息，而在判断顺序。",
+                "",
+                "## 为什么最后还是会写成一样？",
+                "如果你最近刚好也在写类似文章，就更容易掉回这套腔调。",
+            ]
+        ).strip()
+        manifest = {
+            "topic": title,
+            "audience": "大众读者",
+            "direction": "",
+            "source_urls": [],
+            "author_memory": {
+                "phrase_blacklist": ["说白了", "如果你最近"],
+                "sentence_starters_to_avoid": ["如果你最近"],
+            },
+        }
+        report = build_score_report(title, body, manifest, threshold=70)
+        self.assertFalse(report.get("quality_gates", {}).get("de_ai_passed"))
+        self.assertFalse(report.get("quality_gates", {}).get("template_penalty_passed"))
+        smell_types = {item.get("type") for item in report.get("ai_smell_findings") or []}
+        self.assertIn("author_phrase", smell_types)
+        self.assertIn("author_starter", smell_types)
+
     def test_publish_blockers_include_quality_gate_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

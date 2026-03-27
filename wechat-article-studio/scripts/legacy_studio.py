@@ -30,7 +30,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from core.editorial_strategy import title_template_key
+from core.editorial_strategy import EDITORIAL_STYLE_LIBRARY, generate_diverse_title_variants, title_template_key
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -136,9 +136,10 @@ DISCOVERY_PROVIDER_CHOICES = ("auto", "google-news-rss", "custom-rss", "tavily")
 START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动", "开启公众号创作", "开启创作", "开始创作"}
 GEMINI_WEB_NO_IMAGE_MARKER = "No image returned in response."
 GEMINI_WEB_IMAGE_MODEL_CANDIDATES = [
-    "gemini-3.1-flash-image",
     "gemini-3.1-flash-image-preview",
+    "gemini-2.5-flash-image",
     "gemini-3-pro-image-preview",
+    "gemini-3.1-flash-image",
 ]
 AI_STYLE_PHRASES = [
     "首先",
@@ -1742,37 +1743,77 @@ def rank_title_candidates(
 
 
 def generate_hot_title_variants(topic: str, angle: str = "", audience: str = "") -> list[dict[str, str]]:
-    focus = extract_summary(f"{topic} {angle}".strip(), 22) or (topic or "这个问题")
-    audience_hint = ""
-    for word in TITLE_AUDIENCE_WORDS:
-        if word in (audience or ""):
-            audience_hint = word
-            break
-    lead = audience_hint or "普通人"
-    variants = [
-        f"为什么大多数人做不好{focus}？{lead}一定要先想清这3件事",
-        f"{focus}的真相：别再凭感觉了，先看这份判断清单",
-        f"如果你最近在关注{focus}，这5个误区越早避开越好",
-        f"{focus}为什么突然重要了？看懂这3个信号，你就知道下一步怎么做",
-        f"关于{focus}，真正拉开差距的不是信息量，而是这套判断方法",
-        f"{lead}最容易忽略的{focus}机会，往往就藏在这4个细节里",
-    ]
-    deduped: list[dict[str, str]] = []
+    classification = classify_news_topic(topic)
+    content_kind = classify_discovery_content_kind(topic)
+    style_keys = ["signal-briefing", "case-memo", "counterintuitive-column"]
+    if content_kind == "教程/工具":
+        style_keys = ["practical-playbook", "qa-cross-exam", "myth-buster"]
+    elif content_kind == "研究/论文":
+        style_keys = ["signal-briefing", "case-memo", "qa-cross-exam"]
+    elif content_kind == "事件解读":
+        style_keys = ["case-memo", "counterintuitive-column", "signal-briefing"]
+    elif classification.get("topic_type") == "文娱/平台":
+        style_keys = ["case-memo", "field-observation", "counterintuitive-column"]
+    elif classification.get("topic_type") == "教育":
+        style_keys = ["myth-buster", "practical-playbook", "open-letter"]
+
+    blocked_patterns = {
+        "overused_title_patterns": [
+            {"key": "why-think-clear", "count": 99},
+            {"key": "danger-not-but", "count": 99},
+            {"key": "not-but", "count": 99},
+        ]
+    }
+    candidates: list[dict[str, str]] = []
     seen: set[str] = set()
-    for title in variants:
+    for style_key in style_keys:
+        blueprint = {
+            "style_key": style_key,
+            "style_label": (EDITORIAL_STYLE_LIBRARY.get(style_key) or {}).get("style_label", style_key),
+        }
+        variants = generate_diverse_title_variants(
+            topic,
+            angle,
+            audience,
+            editorial_blueprint=blueprint,
+            recent_titles=[],
+            recent_corpus_summary=blocked_patterns,
+        )
+        for item in variants:
+            title = str(item.get("title") or "").strip()
+            normalized = re.sub(r"\s+", "", title)
+            if not title or normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(
+                {
+                    "title": title,
+                    "strategy": f"热点标题工厂：{blueprint['style_label']}",
+                    "audience_fit": audience or "大众读者",
+                    "risk_note": "按热点题材自动切换标题写法，主动避开旧模板。",
+                }
+            )
+            if len(candidates) >= 6:
+                return candidates
+    fallback = [
+        f"{topic}这件事，真正值得聊的不是热闹本身",
+        f"关于{topic}，我更想拆开讲清楚那一步",
+        f"{topic}背后真正该被看见的，是影响路径",
+    ]
+    for title in fallback:
         normalized = re.sub(r"\s+", "", title)
         if normalized in seen:
             continue
         seen.add(normalized)
-        deduped.append(
+        candidates.append(
             {
                 "title": title,
-                "strategy": "爆款标题优化",
+                "strategy": "热点标题工厂：兜底",
                 "audience_fit": audience or "大众读者",
-                "risk_note": "由本地启发式标题工厂自动生成，供准入补强。",
+                "risk_note": "当题材不适合固定模版时启用的兜底写法。",
             }
         )
-    return deduped
+    return candidates[:6]
 
 
 def intro_score(title: str, intro: str) -> tuple[int, str]:
@@ -2703,6 +2744,84 @@ def normalize_gemini_web_model(requested: str | None) -> str:
     return GEMINI_WEB_IMAGE_MODEL_CANDIDATES[0]
 
 
+def _extract_prompt_field(prompt: str, label: str, next_labels: list[str]) -> str:
+    markers = [re.escape(item) for item in next_labels]
+    boundary = "|".join(markers) if markers else "$"
+    match = re.search(rf"{re.escape(label)}\s*(.*?)(?=(?:{boundary})|$)", prompt, flags=re.S)
+    if not match:
+        return ""
+    return re.sub(r"\s+", " ", match.group(1) or "").strip()
+
+
+def gemini_web_prompt_variants(prompt: str) -> list[tuple[str, str]]:
+    raw = re.sub(r"\s+", " ", prompt or "").strip()
+    if not raw:
+        return [("original", prompt or "")]
+
+    labels = [
+        "Article title:",
+        "Audience:",
+        "Purpose:",
+        "Theme:",
+        "Style:",
+        "Mood:",
+        "Visual brief:",
+        "Content summary:",
+        "Section focus:",
+        "Anchor excerpt:",
+        "Section excerpt:",
+        "Layout variant:",
+        "Composition rule:",
+        "Type decision reason:",
+        "Style decision reason:",
+    ]
+
+    def field(name: str) -> str:
+        index = labels.index(name)
+        return _extract_prompt_field(raw, name, labels[index + 1 :])
+
+    title = field("Article title:")
+    purpose = field("Purpose:")
+    theme = field("Theme:")
+    style = field("Style:")
+    mood = field("Mood:")
+    visual_brief = field("Visual brief:")
+    summary = field("Content summary:")
+    section_focus = field("Section focus:")
+    anchor_excerpt = field("Anchor excerpt:")
+    section_excerpt = field("Section excerpt:")
+
+    subject = section_excerpt or anchor_excerpt or summary or section_focus or title
+    subject = re.sub(r"\s+", " ", subject).strip()
+
+    compact_prompt = (
+        f"Create one polished editorial illustration for a Chinese WeChat article. "
+        f"No text in image. Purpose: {purpose or 'inline illustration'}. "
+        f"Theme: {theme or 'editorial storytelling'}. Style: {style or 'editorial illustration'}. "
+        f"Mood: {mood or 'calm and sharp'}. "
+        f"Article title: {title or 'Untitled article'}. "
+        f"Section focus: {section_focus or title or 'core idea'}. "
+        f"Show this idea as one clear visual scene or metaphor: {subject}. "
+        f"Prefer people, objects, gesture, space, atmosphere, and storytelling. "
+        f"Avoid labels, charts, diagrams, tables, screenshots, UI text, watermarks, and logos."
+    ).strip()
+
+    minimal_prompt = (
+        f"Chinese editorial illustration, no text, no chart, no labels. "
+        f"Show {section_focus or title or 'the core idea'} as a single strong scene. "
+        f"Use {style or 'hand-drawn editorial'} style, {mood or 'human and restrained'} mood. "
+        f"Key idea: {subject}. "
+        f"{visual_brief or ''}"
+    ).strip()
+
+    variants: list[tuple[str, str]] = [("original", prompt)]
+    if compact_prompt and compact_prompt != prompt:
+        variants.append(("compact-scene", compact_prompt))
+    if minimal_prompt and minimal_prompt not in {prompt, compact_prompt}:
+        variants.append(("minimal-scene", minimal_prompt))
+    return variants
+
+
 def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None = None) -> dict[str, Any]:
     ensure_gemini_web_consent()
     bun = resolve_bun_command()
@@ -2710,12 +2829,10 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
     cookie_temp: Path | None = None
     env = os.environ.copy()
     detected_cookie = gemini_web_cookie_file()
-    detected_profile_root = local_chrome_user_data_root()
+    dedicated_profile_root = consent_dir() / "chrome-profile"
 
-    # Prefer a real browser profile when available (more likely to stay logged in)
-    # unless the user explicitly provided a cookie path.
-    if not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and detected_profile_root is not None:
-        env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(detected_profile_root)
+    # Prefer the cached cookie file first; it avoids touching the user's main Chrome profile.
+    # Fall back to the dedicated gemini-web profile only when a browser login refresh is needed.
     if not env.get("GEMINI_WEB_COOKIE_PATH") and not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and detected_cookie.exists():
         env["GEMINI_WEB_COOKIE_PATH"] = str(detected_cookie)
     raw_cookie = env.get("GEMINI_WEB_COOKIE")
@@ -2731,60 +2848,75 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
     completed: subprocess.CompletedProcess[str] | None = None
     tried_models: list[str] = []
     last_error: str = ""
+    browser_refresh_attempted = False
+    used_prompt = prompt
+    used_prompt_variant = "original"
     try:
         for candidate in [normalize_gemini_web_model(model)] + [name for name in GEMINI_WEB_IMAGE_MODEL_CANDIDATES if name != normalize_gemini_web_model(model)]:
             if candidate in tried_models:
                 continue
             tried_models.append(candidate)
-            command = bun + [str(root / "main.ts"), "--prompt", prompt, "--image", str(output_path), "--json", "--model", candidate]
-            if env.get("GEMINI_WEB_COOKIE_PATH"):
-                command.extend(["--cookie-path", env["GEMINI_WEB_COOKIE_PATH"]])
-            if env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
-                command.extend(["--profile-dir", env["GEMINI_WEB_CHROME_PROFILE_DIR"]])
-            try:
-                completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env,
-                check=True,
-                timeout=GEMINI_WEB_IMAGE_TIMEOUT,
-            )
+            for prompt_variant, prompt_value in gemini_web_prompt_variants(prompt):
+                command = bun + [str(root / "main.ts"), "--prompt", prompt_value, "--image", str(output_path), "--json", "--model", candidate]
+                if env.get("GEMINI_WEB_COOKIE_PATH"):
+                    command.extend(["--cookie-path", env["GEMINI_WEB_COOKIE_PATH"]])
+                if env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
+                    command.extend(["--profile-dir", env["GEMINI_WEB_CHROME_PROFILE_DIR"]])
+                try:
+                    completed = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        env=env,
+                        check=True,
+                        timeout=GEMINI_WEB_IMAGE_TIMEOUT,
+                    )
+                    used_prompt = prompt_value
+                    used_prompt_variant = prompt_variant
+                    break
+                except subprocess.CalledProcessError as exc:
+                    stdout = (exc.stdout or "").strip()
+                    stderr = (exc.stderr or "").strip()
+                    detail = "\n".join(part for part in [stdout, stderr] if part)
+                    combined = "\n".join(part for part in [stdout, stderr] if part).lower()
+                    auth_markers = [
+                        "autherror",
+                        "unauthorized",
+                        "login",
+                        "sign in",
+                        "signin",
+                        "__secure-1psid",
+                        "__secure-1psidts",
+                        "cookie",
+                        "refresh cookies",
+                        "failed to refresh cookies",
+                    ]
+                    if any(marker in combined for marker in auth_markers):
+                        if not browser_refresh_attempted and not env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
+                            env.pop("GEMINI_WEB_COOKIE_PATH", None)
+                            env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(dedicated_profile_root)
+                            env["GEMINI_WEB_LOGIN"] = "1"
+                            browser_refresh_attempted = True
+                            tried_models.pop()
+                            break
+                        raise SystemExit(
+                            "Gemini 登录态可能已失效，请重新登录 Gemini 后再试。"
+                            " 如果你使用的是 cookie 文件，请刷新 cookie；"
+                            " 如果你使用的是浏览器 Profile，请先在对应浏览器里确认 Gemini 已登录。"
+                        ) from exc
+                    last_error = detail or str(exc)
+                    if GEMINI_WEB_NO_IMAGE_MARKER.lower() in combined:
+                        continue
+                    if "Unknown model name" in last_error:
+                        break
+                    raise SystemExit(f"gemini-web 图片生成失败：{last_error}") from exc
+                except subprocess.TimeoutExpired:
+                    last_error = f"模型 {candidate} 调用超时"
+                    continue
+            if completed is not None:
                 break
-            except subprocess.CalledProcessError as exc:
-                stdout = (exc.stdout or "").strip()
-                stderr = (exc.stderr or "").strip()
-                detail = "\n".join(part for part in [stdout, stderr] if part)
-                combined = "\n".join(part for part in [stdout, stderr] if part).lower()
-                auth_markers = [
-                    "autherror",
-                    "unauthorized",
-                    "login",
-                    "sign in",
-                    "signin",
-                    "__secure-1psid",
-                    "__secure-1psidts",
-                    "cookie",
-                    "refresh cookies",
-                    "failed to refresh cookies",
-                ]
-                if any(marker in combined for marker in auth_markers):
-                    raise SystemExit(
-                        "Gemini 登录态可能已失效，请重新登录 Gemini 后再试。"
-                        " 如果你使用的是 cookie 文件，请刷新 cookie；"
-                        " 如果你使用的是浏览器 Profile，请先在对应浏览器里确认 Gemini 已登录。"
-                    ) from exc
-                last_error = detail or str(exc)
-                if GEMINI_WEB_NO_IMAGE_MARKER.lower() in combined:
-                    continue
-                if "Unknown model name" in last_error:
-                    continue
-                raise SystemExit(f"gemini-web 图片生成失败：{last_error}") from exc
-            except subprocess.TimeoutExpired:
-                last_error = f"模型 {candidate} 调用超时"
-                continue
     finally:
         if cookie_temp and cookie_temp.exists():
             cookie_temp.unlink(missing_ok=True)
@@ -2803,14 +2935,15 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
     width, height = detect_dimensions(output_path, (1536, 1024))
     return {
         "provider": "gemini-web",
-        "prompt": prompt,
-        "revised_prompt": payload.get("text") or prompt,
+        "prompt": used_prompt,
+        "revised_prompt": payload.get("text") or used_prompt,
         "width": width,
         "height": height,
         "source_meta": {
             "sessionId": payload.get("sessionId"),
             "model": payload.get("model"),
             "tried_models": tried_models,
+            "prompt_variant": used_prompt_variant,
             "profile_dir": env.get("GEMINI_WEB_CHROME_PROFILE_DIR", ""),
         },
     }

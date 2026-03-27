@@ -180,6 +180,7 @@ def generate_revision_candidate(
             "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
+            "author_memory": manifest.get("author_memory") or {},
         }
         result = provider.revise_article(context)
         provider_name = result.provider
