@@ -99,6 +99,49 @@ class ImageControlTests(unittest.TestCase):
             self.assertTrue(plan["items"][0].get("safe_crop_policy"))
             self.assertTrue(plan["items"][0].get("visual_reason"))
 
+    def test_generate_images_falls_back_to_local_card_when_gemini_web_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "image-plan.json").write_text(
+                json.dumps(
+                    {
+                        "provider": "gemini-web",
+                        "items": [
+                            {
+                                "id": "inline-01",
+                                "type": "正文插图",
+                                "prompt": "test prompt",
+                                "asset_path": "assets/images/inline-01.png",
+                                "section_heading": "测试章节",
+                                "section_excerpt": "测试说明",
+                                "aspect_ratio": "16:9",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            with unittest.mock.patch.object(legacy, "generate_gemini_web_image", side_effect=SystemExit("gemini-web 图片生成失败")):
+                legacy.cmd_generate_images(
+                    type(
+                        "Args",
+                        (),
+                        {
+                            "workspace": str(workspace),
+                            "provider": "gemini-web",
+                            "dry_run": False,
+                            "gemini_model": "gemini-2.0-flash-preview-image-generation",
+                            "openai_model": "gpt-image-1",
+                        },
+                    )()
+                )
+            plan = json.loads((workspace / "image-plan.json").read_text(encoding="utf-8"))
+            generated = plan["items"][0]
+            self.assertEqual(generated["provider"], "local-card")
+            self.assertTrue((workspace / "assets" / "images" / "inline-01.png").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

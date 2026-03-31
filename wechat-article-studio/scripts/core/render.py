@@ -137,6 +137,9 @@ def normalize_publication_markdown(title: str, body: str) -> str:
 def cmd_render(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    layout_plan_path = workspace / str(manifest.get("layout_plan_path") or "layout-plan.json")
+    if layout_plan_path.exists():
+        manifest["layout_plan"] = read_json(layout_plan_path, default={}) or {}
 
     input_rel = args.input or manifest.get("assembled_path") or "assembled.md"
     input_path = workspace / input_rel

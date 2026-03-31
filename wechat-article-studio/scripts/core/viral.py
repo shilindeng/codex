@@ -800,6 +800,9 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
             _normalize_list(output.get("voice_guardrails"))
             + _normalize_list(output.get("avoid_patterns"))
             + _normalize_list(author_memory.get("playbook_summary"))
+            + [f"延续这种判断方式：{item}" for item in _normalize_list((author_memory.get("editorial_preferences") or {}).get("judgment_preferences"))[:3]]
+            + [f"优先使用这种证据：{item}" for item in _normalize_list((author_memory.get("editorial_preferences") or {}).get("evidence_preferences"))[:3]]
+            + ([f"正文节奏偏向：{str((author_memory.get('rhythm_preferences') or {}).get('preferred_rhythm') or '').strip()}"] if str((author_memory.get("rhythm_preferences") or {}).get("preferred_rhythm") or "").strip() else [])
             + [f"避免使用：{item}" for item in _normalize_list(author_memory.get("phrase_blacklist"))[:4]]
             + [f"避免这种起手：{item}" for item in _normalize_list(author_memory.get("sentence_starters_to_avoid"))[:4]]
         )[:12],
@@ -1035,6 +1038,30 @@ def _sentence_opening_token(sentence: str) -> str:
     return (match.group(0) if match else value[:4]).strip()
 
 
+def _subject_tokens_from_manifest(manifest: dict[str, Any] | None) -> set[str]:
+    payload = manifest or {}
+    corpus = " ".join(
+        [
+            str(payload.get("selected_title") or ""),
+            str(payload.get("title") or ""),
+            str(payload.get("topic") or ""),
+        ]
+    )
+    tokens = {item.lower() for item in re.findall(r"[\u4e00-\u9fffA-Za-z]{2,12}", corpus) if len(item.strip()) >= 2}
+    return tokens
+
+
+def _starter_is_subject_entity(token: str, manifest: dict[str, Any] | None) -> bool:
+    compact = str(token or "").strip().lower()
+    if not compact:
+        return False
+    for item in _subject_tokens_from_manifest(manifest):
+        if compact == item or compact.startswith(item) or item.startswith(compact):
+            if re.fullmatch(r"[a-z]{3,12}", compact) or re.fullmatch(r"[\u4e00-\u9fff]{2,6}", compact):
+                return True
+    return False
+
+
 def _author_memory(manifest: dict[str, Any]) -> dict[str, Any]:
     payload = manifest.get("author_memory") or {}
     return payload if isinstance(payload, dict) else {}
@@ -1066,7 +1093,7 @@ def _heading_monotony(headings: list[dict[str, Any]]) -> dict[str, Any]:
     return {"monotony": False, "reason": "", "count": 0}
 
 
-def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[str, Any]:
+def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
     paragraphs = _body_paragraphs(body)
     headings = legacy.extract_headings(body)
     sentences = [sentence for sentence in legacy.sentence_split(body) if sentence.strip()]
@@ -1089,13 +1116,13 @@ def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[s
     repeated_starters = [
         {"token": token, "count": count}
         for token, count in starters.most_common()
-        if (token in COMMON_PARAGRAPH_STARTERS and count >= 2) or count >= 3
+        if (((token in COMMON_PARAGRAPH_STARTERS and count >= 2) or count >= 3) and not _starter_is_subject_entity(token, context or {}))
     ]
     sentence_openers = Counter(_sentence_opening_token(item) for item in sentences if _sentence_opening_token(item))
     repeated_sentence_openers = [
         {"token": token, "count": count}
         for token, count in sentence_openers.most_common()
-        if (token in COMMON_SENTENCE_OPENERS and count >= 2) or count >= 4
+        if (((token in COMMON_SENTENCE_OPENERS and count >= 2) or count >= 4) and not _starter_is_subject_entity(token, context or {}))
     ]
     heading_monotony = _heading_monotony(headings)
     outline_like = len(paragraphs) >= 5 and len(short_paragraphs) >= max(3, int(len(paragraphs) * 0.45)) and len(long_paragraphs) <= 1
@@ -1119,13 +1146,15 @@ def _depth_signals(body: str, blueprint: dict[str, Any] | None = None) -> dict[s
         "scene_examples": scene_paragraphs[:2],
         "evidence_examples": evidence_paragraphs[:2],
         "counterpoint_examples": counterpoint_paragraphs[:2],
-        "editorial_style_hint": str((blueprint or {}).get("style_key") or ""),
+        "editorial_style_hint": str(((context or {}).get("style_key") or ((context or {}).get("editorial_blueprint") or {}).get("style_key") or "")),
     }
 
 
 def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for phrase in getattr(legacy, "AI_STYLE_PHRASES", []) or []:
+        if str(phrase) in {"首先", "其次", "最后"}:
+            continue
         hit_count = body.count(phrase)
         if not hit_count:
             continue
@@ -1137,13 +1166,16 @@ def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> lis
         long_sentences = [length for length in sentence_lengths if length >= 55]
         if len(long_sentences) >= 3:
             findings.append({"type": "long_sentence_cluster", "pattern": "long_sentence", "count": len(long_sentences), "evidence": f"{len(long_sentences)} 个长句"})
-    if body.count("首先") + body.count("其次") + body.count("最后") >= 2:
-        findings.append({"type": "enumeration_voice", "pattern": "首先/其次/最后", "count": body.count("首先") + body.count("其次") + body.count("最后"), "evidence": "枚举式模板推进"})
-    signals = _depth_signals(body)
+    enumeration_hits = re.findall(r"(?:^|[。！？!?]\s*|\n\s*)(首先|其次|最后)(?:[，,:：\s])", body)
+    if len(enumeration_hits) >= 2:
+        findings.append({"type": "enumeration_voice", "pattern": "首先/其次/最后", "count": len(enumeration_hits), "evidence": "枚举式模板推进"})
+    signals = _depth_signals(body, manifest if isinstance(manifest, dict) else None)
     if signals.get("outline_like"):
         findings.append({"type": "outline_like", "pattern": "outline_like", "count": 1, "evidence": "段落过碎，像提纲或卡片拼接"})
     repeated_starters = signals.get("repeated_starters") or []
     for sample in repeated_starters[:2]:
+        if _starter_is_subject_entity(str(sample.get("token") or ""), manifest):
+            continue
         findings.append(
             {
                 "type": "repeated_starter",
@@ -1154,6 +1186,8 @@ def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> lis
         )
     repeated_sentence_openers = signals.get("repeated_sentence_openers") or []
     for sample in repeated_sentence_openers[:2]:
+        if _starter_is_subject_entity(str(sample.get("token") or ""), manifest):
+            continue
         findings.append(
             {
                 "type": "repeated_sentence_opener",
@@ -1378,7 +1412,7 @@ def _heuristic_editorial_review(
     citation: dict[str, Any],
 ) -> dict[str, Any]:
     intro = " ".join(_first_paragraphs(body, limit=2))
-    depth = review.get("depth_signals") or _depth_signals(body)
+    depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
     reading_desire = "high" if ("？" in intro or any(word in intro for word in ["你可能", "最近", "刷到", "某天", "为什么"]) or depth.get("scene_paragraph_count", 0) >= 1) else "medium"
     if legacy.cjk_len(intro) < 40:
         reading_desire = "low"
@@ -1452,7 +1486,16 @@ def build_heuristic_review(
     emotion_curve = _emotion_curve_from_body(body, headings)
     emotion_layers = _emotion_layers(body)
     style_traits = _style_traits(body, blueprint)
-    depth_signals = _depth_signals(body, blueprint)
+    depth_signals = _depth_signals(
+        body,
+        {
+            "selected_title": title,
+            "topic": manifest.get("topic") or title,
+            "title": title,
+            "viral_blueprint": blueprint,
+            "editorial_blueprint": manifest.get("editorial_blueprint") or {},
+        },
+    )
     interaction_design = _interaction_design(body, blueprint, signature_lines)
     similarity_findings = _similarity_findings(title, body, manifest)
     citation_findings = _citation_findings(body, manifest)
@@ -1564,6 +1607,13 @@ def build_heuristic_review(
         "depth_signals": depth_signals,
         "editorial_review": editorial_review,
         "revision_priorities": revision_priorities,
+        "manifest_context": {
+            "selected_title": title,
+            "topic": manifest.get("topic") or title,
+            "title": title,
+            "viral_blueprint": blueprint,
+            "editorial_blueprint": manifest.get("editorial_blueprint") or {},
+        },
         "revision_round": revision_round,
         "review_source": review_source,
         "source": review_source,
@@ -1710,7 +1760,7 @@ def normalize_review_payload(
 
 def _score_hot_intro(title: str, body: str, review: dict[str, Any]) -> tuple[int, str]:
     intro = legacy.intro_text(body)
-    depth = review.get("depth_signals") or _depth_signals(body)
+    depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
     score = 3
     score += min(3, legacy.count_occurrences(title, getattr(legacy, "TITLE_CURIOSITY_WORDS", [])))
     score += min(2, legacy.count_occurrences(intro, getattr(legacy, "HOOK_WORDS", [])))
@@ -1786,7 +1836,7 @@ def _score_interaction_design(review: dict[str, Any], body: str) -> tuple[int, s
 def _score_emotion_curve(review: dict[str, Any], body: str) -> tuple[int, str]:
     curve_count = len(review.get("viral_analysis", {}).get("emotion_curve") or [])
     paragraph_count = len(legacy.list_paragraphs(body))
-    depth = review.get("depth_signals") or _depth_signals(body)
+    depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
     score = 2
     if curve_count >= 3:
         score += 4
@@ -1815,7 +1865,7 @@ def _score_style(review: dict[str, Any], body: str) -> tuple[int, str]:
     findings = review.get("ai_smell_findings") or []
     ai_hits = len(findings)
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body)]
-    depth = review.get("depth_signals") or _depth_signals(body)
+    depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
     penalty = 0
     for item in findings:
         finding_type = str(item.get("type") or "")
@@ -1849,7 +1899,7 @@ def _score_credibility(body: str, manifest: dict[str, Any], review: dict[str, An
     evidence_bonus = min(3, citation.get("inline_citation_count", 0))
     data_bonus = len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\d+倍|第\d+", body))
     argument_modes = _normalize_list(review.get("viral_analysis", {}).get("argument_diversity"))
-    depth = review.get("depth_signals") or _depth_signals(body)
+    depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
     score = min(
         8,
         min(3, len(source_urls))
@@ -1939,7 +1989,15 @@ def build_score_report(
     citation_findings = review.get("citation_findings") or _citation_findings(body, manifest)
     interaction_findings = review.get("interaction_findings") or review.get("viral_analysis") or {}
     editorial_review = review.get("editorial_review") or _heuristic_editorial_review(title, body, review, template_findings, similarity_findings, citation_findings)
-    depth_signals = review.get("depth_signals") or _depth_signals(body, blueprint)
+    depth_signals = review.get("depth_signals") or _depth_signals(
+        body,
+        {
+            "selected_title": title,
+            "topic": manifest.get("topic") or title,
+            "title": title,
+            "viral_blueprint": blueprint,
+        },
+    )
     template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
         similarity_findings.get("repeated_phrases") or []
     )

@@ -144,7 +144,6 @@ GEMINI_WEB_IMAGE_MODEL_CANDIDATES = [
 AI_STYLE_PHRASES = [
     "首先",
     "其次",
-    "最后",
     "综上所述",
     "总的来说",
     "总而言之",
@@ -1852,9 +1851,18 @@ def quote_score(body: str) -> tuple[int, str, list[str]]:
     return score, "金句应具备可截图、可转述、可单独传播的密度。", quotes
 
 
+def count_ai_style_hits(body: str) -> int:
+    value = body or ""
+    hits = 0
+    for phrase in AI_STYLE_PHRASES:
+        hits += value.count(phrase)
+    hits += len(re.findall(r"(?:^|[。！？!?]\s*|\n\s*)(首先|其次|最后)(?:[，,:：\s])", value))
+    return hits
+
+
 def style_score(body: str) -> tuple[int, str]:
     score = 8
-    penalty = min(5, count_occurrences(body, AI_STYLE_PHRASES))
+    penalty = min(5, count_ai_style_hits(body))
     score -= penalty
     sentence_lengths = [cjk_len(sentence) for sentence in sentence_split(body)]
     if sentence_lengths:
@@ -1912,7 +1920,8 @@ def readability_score(body: str, headings: list[dict[str, Any]]) -> tuple[int, s
 
 
 def emotion_score(body: str) -> tuple[int, str]:
-    score = min(5, 1 + count_occurrences(body, EMOTION_WORDS))
+    extra_markers = ["刺痛", "后背一紧", "拧干", "拖垮", "被理解", "轻松感", "不是不会", "不是你不行"]
+    score = min(5, 1 + count_occurrences(body, EMOTION_WORDS + extra_markers))
     return score, "情绪并非煽情，而是让读者感到‘这说的就是我’。"
 
 
@@ -2823,103 +2832,46 @@ def gemini_web_prompt_variants(prompt: str) -> list[tuple[str, str]]:
 
 
 def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None = None) -> dict[str, Any]:
+    from core.gemini_web_session import run_gemini_web_command
+
     ensure_gemini_web_consent()
     bun = resolve_bun_command()
     root = ensure_gemini_web_vendor()
-    cookie_temp: Path | None = None
-    env = os.environ.copy()
-    detected_cookie = gemini_web_cookie_file()
-    dedicated_profile_root = consent_dir() / "chrome-profile"
-
-    # Prefer the cached cookie file first; it avoids touching the user's main Chrome profile.
-    # Fall back to the dedicated gemini-web profile only when a browser login refresh is needed.
-    if not env.get("GEMINI_WEB_COOKIE_PATH") and not env.get("GEMINI_WEB_CHROME_PROFILE_DIR") and detected_cookie.exists():
-        env["GEMINI_WEB_COOKIE_PATH"] = str(detected_cookie)
-    raw_cookie = env.get("GEMINI_WEB_COOKIE")
-    if raw_cookie:
-        cookie_map = parse_cookie_string(raw_cookie)
-        if not cookie_map:
-            raise SystemExit("GEMINI_WEB_COOKIE 解析失败，请提供标准 Cookie 字符串。")
-        handle = tempfile.NamedTemporaryFile(prefix="gemini-web-cookie-", suffix=".json", delete=False)
-        handle.close()
-        cookie_temp = Path(handle.name)
-        write_cookie_payload(cookie_temp, cookie_map)
-        env["GEMINI_WEB_COOKIE_PATH"] = str(cookie_temp)
     completed: subprocess.CompletedProcess[str] | None = None
+    session_info: dict[str, Any] = {}
     tried_models: list[str] = []
     last_error: str = ""
-    browser_refresh_attempted = False
     used_prompt = prompt
     used_prompt_variant = "original"
-    try:
-        for candidate in [normalize_gemini_web_model(model)] + [name for name in GEMINI_WEB_IMAGE_MODEL_CANDIDATES if name != normalize_gemini_web_model(model)]:
-            if candidate in tried_models:
-                continue
-            tried_models.append(candidate)
-            for prompt_variant, prompt_value in gemini_web_prompt_variants(prompt):
-                command = bun + [str(root / "main.ts"), "--prompt", prompt_value, "--image", str(output_path), "--json", "--model", candidate]
-                if env.get("GEMINI_WEB_COOKIE_PATH"):
-                    command.extend(["--cookie-path", env["GEMINI_WEB_COOKIE_PATH"]])
-                if env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
-                    command.extend(["--profile-dir", env["GEMINI_WEB_CHROME_PROFILE_DIR"]])
-                try:
-                    completed = subprocess.run(
-                        command,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        env=env,
-                        check=True,
-                        timeout=GEMINI_WEB_IMAGE_TIMEOUT,
-                    )
-                    used_prompt = prompt_value
-                    used_prompt_variant = prompt_variant
-                    break
-                except subprocess.CalledProcessError as exc:
-                    stdout = (exc.stdout or "").strip()
-                    stderr = (exc.stderr or "").strip()
-                    detail = "\n".join(part for part in [stdout, stderr] if part)
-                    combined = "\n".join(part for part in [stdout, stderr] if part).lower()
-                    auth_markers = [
-                        "autherror",
-                        "unauthorized",
-                        "login",
-                        "sign in",
-                        "signin",
-                        "__secure-1psid",
-                        "__secure-1psidts",
-                        "cookie",
-                        "refresh cookies",
-                        "failed to refresh cookies",
-                    ]
-                    if any(marker in combined for marker in auth_markers):
-                        if not browser_refresh_attempted and not env.get("GEMINI_WEB_CHROME_PROFILE_DIR"):
-                            env.pop("GEMINI_WEB_COOKIE_PATH", None)
-                            env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(dedicated_profile_root)
-                            env["GEMINI_WEB_LOGIN"] = "1"
-                            browser_refresh_attempted = True
-                            tried_models.pop()
-                            break
-                        raise SystemExit(
-                            "Gemini 登录态可能已失效，请重新登录 Gemini 后再试。"
-                            " 如果你使用的是 cookie 文件，请刷新 cookie；"
-                            " 如果你使用的是浏览器 Profile，请先在对应浏览器里确认 Gemini 已登录。"
-                        ) from exc
-                    last_error = detail or str(exc)
-                    if GEMINI_WEB_NO_IMAGE_MARKER.lower() in combined:
-                        continue
-                    if "Unknown model name" in last_error:
-                        break
-                    raise SystemExit(f"gemini-web 图片生成失败：{last_error}") from exc
-                except subprocess.TimeoutExpired:
-                    last_error = f"模型 {candidate} 调用超时"
-                    continue
-            if completed is not None:
+    for candidate in [normalize_gemini_web_model(model)] + [name for name in GEMINI_WEB_IMAGE_MODEL_CANDIDATES if name != normalize_gemini_web_model(model)]:
+        if candidate in tried_models:
+            continue
+        tried_models.append(candidate)
+        for prompt_variant, prompt_value in gemini_web_prompt_variants(prompt):
+            command = bun + [str(root / "main.ts"), "--prompt", prompt_value, "--image", str(output_path), "--json", "--model", candidate]
+            try:
+                completed, session_info = run_gemini_web_command(
+                    command,
+                    cwd=str(root),
+                    label="gemini-web 图片生成",
+                    timeout=GEMINI_WEB_IMAGE_TIMEOUT,
+                )
+                used_prompt = prompt_value
+                used_prompt_variant = prompt_variant
                 break
-    finally:
-        if cookie_temp and cookie_temp.exists():
-            cookie_temp.unlink(missing_ok=True)
+            except subprocess.TimeoutExpired:
+                last_error = f"模型 {candidate} 调用超时"
+                continue
+            except SystemExit as exc:
+                detail = str(exc)
+                last_error = detail
+                if GEMINI_WEB_NO_IMAGE_MARKER.lower() in detail.lower():
+                    continue
+                if "Unknown model name" in detail:
+                    break
+                raise
+        if completed is not None:
+            break
     if completed is None:
         raise SystemExit(
             "gemini-web 当前返回了文本响应，但没有返回图片。"
@@ -2944,7 +2896,8 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
             "model": payload.get("model"),
             "tried_models": tried_models,
             "prompt_variant": used_prompt_variant,
-            "profile_dir": env.get("GEMINI_WEB_CHROME_PROFILE_DIR", ""),
+            "profile_dir": session_info.get("shared_profile_dir") or "",
+            "session_source": session_info.get("active_source") or "",
         },
     }
 
@@ -2952,6 +2905,61 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
 def make_placeholder_png(path: Path) -> tuple[int, int]:
     save_binary(path, TRANSPARENT_PNG)
     return 1, 1
+
+
+def make_fallback_card_png(path: Path, item: dict[str, Any]) -> tuple[int, int]:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return make_placeholder_png(path)
+
+    width, height = (1600, 900) if str(item.get("type") or "") == "封面图" else (1400, 900)
+    image = Image.new("RGB", (width, height), "#F4F0E8")
+    draw = ImageDraw.Draw(image)
+    try:
+        font_title = ImageFont.truetype(r"C:\Windows\Fonts\msyhbd.ttc", 54)
+        font_sub = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc", 24)
+        font_tag = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc", 20)
+    except Exception:
+        font_title = ImageFont.load_default()
+        font_sub = ImageFont.load_default()
+        font_tag = ImageFont.load_default()
+
+    def wrap_text(text: str, font: Any, max_width: int) -> list[str]:
+        lines: list[str] = []
+        current = ""
+        for char in text:
+            trial = current + char
+            if draw.textbbox((0, 0), trial, font=font)[2] <= max_width:
+                current = trial
+            else:
+                if current:
+                    lines.append(current)
+                current = char
+        if current:
+            lines.append(current)
+        return lines
+
+    draw.rounded_rectangle((36, 36, width - 36, height - 36), radius=36, fill="#FFFDF8", outline="#D9D0C2", width=3)
+    draw.line((86, 96, 310, 96), fill="#C96A3A", width=6)
+    draw.ellipse((width - 280, 76, width - 120, 236), fill="#E5B287")
+    draw.rectangle((90, height - 230, 290, height - 150), fill="#E5DED0")
+    title = str(item.get("section_heading") or item.get("target_section") or item.get("alt") or "发布配图")
+    excerpt = str(item.get("section_excerpt") or item.get("purpose") or "外部图片服务不可用，已自动生成本地卡片图。")
+    label = str(item.get("type") or "正文插图")
+    y = 120
+    for line in wrap_text(title, font_title, width - 180)[:3]:
+        draw.text((90, y), line, font=font_title, fill="#1D1A17")
+        y += 74
+    for line in wrap_text(excerpt, font_sub, width - 180)[:4]:
+        draw.text((90, y + 8), line, font=font_sub, fill="#666259")
+        y += 36
+    tag_width = draw.textbbox((0, 0), label, font=font_tag)[2]
+    draw.rounded_rectangle((90, height - 118, 90 + tag_width + 34, height - 72), radius=16, fill="#EFE7DA", outline="#D9D0C2")
+    draw.text((107, height - 110), label, font=font_tag, fill="#1D1A17")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image.save(path, format="PNG")
+    return width, height
 
 
 def count_keyword_hits(text: str, keywords: Iterable[str]) -> int:
@@ -4516,14 +4524,14 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
         if prompt_override:
             item["prompt"] = prompt_override
         if args.dry_run:
-            width, height = make_placeholder_png(output_path)
+            width, height = make_fallback_card_png(output_path, item)
             result = {
                 "provider": provider,
                 "prompt": effective_prompt,
                 "revised_prompt": effective_prompt,
                 "width": width,
                 "height": height,
-                "source_meta": {"dry_run": True, "prompt_source": "prompt-file" if prompt_override else "plan"},
+                "source_meta": {"dry_run": True, "prompt_source": "prompt-file" if prompt_override else "plan", "fallback_local_card": True},
             }
         elif provider == "gemini-web":
             try:
@@ -4543,14 +4551,26 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
                     }
                     provider = fallback
                 else:
-                    raise
+                    width, height = make_fallback_card_png(output_path, item)
+                    result = {
+                        "provider": "local-card",
+                        "prompt": effective_prompt,
+                        "revised_prompt": effective_prompt,
+                        "width": width,
+                        "height": height,
+                        "source_meta": {
+                            "fallback_from": "gemini-web",
+                            "fallback_reason": message,
+                            "fallback_local_card": True,
+                        },
+                    }
         elif provider == "gemini-api":
             result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
         elif provider == "openai-image":
             result = generate_openai_image(effective_prompt, output_path, args.openai_model, aspect)
         else:
             raise SystemExit(f"不支持的图片后端：{provider}")
-        item["provider"] = provider
+        item["provider"] = result.get("provider") or provider
         item["asset_path"] = relative_posix(output_path, workspace)
         item["revised_prompt"] = result["revised_prompt"]
         item["prompt_source"] = "prompt-file" if prompt_override else "plan"
@@ -5434,22 +5454,17 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
             "missing": [] if ok else ["OPENAI_API_KEY"],
             "notes": ["官方 OpenAI 图片接口，推荐作为稳定路径。"],
         }
+    from core.gemini_web_session import has_session_material, session_diagnostics
+
     vendor_missing = [relative for relative in IMAGE_PROVIDER_FILES if not (vendor_root() / relative).exists()]
-    detected_cookie_file = gemini_web_cookie_file()
-    detected_profile_root = local_chrome_user_data_root()
-    cookie_ready = bool(
-        os.getenv("GEMINI_WEB_COOKIE")
-        or os.getenv("GEMINI_WEB_COOKIE_PATH")
-        or os.getenv("GEMINI_WEB_CHROME_PROFILE_DIR")
-        or detected_cookie_file.exists()
-        or detected_profile_root
-    )
+    diagnostics = session_diagnostics(os.environ.copy())
+    cookie_ready = has_session_material(os.environ.copy())
     bun_ready = shutil.which("bun") is not None
     npx_ready = shutil.which("npx") is not None
     ok = cookie_ready and (bun_ready or npx_ready) and not vendor_missing
     missing: list[str] = []
     if not cookie_ready:
-        missing.append("GEMINI_WEB_COOKIE/GEMINI_WEB_COOKIE_PATH/GEMINI_WEB_CHROME_PROFILE_DIR")
+        missing.append("可复用的 gemini-web 登录态")
     if not (bun_ready or npx_ready):
         missing.append("bun 或 npx")
     if vendor_missing:
@@ -5464,8 +5479,9 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
         "bun_available": bun_ready,
         "npx_available": npx_ready,
         "vendor_missing_count": len(vendor_missing),
-        "detected_cookie_file": str(detected_cookie_file) if detected_cookie_file.exists() else "",
-        "detected_profile_root": str(detected_profile_root) if detected_profile_root else "",
+        "detected_cookie_file": diagnostics.get("shared_cookie_path") or "",
+        "detected_profile_root": diagnostics.get("shared_profile_dir") or "",
+        "session_diagnostics": diagnostics,
     }
 
 

@@ -390,6 +390,12 @@ def choose_layout_style(
     if content_signals.inline_code_count >= 12 and archetype in {"", "tutorial"}:
         return LayoutDecision(style="tech", reason=f"inline_code_count={content_signals.inline_code_count} archetype={archetype or 'none'} -> tech")
 
+    layout_plan = manifest.get("layout_plan") or {}
+    planned_style = _normalize_key(str(layout_plan.get("recommended_style") or ""))
+    planned_modules = layout_plan.get("module_types") or []
+    if planned_style in THEMES and len(planned_modules) >= 3:
+        return LayoutDecision(style=planned_style, reason=f"layout_plan={planned_style} modules={len(planned_modules)} -> {planned_style}")
+
     image_controls = manifest.get("image_controls") or {}
     preset = _normalize_key(str(image_controls.get("preset") or ""))
     if not preset:

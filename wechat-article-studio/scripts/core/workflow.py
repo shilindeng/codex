@@ -22,6 +22,7 @@ from core.artifacts import (
     write_json,
     write_text,
 )
+from core.acceptance import build_acceptance_report, markdown_acceptance_report
 from core.author_memory import (
     append_lesson_payload,
     build_author_memory_bundle,
@@ -29,10 +30,12 @@ from core.author_memory import (
     compute_edit_lesson_payload,
     write_playbook_artifacts,
 )
+from core.content_fingerprint import build_article_fingerprint, build_outline_fingerprint, load_fingerprint, summarize_collisions
 from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
 from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
+from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.editorial_strategy import (
     generate_diverse_title_variants,
@@ -54,6 +57,7 @@ from core.viral import (
     normalize_review_payload,
     normalize_viral_blueprint,
 )
+from core.title_decision import build_title_decision_report, markdown_title_decision_report
 from providers.text.gemini_web import GeminiWebTextProvider
 from providers.text.openai_compatible import OpenAICompatibleTextProvider, placeholder_article, placeholder_outline
 from publishers.wechat import cmd_publish as wechat_publish
@@ -105,6 +109,11 @@ def require_live_text_provider(command_name: str):
     provider = active_text_provider()
     if provider.configured():
         return provider
+    if getattr(provider, "provider_name", "") == "gemini-web":
+        raise SystemExit(
+            f"{command_name} 需要可复用的 gemini-web 登录态。"
+            " 请先完成一次 gemini-web 登录，或显式提供 GEMINI_WEB_COOKIE_PATH / GEMINI_WEB_COOKIE。"
+        )
     raise SystemExit(
         f"{command_name} 需要已配置的文本 provider。"
         " 请设置 OPENAI_API_KEY 和 ARTICLE_STUDIO_TEXT_MODEL，"
@@ -138,6 +147,12 @@ def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[
     if not report:
         blockers.append("缺少 score-report.json，无法确认是否可发布")
         return blockers
+    acceptance = read_json(workspace / "acceptance-report.json", default={}) or {}
+    if not acceptance:
+        blockers.append("缺少 acceptance-report.json，无法确认成品验收是否通过")
+    elif not bool(acceptance.get("passed")):
+        failed = acceptance.get("failed_gates") or [name for name, ok in (acceptance.get("gates") or {}).items() if not ok]
+        blockers.append(f"成品验收未通过：{'、'.join(str(item) for item in failed)}")
     if not bool(report.get("passed", manifest.get("score_passed"))):
         blockers.append("当前稿件评分未达发布阈值")
     quality_gates = report.get("quality_gates") or {}
@@ -257,6 +272,42 @@ def collect_recent_phrase_blacklist(paths: list[Path]) -> list[str]:
     return [item for item, count in counter.most_common(20) if count >= 2]
 
 
+def collect_recent_fingerprints(workspace: Path, manifest: dict[str, Any], limit: int = RECENT_CORPUS_LIMIT) -> list[dict[str, Any]]:
+    fingerprints: list[dict[str, Any]] = []
+    for article_path in recent_article_paths(detect_corpus_roots(workspace), workspace, limit=limit):
+        fingerprint_path = article_path.parent / "content-fingerprint.json"
+        if fingerprint_path.exists():
+            payload = load_fingerprint(fingerprint_path)
+            if payload:
+                fingerprints.append(payload)
+                continue
+        try:
+            raw = read_text(article_path)
+        except OSError:
+            continue
+        other_manifest = read_json(article_path.parent / "manifest.json", default={}) or {}
+        other_review = read_json(article_path.parent / "review-report.json", default={}) or {}
+        other_layout_plan = read_json(article_path.parent / "layout-plan.json", default={}) or {}
+        meta, other_body = split_frontmatter(raw)
+        other_title = (
+            other_manifest.get("selected_title")
+            or meta.get("title")
+            or legacy.extract_title_from_body(other_body)
+            or article_path.parent.name
+        )
+        fingerprints.append(
+            build_article_fingerprint(
+                str(other_title),
+                other_body,
+                other_manifest,
+                review=other_review,
+                blueprint=other_manifest.get("viral_blueprint") or {},
+                layout_plan=other_layout_plan,
+            )
+        )
+    return fingerprints
+
+
 def attach_corpus_context(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     corpus_roots = detect_corpus_roots(workspace)
     if not corpus_roots:
@@ -296,6 +347,73 @@ def attach_author_memory(workspace: Path, manifest: dict[str, Any]) -> dict[str,
     manifest["author_sentence_starters_to_avoid"] = bundle.get("sentence_starters_to_avoid") or []
     manifest["author_lesson_patterns"] = bundle.get("lesson_patterns") or []
     return manifest
+
+
+def write_content_fingerprint_artifact(
+    workspace: Path,
+    title: str,
+    body: str,
+    manifest: dict[str, Any],
+    *,
+    review: dict[str, Any] | None = None,
+    layout_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = build_article_fingerprint(
+        title,
+        body,
+        manifest,
+        review=review,
+        blueprint=manifest.get("viral_blueprint") or {},
+        layout_plan=layout_plan or read_json(workspace / "layout-plan.json", default={}) or {},
+    )
+    write_json(workspace / "content-fingerprint.json", payload)
+    manifest["content_fingerprint_path"] = "content-fingerprint.json"
+    return payload
+
+
+def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    if not article_path.exists():
+        return {}
+    score_report = read_json(workspace / "score-report.json", default={}) or {}
+    review_report = read_json(workspace / "review-report.json", default={}) or {}
+    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    if not score_report:
+        return {}
+    meta, body = split_frontmatter(read_text(article_path))
+    title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
+    summary = meta.get("summary") or manifest.get("summary") or extract_summary(body)
+    if not layout_plan:
+        ideation = load_ideation(workspace)
+        outline_meta = dict(ideation.get("outline_meta") or {})
+        if outline_meta.get("sections"):
+            layout_plan = build_layout_plan(
+                title,
+                summary,
+                outline_meta,
+                manifest | {"viral_blueprint": outline_meta.get("viral_blueprint") or manifest.get("viral_blueprint") or {}},
+            )
+            write_json(workspace / "layout-plan.json", layout_plan)
+            write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
+            manifest["layout_plan_path"] = "layout-plan.json"
+    write_content_fingerprint_artifact(workspace, title, body, manifest, review=review_report, layout_plan=layout_plan)
+    recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
+    payload = build_acceptance_report(
+        workspace,
+        manifest,
+        title=title,
+        summary=summary,
+        body=body,
+        score_report=score_report,
+        review_report=review_report,
+        layout_plan=layout_plan,
+        recent_fingerprints=recent_fingerprints,
+    )
+    write_json(workspace / "acceptance-report.json", payload)
+    write_text(workspace / "acceptance-report.md", markdown_acceptance_report(payload))
+    manifest["acceptance_report_path"] = "acceptance-report.json"
+    manifest["acceptance_passed"] = bool(payload.get("passed"))
+    return payload
 
 
 def topic_keyword_tokens(value: str) -> list[str]:
@@ -368,12 +486,13 @@ def rerank_discovery_candidates(
     for candidate in candidates:
         item = dict(candidate)
         topic = str(item.get("recommended_topic") or item.get("hot_title") or "")
+        title = str(item.get("recommended_title") or topic)
         candidate_tokens = topic_keyword_tokens(topic)
         repeat_hits = [token for token in candidate_tokens if recent_token_counter.get(token.lower(), 0) > 0]
         repeat_penalty = min(8, sum(min(2, recent_token_counter.get(token.lower(), 0)) for token in repeat_hits))
         if len(repeat_hits) >= 2:
             repeat_penalty += 2
-        title_pattern = legacy.title_template_key(str(item.get("recommended_title") or topic))
+        title_pattern = legacy.title_template_key(title)
         if title_pattern in title_patterns:
             repeat_penalty += 2
         discussion_score = min(10, 3 + len(item.get("angles") or []) + len(item.get("viewpoints") or []))
@@ -397,15 +516,38 @@ def rerank_discovery_candidates(
         if any(topic.startswith(starter) for starter in starter_blacklist):
             repeat_penalty += 1
         novelty_score = max(1, 10 - repeat_penalty)
+        angle_freshness_score = min(10, 4 + len({str(item).strip() for item in (item.get("angles") or []) if str(item).strip()}))
+        if repeat_hits:
+            angle_freshness_score = max(1, angle_freshness_score - min(3, len(repeat_hits)))
+        audience_fit_score = min(10, 5 + style_hint_score + (1 if str(item.get("content_kind") or "") in {"教程/工具", "趋势观点"} else 0))
+        propagation_score = min(
+            10,
+            max(
+                1,
+                round(
+                    (
+                        int(item.get("recommended_title_score") or 0) / max(1, int(item.get("recommended_title_threshold") or legacy.TITLE_SCORE_THRESHOLD))
+                    )
+                    * 10
+                ),
+            ),
+        )
+        differentiation_score = max(1, 10 - min(8, repeat_penalty + (2 if title_pattern in title_patterns else 0)))
         decision_score = (
-            int(item.get("recommended_title_score") or 0)
-            + novelty_score * 5
-            + discussion_score * 2
+            propagation_score * 4
+            + novelty_score * 4
+            + differentiation_score * 3
+            + angle_freshness_score * 2
             + min(evidence_score, 10) * 2
-            + style_hint_score * 2
-            - repeat_penalty * 2
+            + audience_fit_score * 2
+            + discussion_score
+            - repeat_penalty
         )
         item["novelty_score"] = novelty_score
+        item["differentiation_score"] = differentiation_score
+        item["angle_freshness_score"] = angle_freshness_score
+        item["audience_fit_score"] = audience_fit_score
+        item["propagation_score"] = propagation_score
         item["discussion_score"] = min(discussion_score, 10)
         item["evidence_score"] = min(evidence_score, 10)
         item["repeat_penalty"] = repeat_penalty
@@ -893,18 +1035,24 @@ def split_review_points(value: Any) -> tuple[list[str], list[str]]:
 
 
 def write_title_report(workspace: Path, topic: str, selected_title: str, ranked_titles: list[dict[str, Any]]) -> None:
+    threshold = max((int(item.get("title_score_threshold") or 0) for item in ranked_titles), default=legacy.TITLE_SCORE_THRESHOLD)
     payload = {
         "topic": topic,
         "selected_title": selected_title,
-        "threshold": legacy.TITLE_SCORE_THRESHOLD,
+        "threshold": threshold,
         "candidates": ranked_titles,
         "generated_at": now_iso(),
     }
     write_json(workspace / "title-report.json", payload)
-    lines = [f"原始主题：{topic}", f"最终标题：{selected_title}", f"准入阈值：{legacy.TITLE_SCORE_THRESHOLD}"]
+    lines = [f"原始主题：{topic}", f"最终标题：{selected_title}", f"准入阈值：{threshold}"]
     for item in ranked_titles[:5]:
         lines.append(f"{item['title']}｜得分 {item['title_score']}｜{'通过' if item['title_gate_passed'] else '未通过'}")
     ensure_text_report(workspace / "title-report.md", "标题评分报告", lines)
+
+
+def write_title_decision_artifacts(workspace: Path, payload: dict[str, Any]) -> None:
+    write_json(workspace / "title-decision-report.json", payload)
+    write_text(workspace / "title-decision-report.md", markdown_title_decision_report(payload))
 
 
 def select_scored_title(
@@ -917,17 +1065,20 @@ def select_scored_title(
     selected_title: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = list(ideation.get("titles") or [])
+    research = load_research(workspace)
     recent_corpus_summary = manifest.get("recent_corpus_summary") or {}
-    recent_title_patterns = [str(item.get("key") or "") for item in (recent_corpus_summary.get("overused_title_patterns") or []) if item.get("key")]
-    ranked_titles, selected = legacy.rank_title_candidates(
-        candidates,
-        topic,
-        audience,
-        angle,
-        selected_title,
-        recent_titles=manifest.get("recent_article_titles") or [],
-        recent_title_patterns=recent_title_patterns,
+    decision_report = build_title_decision_report(
+        topic=topic,
+        audience=audience,
+        angle=angle,
+        candidates=candidates,
+        manifest=manifest,
+        research=research,
+        editorial_blueprint=manifest.get("editorial_blueprint") or {},
+        selected_title=selected_title,
     )
+    ranked_titles = list(decision_report.get("candidates") or [])
+    selected = ranked_titles[0] if ranked_titles else None
     if not selected or not selected.get("title_gate_passed", False):
         boosted_candidates = candidates + generate_diverse_title_variants(
             topic,
@@ -937,20 +1088,28 @@ def select_scored_title(
             recent_titles=manifest.get("recent_article_titles") or [],
             recent_corpus_summary=recent_corpus_summary if isinstance(recent_corpus_summary, dict) else {},
         )
-        ranked_titles, selected = legacy.rank_title_candidates(
-            boosted_candidates,
-            topic,
-            audience,
-            angle,
-            selected_title,
-            recent_titles=manifest.get("recent_article_titles") or [],
-            recent_title_patterns=recent_title_patterns,
+        decision_report = build_title_decision_report(
+            topic=topic,
+            audience=audience,
+            angle=angle,
+            candidates=boosted_candidates,
+            manifest=manifest,
+            research=research,
+            editorial_blueprint=manifest.get("editorial_blueprint") or {},
+            selected_title=selected_title,
         )
+        ranked_titles = list(decision_report.get("candidates") or [])
+        selected = ranked_titles[0] if ranked_titles else None
     chosen_title = selected_title or (selected.get("title") if selected else topic)
     if selected_title:
-        selected_report = legacy.title_dimension_score(selected_title, audience, angle)
-        ideation["selected_title_score"] = selected_report["total_score"]
-        ideation["selected_title_gate_passed"] = selected_report["passed"]
+        selected_candidate = next((item for item in ranked_titles if str(item.get("title") or "") == selected_title), None)
+        if selected_candidate:
+            ideation["selected_title_score"] = selected_candidate.get("title_score", 0)
+            ideation["selected_title_gate_passed"] = selected_candidate.get("title_gate_passed", False)
+        else:
+            selected_report = legacy.title_dimension_score(selected_title, audience, angle)
+            ideation["selected_title_score"] = selected_report["total_score"]
+            ideation["selected_title_gate_passed"] = selected_report["passed"]
     elif selected:
         chosen_title = selected["title"]
         ideation["selected_title_score"] = selected.get("title_score", 0)
@@ -959,12 +1118,15 @@ def select_scored_title(
         ideation["selected_title_score"] = 0
         ideation["selected_title_gate_passed"] = False
     ideation["selected_title"] = chosen_title
-    ideation["title_threshold"] = legacy.TITLE_SCORE_THRESHOLD
+    ideation["title_threshold"] = decision_report.get("threshold") or legacy.TITLE_SCORE_THRESHOLD
     ideation["titles"] = ranked_titles
     write_title_report(workspace, topic, chosen_title, ranked_titles)
+    decision_report["selected_title"] = chosen_title
+    write_title_decision_artifacts(workspace, decision_report)
     manifest["selected_title"] = chosen_title
     manifest["title_report_path"] = "title-report.json"
-    manifest["title_gate_threshold"] = legacy.TITLE_SCORE_THRESHOLD
+    manifest["title_decision_report_path"] = "title-decision-report.json"
+    manifest["title_gate_threshold"] = ideation.get("title_threshold") or legacy.TITLE_SCORE_THRESHOLD
     manifest["title_gate_passed"] = ideation.get("selected_title_gate_passed", False)
     manifest["title_score"] = ideation.get("selected_title_score", 0)
     return ideation, selected
@@ -1114,41 +1276,66 @@ def cmd_outline(args: argparse.Namespace) -> int:
     ideation = load_ideation(workspace)
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
     editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
-    result = provider.generate_outline(
-        {
-            "topic": manifest.get("topic") or research.get("topic") or "",
-            "selected_title": selected_title,
-            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-            "direction": manifest.get("direction") or research.get("angle") or "",
-            "research": research,
-            "titles": ideation.get("titles") or [],
-            "style_samples": manifest.get("style_sample_paths") or [],
-            "style_signals": manifest.get("style_signals") or [],
-            "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
-            "recent_article_titles": manifest.get("recent_article_titles") or [],
-            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
-            "corpus_root": manifest.get("corpus_root") or "",
-            "content_mode": manifest.get("content_mode") or "tech-balanced",
-            "editorial_blueprint": editorial_blueprint,
-            "author_memory": manifest.get("author_memory") or {},
-        }
-    )
-    outline = normalize_outline_payload(
-        dict(result.payload),
-        {
-            "topic": manifest.get("topic") or research.get("topic") or selected_title,
-            "selected_title": selected_title,
-            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-            "direction": manifest.get("direction") or research.get("angle") or "",
-            "research": research,
-            "style_signals": manifest.get("style_signals") or [],
-            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
-            "content_mode": manifest.get("content_mode") or "tech-balanced",
-            "editorial_blueprint": editorial_blueprint,
-            "author_memory": manifest.get("author_memory") or {},
-        },
-    )
+    outline_context = {
+        "topic": manifest.get("topic") or research.get("topic") or "",
+        "selected_title": selected_title,
+        "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+        "direction": manifest.get("direction") or research.get("angle") or "",
+        "research": research,
+        "titles": ideation.get("titles") or [],
+        "style_samples": manifest.get("style_sample_paths") or [],
+        "style_signals": manifest.get("style_signals") or [],
+        "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+        "recent_article_titles": manifest.get("recent_article_titles") or [],
+        "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+        "corpus_root": manifest.get("corpus_root") or "",
+        "content_mode": manifest.get("content_mode") or "tech-balanced",
+        "editorial_blueprint": editorial_blueprint,
+        "author_memory": manifest.get("author_memory") or {},
+    }
+    result = provider.generate_outline(outline_context)
+    normalize_context = {
+        "topic": manifest.get("topic") or research.get("topic") or selected_title,
+        "selected_title": selected_title,
+        "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+        "direction": manifest.get("direction") or research.get("angle") or "",
+        "research": research,
+        "style_signals": manifest.get("style_signals") or [],
+        "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+        "content_mode": manifest.get("content_mode") or "tech-balanced",
+        "editorial_blueprint": editorial_blueprint,
+        "author_memory": manifest.get("author_memory") or {},
+    }
+    outline = normalize_outline_payload(dict(result.payload), normalize_context)
+    recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
+    outline_fingerprint = build_outline_fingerprint(selected_title, outline, manifest | {"viral_blueprint": outline.get("viral_blueprint") or {}})
+    fingerprint_findings = summarize_collisions(outline_fingerprint, recent_fingerprints, threshold=0.74)
+    if not fingerprint_findings.get("route_similarity_passed"):
+        retry_context = dict(outline_context)
+        retry_context["fingerprint_collision_notes"] = [
+            f"当前大纲和旧稿《{item.get('title') or '未命名'}》过近（{item.get('score') or 0}），请主动换开头路数、证据组织和结尾收束。"
+            for item in (fingerprint_findings.get("similar_items") or [])[:3]
+        ]
+        retry_result = provider.generate_outline(retry_context)
+        retry_outline = normalize_outline_payload(dict(retry_result.payload), normalize_context | {"fingerprint_collision_notes": retry_context["fingerprint_collision_notes"]})
+        retry_fingerprint = build_outline_fingerprint(selected_title, retry_outline, manifest | {"viral_blueprint": retry_outline.get("viral_blueprint") or {}})
+        retry_findings = summarize_collisions(retry_fingerprint, recent_fingerprints, threshold=0.74)
+        if float(retry_findings.get("max_route_similarity") or 1) < float(fingerprint_findings.get("max_route_similarity") or 1):
+            outline = retry_outline
+            outline_fingerprint = retry_fingerprint
+            fingerprint_findings = retry_findings
     outline.setdefault("title", selected_title)
+    outline["content_fingerprint_preview"] = outline_fingerprint
+    outline["fingerprint_similarity_preview"] = fingerprint_findings
+    layout_plan = build_layout_plan(
+        selected_title,
+        extract_summary("\n".join(str(item.get("goal") or "") for item in (outline.get("sections") or []))),
+        outline,
+        manifest | {"viral_blueprint": outline.get("viral_blueprint") or {}},
+    )
+    write_json(workspace / "layout-plan.json", layout_plan)
+    write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
+    outline["layout_plan_path"] = "layout-plan.json"
     ideation["selected_title"] = selected_title
     ideation["outline"] = outline.get("sections") or []
     ideation["outline_meta"] = outline
@@ -1160,6 +1347,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
     manifest["outline"] = [item.get("heading", "") for item in outline.get("sections") or []]
     manifest["viral_blueprint"] = outline.get("viral_blueprint") or {}
     manifest["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
+    manifest["layout_plan_path"] = "layout-plan.json"
     update_stage(manifest, "outline", "outline_status")
     save_manifest(workspace, manifest)
     print(json.dumps(outline, ensure_ascii=False, indent=2))
@@ -1177,6 +1365,7 @@ def cmd_write(args: argparse.Namespace) -> int:
     research = load_research(workspace)
     ideation = load_ideation(workspace)
     outline_meta = dict(ideation.get("outline_meta") or {})
+    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
     if args.outline_file:
         outline_lines = [line.strip("- ").strip() for line in read_input_file(args.outline_file).splitlines() if line.strip()]
         outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
@@ -1216,6 +1405,7 @@ def cmd_write(args: argparse.Namespace) -> int:
             "content_mode": manifest.get("content_mode") or "tech-balanced",
             "editorial_blueprint": outline_meta.get("editorial_blueprint") or editorial_blueprint,
             "author_memory": manifest.get("author_memory") or {},
+            "layout_plan": layout_plan,
         }
     )
     body = str(result.payload).strip()
@@ -1247,6 +1437,7 @@ def cmd_write(args: argparse.Namespace) -> int:
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
         }
     )
+    write_content_fingerprint_artifact(workspace, selected_title, synced_body or body, manifest, layout_plan=layout_plan)
     update_stage(manifest, "draft", "draft_status")
     save_manifest(workspace, manifest)
     print(str(article_path))
@@ -1271,6 +1462,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     blueprint = current_viral_blueprint(workspace, manifest)
+    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
     provider = active_text_provider()
     if provider.configured():
         result = provider.review_article(
@@ -1291,6 +1483,7 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "revision_round": int(manifest.get("revision_round") or 1),
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
                 "author_memory": manifest.get("author_memory") or {},
+                "layout_plan": layout_plan,
             }
         )
         review_source = result.provider
@@ -1501,6 +1694,8 @@ def cmd_publish(args: argparse.Namespace) -> int:
     if not getattr(args, "dry_run", False):
         if not getattr(args, "confirmed_publish", False):
             raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
+        write_acceptance_artifacts(workspace, manifest)
+        save_manifest(workspace, manifest)
         blockers = collect_publish_blockers(workspace, manifest)
         if blockers:
             detail = "\n".join(f"- {item}" for item in blockers)
@@ -1967,6 +2162,15 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
         ideation["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
         manifest["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
         manifest["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
+        layout_plan = build_layout_plan(
+            title,
+            extract_summary("\n".join(str(item.get("goal") or "") for item in (outline_meta.get("sections") or []))),
+            outline_meta,
+            manifest | {"viral_blueprint": outline_meta.get("viral_blueprint") or {}},
+        )
+        write_json(workspace / "layout-plan.json", layout_plan)
+        write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
+        manifest["layout_plan_path"] = "layout-plan.json"
     elif not ideation.get("viral_blueprint") and not manifest.get("viral_blueprint"):
         blueprint = default_viral_blueprint(
             topic=str(manifest.get("topic") or title),
@@ -2305,6 +2509,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     title = legacy.infer_title(manifest, meta, body)
     threshold = args.threshold or manifest.get("score_threshold")
     review = read_json(workspace / "review-report.json", default={}) or {}
+    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
     if not review:
         blueprint = current_viral_blueprint(workspace, manifest)
         review = build_heuristic_review(title, body, manifest, blueprint=blueprint, revision_round=int(manifest.get("revision_round") or 1))
@@ -2343,6 +2548,7 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     write_json(workspace / "score-report.json", report)
     legacy.write_text(workspace / "score-report.md", legacy.markdown_report(report))
+    write_content_fingerprint_artifact(workspace, title, body, manifest, review=review, layout_plan=layout_plan)
     manifest["score_breakdown"] = report["score_breakdown"]
     manifest["score_total"] = report["total_score"]
     manifest["score_passed"] = report["passed"]
@@ -2532,6 +2738,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     manifest["image_status"] = "done"
     manifest["render_status"] = "done"
     manifest["stage"] = "render"
+    write_acceptance_artifacts(workspace, manifest)
     save_manifest(workspace, manifest)
     if args.to == "publish":
         cmd_publish(
@@ -2617,6 +2824,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     manifest["image_status"] = "done"
     manifest["render_status"] = "done"
     manifest["stage"] = "render"
+    write_acceptance_artifacts(workspace, manifest)
     save_manifest(workspace, manifest)
     if args.to == "publish":
         cmd_publish(

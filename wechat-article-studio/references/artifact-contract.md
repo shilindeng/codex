@@ -8,11 +8,15 @@
 - `research.json`：调研输入、来源、证据摘录、信息缺口
 - `ideation.json`：标题候选、选中标题、大纲、创作意图
 - `title-report.json`：标题多维评分与准入结果
+- `title-decision-report.json`：标题五项联评与入选/淘汰原因
 - `title-report.md`：面向人读的标题评分摘要
 - `article.md`：当前活跃正文
 - `review-report.json`：编辑评审结果
 - `review-report.md`：面向人读的评审摘要
 - `score-report.json`：启发式评分结果
+- `content-fingerprint.json`：当前稿件的结构与路线指纹
+- `layout-plan.json`：大纲阶段生成的公众号版式规划
+- `acceptance-report.json`：发布前成品验收结果
 - `references.json`：标准化引用清单与文末引用卡片数据
 - `image-plan.json`：配图规划
 - `image-outline.json`：结构化插图大纲
@@ -43,6 +47,7 @@
 - `audience`
 - `selected_title`
 - `title_report_path`
+- `title_decision_report_path`
 - `title_score`
 - `title_gate_passed`
 - `source_urls`
@@ -59,6 +64,9 @@
 - `image_prompt_dir`
 - `score_total`
 - `score_passed`
+- `content_fingerprint_path`
+- `layout_plan_path`
+- `acceptance_report_path`
 - `publish_intent`
 - `content_mode`
 - `wechat_header_mode`
@@ -68,6 +76,7 @@
 - `references_path`
 - `corpus_root`
 - `max_similarity`
+- `fingerprint_findings`
 
 ## `review-report.json` 关键字段
 

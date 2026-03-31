@@ -162,6 +162,10 @@ def _voice_signals(body: str) -> list[str]:
         scores["口语感"] += 1
     if any(word in text for word in ["但是。", "可问题是", "偏偏", "反而"]):
         scores["转折张力"] += 1
+    if any(word in text for word in ["真正拉开差距", "分水岭", "关键不是", "真正的问题"]):
+        scores["分水岭判断"] += 2
+    if any(word in text for word in ["误判", "边界", "例外", "反方"]):
+        scores["边界意识"] += 2
     return [name for name, _ in scores.most_common(6)]
 
 
@@ -208,12 +212,27 @@ def build_playbook_payload(article_paths: list[Path], lesson_patterns: list[str]
     summary = summarize_recent_corpus(valid_paths, limit=len(valid_paths)) if valid_paths else {}
     starters = Counter()
     voice = Counter()
+    evidence_preferences: Counter[str] = Counter()
+    judgment_preferences: Counter[str] = Counter()
     avg_paragraph_lengths: list[int] = []
     for item in articles:
         for starter in _sentence_starters(item["body"]):
             starters[starter["phrase"]] += int(starter["count"] or 0)
         for signal in _voice_signals(item["body"]):
             voice[signal] += 1
+        body_text = item["body"]
+        if any(word in body_text for word in ["案例", "复盘", "实例", "项目"]):
+            evidence_preferences["案例"] += 1
+        if any(word in body_text for word in ["数据", "研究", "报告", "%", "指标", "官方", "文档"]):
+            evidence_preferences["事实/数据"] += 1
+        if any(word in body_text for word in ["场景", "那一刻", "办公室", "会议", "现场"]):
+            evidence_preferences["场景细节"] += 1
+        if any(word in body_text for word in ["判断", "分水岭", "误判", "边界"]):
+            judgment_preferences["判断推进"] += 1
+        if any(word in body_text for word in ["反方", "边界", "例外", "别急着"]):
+            judgment_preferences["边界提醒"] += 1
+        if any(word in body_text for word in ["趋势", "信号", "风向", "拐点"]):
+            judgment_preferences["趋势判断"] += 1
         avg_paragraph_lengths.extend(len(re.sub(r"\s+", "", para)) for para in item["paragraphs"][:8])
 
     title_preferences = {
@@ -237,6 +256,13 @@ def build_playbook_payload(article_paths: list[Path], lesson_patterns: list[str]
         "opening_preferences": summary.get("overused_opening_patterns") or [],
         "ending_preferences": summary.get("overused_ending_patterns") or [],
         "heading_preferences": summary.get("overused_heading_patterns") or [],
+        "judgment_preferences": [name for name, _ in judgment_preferences.most_common(4)],
+        "evidence_preferences": [name for name, _ in evidence_preferences.most_common(4)],
+    }
+    average_paragraph_length = round(sum(avg_paragraph_lengths) / max(1, len(avg_paragraph_lengths)), 1) if avg_paragraph_lengths else 0
+    rhythm_preferences = {
+        "average_paragraph_length": average_paragraph_length,
+        "preferred_rhythm": "短段快切" if average_paragraph_length and average_paragraph_length <= 42 else "中段展开" if average_paragraph_length >= 68 else "张弛平衡",
     }
     playbook_summary = [
         f"标题平均长度约 {title_preferences['average_length']} 字，问句占比 {title_preferences['question_ratio']:.0%}，冒号/竖线占比 {title_preferences['colon_ratio']:.0%}。",
@@ -248,6 +274,11 @@ def build_playbook_payload(article_paths: list[Path], lesson_patterns: list[str]
         playbook_summary.append(f"这些句式起手已经很密：{'、'.join(starter_blacklist[:5])}。")
     if lesson_patterns:
         playbook_summary.append(f"人工改稿反复强调：{'；'.join(lesson_patterns[:4])}。")
+    if editorial_preferences["judgment_preferences"]:
+        playbook_summary.append(f"这个号更常用的判断方式：{'、'.join(editorial_preferences['judgment_preferences'])}。")
+    if editorial_preferences["evidence_preferences"]:
+        playbook_summary.append(f"更常用的证据材料：{'、'.join(editorial_preferences['evidence_preferences'])}。")
+    playbook_summary.append(f"正文节奏更偏向：{rhythm_preferences['preferred_rhythm']}。")
 
     return {
         "generated_at": now_iso(),
@@ -257,9 +288,10 @@ def build_playbook_payload(article_paths: list[Path], lesson_patterns: list[str]
         "voice_fingerprint": [name for name, _ in voice.most_common(6)],
         "sentence_starters_to_avoid": starter_blacklist,
         "phrase_blacklist": phrase_blacklist[:12],
-        "average_paragraph_length": round(sum(avg_paragraph_lengths) / max(1, len(avg_paragraph_lengths)), 1) if avg_paragraph_lengths else 0,
+        "average_paragraph_length": average_paragraph_length,
         "pattern_summary": summary,
         "editorial_preferences": editorial_preferences,
+        "rhythm_preferences": rhythm_preferences,
         "lesson_patterns": lesson_patterns or [],
         "playbook_summary": playbook_summary,
     }
@@ -416,6 +448,7 @@ def build_author_memory_bundle(workspace: Path, manifest: dict[str, Any]) -> dic
         value = _normalize_text(str(item or ""))
         if value and value not in voice_fingerprint:
             voice_fingerprint.append(value)
+    rhythm_preferences = loaded_playbook.get("rhythm_preferences") or derived_playbook.get("rhythm_preferences") or {}
     return {
         "playbook_paths": [str(path) for path in playbook_paths],
         "lesson_paths": [str(path) for path in lesson_paths],
@@ -426,6 +459,7 @@ def build_author_memory_bundle(workspace: Path, manifest: dict[str, Any]) -> dic
         "lesson_patterns": lesson_patterns[:16],
         "title_preferences": loaded_playbook.get("title_preferences") or derived_playbook.get("title_preferences") or {},
         "editorial_preferences": loaded_playbook.get("editorial_preferences") or derived_playbook.get("editorial_preferences") or {},
+        "rhythm_preferences": rhythm_preferences,
         "sample_playbook": derived_playbook,
     }
 

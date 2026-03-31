@@ -200,6 +200,24 @@ class ViralEngineTests(unittest.TestCase):
         self.assertIn("author_phrase", smell_types)
         self.assertIn("author_starter", smell_types)
 
+    def test_score_report_does_not_mistake_normal_subject_and_last_judgment_for_template(self):
+        title = "Claude Code源码风波，为什么Claude这么牛"
+        body = "\n\n".join(
+            [
+                "3月31日早上，几个开发者群同时炸了。",
+                "Anthropic 官方本来就有公开的 claude-code 仓库。",
+                "Anthropic 更厉害的地方，不是把模型做成聊天窗口，而是把终端、工具和工作流接成一条线。",
+                "如果你也写过代码，你就知道最累的不是写，而是来回切上下文。",
+                "## 最后的判断",
+                "最后真正值得警惕的，不是看见了多少代码，而是 AI 开始接管开发流程。",
+            ]
+        )
+        manifest = {"topic": title, "audience": "开发者", "direction": "", "source_urls": []}
+        report = build_score_report(title, body, manifest, threshold=70)
+        smell = report.get("ai_smell_findings") or []
+        self.assertFalse(any(item.get("type") == "enumeration_voice" for item in smell))
+        self.assertFalse(any(item.get("type") == "repeated_starter" and "Anthro" in str(item.get("pattern") or "") for item in smell))
+
     def test_publish_blockers_include_quality_gate_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

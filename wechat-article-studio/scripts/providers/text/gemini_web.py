@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import subprocess
-from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.gemini_web_session import describe_session_source, has_session_material, run_gemini_web_command
 from core.viral import normalize_outline_payload, normalize_review_payload
 from providers.text.base import ProviderResult, TextProvider
 
@@ -26,25 +24,9 @@ class GeminiWebTextProvider(TextProvider):
 
     def __init__(self) -> None:
         self.model = os.getenv("ARTICLE_STUDIO_TEXT_MODEL") or "gemini-3-pro"
-        self.cookie_path = os.getenv("GEMINI_WEB_COOKIE_PATH") or ""
-        self.chrome_profile_dir = os.getenv("GEMINI_WEB_CHROME_PROFILE_DIR") or ""
-        self.cookie_inline = os.getenv("GEMINI_WEB_COOKIE") or ""
 
     def configured(self) -> bool:
-        return bool(self.cookie_path or self.chrome_profile_dir or self.cookie_inline)
-
-    def _cookie_path(self) -> Path | None:
-        if self.cookie_path:
-            path = Path(self.cookie_path).expanduser().resolve()
-            if path.exists():
-                return path
-        if self.cookie_inline:
-            target = legacy.consent_dir() / "gemini-web-text-cookie.json"
-            legacy.ensure_dir(target.parent)
-            cookie_map = legacy.parse_cookie_string(self.cookie_inline)
-            legacy.write_cookie_payload(target, cookie_map)
-            return target
-        return None
+        return has_session_material(os.environ.copy())
 
     def _bun_command(self) -> list[str]:
         return legacy.resolve_bun_command()
@@ -54,34 +36,19 @@ class GeminiWebTextProvider(TextProvider):
 
     def _run_prompt(self, prompt: str, expect_json: bool) -> str:
         if not self.configured():
-            raise SystemExit("gemini-web 文本 provider 未配置。请设置 GEMINI_WEB_COOKIE_PATH 或 GEMINI_WEB_CHROME_PROFILE_DIR。")
+            raise SystemExit("gemini-web 文本 provider 未配置。请先准备可复用的登录态，或先完成一次 gemini-web 登录。")
         legacy.ensure_gemini_web_consent()
         command = self._bun_command() + [str(self._main_ts()), "--model", self.model, "--prompt", prompt]
         if expect_json:
             command.append("--json")
-        cookie_path = self._cookie_path()
-        if cookie_path:
-            command.extend(["--cookie-path", str(cookie_path)])
-        elif self.chrome_profile_dir:
-            command.extend(["--profile-dir", self.chrome_profile_dir])
-        env = os.environ.copy()
-        if self.chrome_profile_dir:
-            env["GEMINI_WEB_CHROME_PROFILE_DIR"] = self.chrome_profile_dir
-        completed = subprocess.run(
+        completed, session_info = run_gemini_web_command(
             command,
             cwd=str(self._main_ts().parent),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            check=False,
-            env=env,
+            label="gemini-web 文本生成",
         )
-        if completed.returncode != 0:
-            detail = "\n".join(part for part in [completed.stdout, completed.stderr] if part).strip()
-            raise SystemExit(f"gemini-web 文本生成失败：{detail}")
         output = (completed.stdout or "").strip()
         if not output:
-            raise SystemExit("gemini-web 未返回文本内容。")
+            raise SystemExit(f"gemini-web 未返回文本内容。当前登录态来源：{describe_session_source(session_info)}")
         return output
 
     def _parse_json(self, text: str) -> Any:
@@ -147,6 +114,7 @@ class GeminiWebTextProvider(TextProvider):
             "规划时显式思考：点赞靠什么、评论靠什么、转发靠什么，以及中段的峰值时刻和结尾的互动收束如何设计。"
             "必须给出 primary_interaction_goal 和 secondary_interaction_goal，禁止三种互动目标同时拉满。"
             "必须避开输入中的 recent_phrase_blacklist；如果 recent_corpus_summary 提示某种标题模式、开头模式、结尾模式或小标题模式已经过度出现，就不要再复用。"
+            "如果输入包含 fingerprint_collision_notes，必须主动换开头路数、证据组织、互动目标或结尾收束，不能只换词。"
             "大纲必须主动分配深度：至少有一个“现场/案例/具体瞬间”章节，一个“误判/反方/边界”章节，一个“最后判断/收束”章节。"
             "不要让所有小标题都长得像同一类问句、编号句或判断句。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
@@ -162,6 +130,7 @@ class GeminiWebTextProvider(TextProvider):
             "你是写 10w+ 公众号长文的资深作者兼总编。输出 Markdown 正文，不要解释。"
             "必须消费输入里的 outline 与 viral_blueprint，但不能把它们机械翻译成模板文章。"
             "输入里的 editorial_blueprint 是硬约束：标题气质、开头方式、正文推进、小标题写法、证据组织和结尾方式都要服从它。"
+            "如果输入带有 layout_plan，正文必须给这些版式模块留出自然材料，不要写到最后只剩空洞判断。"
             "牢记：高互动文章 = 情绪价值（共鸣/争议） + 社交货币（谈资/身份） + 峰终体验。"
             "优先服务输入中的 primary_interaction_goal，只把 secondary_interaction_goal 作为辅助，不要三种互动全开。"
             "写作要求："
@@ -198,6 +167,7 @@ class GeminiWebTextProvider(TextProvider):
             "emotion_value_sentences 和 pain_point_sentences 必须输出对象数组，每项包含 text, section_heading, reason, strength。"
             "请重点识别：文章是否落入固定模板（如先说结论、篇章自我说明、结尾万能清单、每节都同一种句式起手）。"
             "如果输入 recent_corpus_summary 显示这篇稿子的标题、开头、结尾或小标题模式撞上近期高频套路，要明确指出。"
+            "如果输入包含 layout_plan，要判断正文是否给既定版式模块留够事实、案例、对比或结论材料。"
             "还要重点判断：有没有具体场景/动作/瞬间，有没有事实或案例托底，有没有反方或适用边界，段落是否过碎像提纲，多个段落是否反复同一种起手。"
             "同时判断：这篇文章为什么值得点赞、为什么会引发评论、为什么会被转发；如果缺失，请明确指出。"
             "editorial_review 必须包含 reading_desire, professional_tone, novelty_of_viewpoint, template_risk, citation_restraint, ending_naturalness, interaction_naturalness, summary。"
@@ -228,6 +198,7 @@ class GeminiWebTextProvider(TextProvider):
             "你是微信公众号深度改稿编辑。只输出修订后的 Markdown 正文，不要解释。"
             "优先修复最影响阅读完成度和传播力的 3 个问题，但不要用固定模板去“提分”。"
             "如果输入给了 editorial_blueprint，就按它改，不要改回最常见的分析评论腔。"
+            "如果输入给了 layout_plan，改稿时要顺手补足对应版式模块需要的材料。"
             "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
             "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
             "改稿时必须补足互动设计："
