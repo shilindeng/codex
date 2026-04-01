@@ -39,7 +39,7 @@ def _first_hit(items: list[dict[str, Any]], key: str) -> int:
     return 0
 
 
-def _author_fit_score(title: str, author_memory: dict[str, Any], editorial_blueprint: dict[str, Any]) -> tuple[float, list[str]]:
+def _author_fit_score(title: str, author_memory: dict[str, Any], editorial_blueprint: dict[str, Any], writing_persona: dict[str, Any]) -> tuple[float, list[str]]:
     notes: list[str] = []
     score = 5.5
     title_preferences = author_memory.get("title_preferences") or {}
@@ -82,6 +82,25 @@ def _author_fit_score(title: str, author_memory: dict[str, Any], editorial_bluep
     preferred_styles = {str(item).strip() for item in ((author_memory.get("editorial_preferences") or {}).get("preferred_style_keys") or []) if str(item).strip()}
     if style_key and style_key in preferred_styles:
         score += 0.8
+    persona_name = str((writing_persona or {}).get("name") or "").strip()
+    if persona_name == "cold-analyst":
+        if "？" in title or "?" in title:
+            score -= 0.6
+            notes.append("问句形式偏离这篇稿子的专业人格")
+        if any(mark in title for mark in ["：", ":"]):
+            score += 0.4
+    elif persona_name == "sharp-journalist":
+        if current_length <= 20:
+            score += 0.6
+        if title.count("，") + title.count(",") >= 2:
+            score -= 0.6
+            notes.append("标题层级偏多，不够利落")
+    elif persona_name == "warm-editor":
+        if any(word in title for word in ["写给", "那一刻", "后来", "那个"]):
+            score += 0.5
+    elif persona_name == "industry-observer":
+        if any(word in title for word in ["信号", "分水岭", "拐点", "重估"]):
+            score += 0.5
     return round(max(0.0, min(score, 10.0)), 2), notes
 
 
@@ -125,6 +144,7 @@ def build_title_decision_report(
     recent_title_patterns = {str(item.get("key") or "").strip() for item in recent_patterns if str(item.get("key") or "").strip()}
     recent_title_token_sets = [_title_tokens(item) for item in recent_titles[:20]]
     author_memory = manifest.get("author_memory") or {}
+    writing_persona = manifest.get("writing_persona") or {}
     threshold = max(int(legacy.TITLE_SCORE_THRESHOLD or 0), 60)
 
     normalized_candidates: list[dict[str, Any]] = []
@@ -166,7 +186,7 @@ def build_title_decision_report(
         if title in recent_titles:
             differentiation_score -= 3.0
         differentiation_score = round(max(1.0, min(differentiation_score, 10.0)), 2)
-        author_fit_score, author_notes = _author_fit_score(title, author_memory, editorial_blueprint)
+        author_fit_score, author_notes = _author_fit_score(title, author_memory, editorial_blueprint, writing_persona if isinstance(writing_persona, dict) else {})
         trust_score, trust_notes = _trust_score(title, research, item)
         total_score = round(
             (

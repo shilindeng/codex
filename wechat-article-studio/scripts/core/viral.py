@@ -146,7 +146,6 @@ SCENE_MARKERS = [
     "会议室",
     "办公室",
     "工位",
-    "浏览器",
     "屏幕",
     "白板",
     "消息弹出来",
@@ -190,8 +189,6 @@ COUNTERPOINT_MARKERS = [
     "前提是",
     "误区在于",
     "别把",
-    "不是",
-    "而是",
 ]
 
 EVIDENCE_MARKERS = [
@@ -229,6 +226,29 @@ COMMON_SENTENCE_OPENERS = {
     "先说",
     "但真正",
     "与此同时",
+}
+
+COMMON_ADVERBS = {
+    "非常",
+    "十分",
+    "特别",
+    "相当",
+    "尤其",
+    "更加",
+    "逐渐",
+    "不断",
+    "一直",
+    "已经",
+    "正在",
+    "可能",
+    "大概",
+    "显然",
+    "明显",
+    "确实",
+    "居然",
+    "竟然",
+    "几乎",
+    "完全",
 }
 
 SEVERE_AI_SMELL_TYPES = {
@@ -1067,6 +1087,127 @@ def _author_memory(manifest: dict[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _contains_scene_signal(paragraph: str) -> bool:
+    value = _clean_block_text(paragraph)
+    if not value:
+        return False
+    strong_markers = [marker for marker in SCENE_MARKERS if marker in value]
+    if any(marker in value for marker in ["会议室", "办公室", "工位", "白板", "群里", "凌晨", "晚上", "中午", "那天"]):
+        return True
+    if any(marker in value for marker in ["这种时刻", "那种时刻", "如果你也有过", "你可能也有过", "第一次", "刚开始"]):
+        return True
+    if re.search(r"\d{1,2}月\d{1,2}日|\d{4}年|\d{1,2}点", value):
+        return True
+    if any(marker in value for marker in ["看到", "听到", "发消息", "弹出来", "刚坐下", "盯着", "回了句", "说：", "他说", "她说"]):
+        return True
+    return len(strong_markers) >= 2
+
+
+def _contains_counterpoint_signal(paragraph: str) -> bool:
+    value = _clean_block_text(paragraph)
+    if not value:
+        return False
+    if re.search(r"不是.{1,20}而是", value) and any(word in value for word in ["问题", "关键", "真正", "误判", "边界", "判断", "风险", "难点"]):
+        return True
+    if re.search(r"并不.{1,20}而是", value) and any(word in value for word in ["问题", "关键", "真正", "误判", "边界", "判断", "风险", "难点"]):
+        return True
+    if re.search(r"不在.{1,20}而在", value):
+        return True
+    return any(marker in value for marker in COUNTERPOINT_MARKERS)
+
+
+def _paragraph_lengths(paragraphs: list[str]) -> list[int]:
+    return [legacy.cjk_len(item) for item in paragraphs if legacy.cjk_len(item) > 0]
+
+
+def build_humanness_signals(body: str, manifest: dict[str, Any] | None = None, review: dict[str, Any] | None = None) -> dict[str, Any]:
+    paragraphs = _body_paragraphs(body)
+    paragraph_lengths = _paragraph_lengths(paragraphs)
+    sentences = [sentence for sentence in legacy.sentence_split(body) if sentence.strip()]
+    sentence_lengths = [legacy.cjk_len(sentence) for sentence in sentences if legacy.cjk_len(sentence) > 0]
+    depth = (review or {}).get("depth_signals") or _depth_signals(body, manifest if isinstance(manifest, dict) else None)
+    adverb_hits = sum(sum(item.count(word) for word in COMMON_ADVERBS) for item in paragraphs)
+    total_chars = max(1, legacy.cjk_len(body))
+    self_corrections = len(re.findall(r"不对[，,]|准确说|更准确地说|算了|话说回来|不过话又说回来|——", body or ""))
+    paragraph_range = (max(paragraph_lengths) - min(paragraph_lengths)) if paragraph_lengths else 0
+    sentence_range = (max(sentence_lengths) - min(sentence_lengths)) if sentence_lengths else 0
+    style_drift = 0
+    if len(paragraphs) >= 3:
+        first = paragraphs[: max(1, len(paragraphs) // 2)]
+        second = paragraphs[max(1, len(paragraphs) // 2) :]
+        first_you = sum(item.count("你") + item.count("我们") for item in first)
+        second_you = sum(item.count("你") + item.count("我们") for item in second)
+        first_data = sum(len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\[\d+\]", item)) for item in first)
+        second_data = sum(len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\[\d+\]", item)) for item in second)
+        if abs(first_you - second_you) >= 2 or abs(first_data - second_data) >= 2:
+            style_drift = 1
+    risk_findings = []
+    if sentence_range < 12 and len(sentences) >= 5:
+        risk_findings.append("句长波动偏小，容易显得太齐。")
+    if paragraph_range < 28 and len(paragraphs) >= 5:
+        risk_findings.append("段落长度过于整齐。")
+    if adverb_hits / total_chars > 0.035:
+        risk_findings.append("副词密度偏高。")
+    if depth.get("outline_like"):
+        risk_findings.append("段落像提纲拼接。")
+    if depth.get("repeated_starter_count", 0) >= 2 or depth.get("repeated_sentence_opener_count", 0) >= 2:
+        risk_findings.append("起手重复，容易暴露模板腔。")
+    return {
+        "sentence_length_range": sentence_range,
+        "paragraph_length_range": paragraph_range,
+        "adverb_density": round(adverb_hits / total_chars, 4),
+        "style_drift_detected": bool(style_drift),
+        "self_correction_hits": self_corrections,
+        "scene_anchor_count": int(depth.get("scene_paragraph_count") or 0),
+        "evidence_anchor_count": int(depth.get("evidence_paragraph_count") or 0),
+        "counterpoint_anchor_count": int(depth.get("counterpoint_paragraph_count") or 0),
+        "outline_like": bool(depth.get("outline_like")),
+        "import_outline_risk": bool(depth.get("outline_like") and not review),
+        "risk_findings": risk_findings[:6],
+    }
+
+
+def _humanness_score(signals: dict[str, Any], persona: dict[str, Any] | None = None) -> tuple[int, list[str]]:
+    persona = persona or {}
+    persona_name = str(persona.get("name") or "").strip()
+    score = 6
+    findings: list[str] = []
+    sentence_range = int(signals.get("sentence_length_range") or 0)
+    paragraph_range = int(signals.get("paragraph_length_range") or 0)
+    if sentence_range >= 18:
+        score += 1
+    else:
+        score -= 1
+        findings.append("句长变化不够。")
+    if paragraph_range >= 40:
+        score += 1
+    else:
+        score -= 1
+        findings.append("段落节奏过齐。")
+    if float(signals.get("adverb_density") or 0) > 0.035:
+        score -= 1
+        findings.append("副词密度偏高。")
+    if bool(signals.get("style_drift_detected")):
+        score += 1
+    if int(signals.get("self_correction_hits") or 0) >= 1:
+        score += 1
+    if bool(signals.get("outline_like")):
+        score -= 2
+        findings.append("正文像提纲拼接。")
+    if int(signals.get("scene_anchor_count") or 0) < 1:
+        score -= 1
+        findings.append("缺少场景锚。")
+    if int(signals.get("evidence_anchor_count") or 0) < 1:
+        score -= 1
+        findings.append("缺少证据锚。")
+    if int(signals.get("counterpoint_anchor_count") or 0) < 1:
+        score -= 1
+        findings.append("缺少反方锚。")
+    if persona_name == "cold-analyst" and float(signals.get("adverb_density") or 0) <= 0.035:
+        score += 1
+    return max(0, min(score, 10)), findings[:6]
+
+
 def _ai_smell_gate_hits(findings: list[dict[str, Any]]) -> int:
     hits = 0
     for item in findings or []:
@@ -1080,15 +1221,16 @@ def _heading_monotony(headings: list[dict[str, Any]]) -> dict[str, Any]:
     values = [_clean_block_text(item.get("text") or "") for item in headings if _clean_block_text(item.get("text") or "")]
     if len(values) < 3:
         return {"monotony": False, "reason": "", "count": 0}
-    question_like = sum(1 for item in values if item.startswith("为什么") or item.endswith("？") or item.endswith("?"))
-    enumerated = sum(1 for item in values if re.match(r"^(第[一二三四五六七八九十\d]+|[一二三四五六七八九十\d]+[、.])", item))
-    starter_counts = Counter(_paragraph_start_token(item) for item in values)
+    pattern_keys = [heading_pattern_key(item) for item in values]
+    question_like = sum(1 for item in pattern_keys if item in {"why-heading", "reader-question-heading"})
+    enumerated = sum(1 for item in pattern_keys if item in {"numbered-insight", "enumerated-class"})
+    starter_counts = Counter(token for token in (_paragraph_start_token(item) for item in values) if token)
     top_token, top_count = starter_counts.most_common(1)[0]
     if question_like >= max(2, len(values) - 1):
         return {"monotony": True, "reason": "小标题连续使用“为什么/问句”推进", "count": question_like}
     if enumerated >= max(2, len(values) - 1):
         return {"monotony": True, "reason": "小标题连续使用编号/枚举推进", "count": enumerated}
-    if top_count >= max(2, len(values) - 1):
+    if top_count >= len(values) and top_token not in {"最后", "真正", "大家"}:
         return {"monotony": True, "reason": f"小标题起手过于一致：{top_token}", "count": top_count}
     return {"monotony": False, "reason": "", "count": 0}
 
@@ -1098,7 +1240,7 @@ def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str
     headings = legacy.extract_headings(body)
     sentences = [sentence for sentence in legacy.sentence_split(body) if sentence.strip()]
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in sentences]
-    scene_paragraphs = [item for item in paragraphs if any(marker in item for marker in SCENE_MARKERS)]
+    scene_paragraphs = [item for item in paragraphs if _contains_scene_signal(item)]
     detail_paragraphs = [
         item
         for item in paragraphs
@@ -1109,7 +1251,7 @@ def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str
         for item in paragraphs
         if any(marker in item for marker in EVIDENCE_MARKERS) or re.search(r"\[\d+\]|\d{4}年|\d+(?:\.\d+)?%|\d+倍", item)
     ]
-    counterpoint_paragraphs = [item for item in paragraphs if any(marker in item for marker in COUNTERPOINT_MARKERS)]
+    counterpoint_paragraphs = [item for item in paragraphs if _contains_counterpoint_signal(item)]
     long_paragraphs = [item for item in paragraphs if 55 <= legacy.cjk_len(item) <= 180]
     short_paragraphs = [item for item in paragraphs if legacy.cjk_len(item) <= 18]
     starters = Counter(_paragraph_start_token(item) for item in paragraphs if _paragraph_start_token(item))
@@ -1127,6 +1269,8 @@ def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str
     heading_monotony = _heading_monotony(headings)
     outline_like = len(paragraphs) >= 5 and len(short_paragraphs) >= max(3, int(len(paragraphs) * 0.45)) and len(long_paragraphs) <= 1
     sentence_range = (max(sentence_lengths) - min(sentence_lengths)) if sentence_lengths else 0
+    paragraph_lengths = _paragraph_lengths(paragraphs)
+    paragraph_range = (max(paragraph_lengths) - min(paragraph_lengths)) if paragraph_lengths else 0
     return {
         "paragraph_count": len(paragraphs),
         "scene_paragraph_count": len(scene_paragraphs),
@@ -1136,6 +1280,7 @@ def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str
         "long_paragraph_count": len(long_paragraphs),
         "short_paragraph_count": len(short_paragraphs),
         "sentence_length_range": sentence_range,
+        "paragraph_length_range": paragraph_range,
         "repeated_starters": repeated_starters[:5],
         "repeated_starter_count": len(repeated_starters),
         "repeated_sentence_openers": repeated_sentence_openers[:5],
@@ -1496,6 +1641,8 @@ def build_heuristic_review(
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
         },
     )
+    humanness_signals = build_humanness_signals(body, manifest, {"depth_signals": depth_signals})
+    humanness_score, humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
     interaction_design = _interaction_design(body, blueprint, signature_lines)
     similarity_findings = _similarity_findings(title, body, manifest)
     citation_findings = _citation_findings(body, manifest)
@@ -1541,6 +1688,10 @@ def build_heuristic_review(
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
         strengths.append("整体语言相对自然，没有明显模板腔堆积。")
+    if humanness_findings:
+        issues.append("真人感还不够稳，句长、段落或锚点分布仍然偏齐。")
+    else:
+        strengths.append("正文在句长、段落和锚点上更接近真人写作节奏。")
     if depth_signals.get("repeated_starter_count", 0) >= 3:
         issues.append("段落起手反复撞在同一类句式上，读者很容易闻到 AI 味。")
     if similarity_findings.get("max_similarity", 0) > 0.42:
@@ -1605,6 +1756,9 @@ def build_heuristic_review(
         "citation_findings": citation_findings,
         "interaction_findings": interaction_design,
         "depth_signals": depth_signals,
+        "humanness_signals": humanness_signals,
+        "humanness_score": humanness_score,
+        "humanness_findings": humanness_findings,
         "editorial_review": editorial_review,
         "revision_priorities": revision_priorities,
         "manifest_context": {
@@ -1613,6 +1767,7 @@ def build_heuristic_review(
             "title": title,
             "viral_blueprint": blueprint,
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
+            "writing_persona": manifest.get("writing_persona") or {},
         },
         "revision_round": revision_round,
         "review_source": review_source,
@@ -1750,6 +1905,17 @@ def normalize_review_payload(
         merged_editorial = dict(result.get("editorial_review") or {})
         merged_editorial.update({key: value for key, value in editorial_review.items() if value not in (None, "")})
         result["editorial_review"] = merged_editorial
+    humanness_signals = payload.get("humanness_signals")
+    if isinstance(humanness_signals, dict):
+        result["humanness_signals"] = humanness_signals
+    humanness_findings = _normalize_list(payload.get("humanness_findings"))
+    if humanness_findings:
+        result["humanness_findings"] = humanness_findings
+    if payload.get("humanness_score") not in (None, ""):
+        try:
+            result["humanness_score"] = int(payload.get("humanness_score") or 0)
+        except (TypeError, ValueError):
+            pass
     result["review_source"] = review_source
     result["source"] = review_source
     result["confidence"] = float(payload.get("confidence") or result.get("confidence") or 0.72)
@@ -1998,6 +2164,9 @@ def build_score_report(
             "viral_blueprint": blueprint,
         },
     )
+    humanness_signals = review.get("humanness_signals") or build_humanness_signals(body, manifest, {"depth_signals": depth_signals})
+    humanness_score, derived_humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
+    humanness_findings = _dedupe(_normalize_list(review.get("humanness_findings")) + derived_humanness_findings)
     template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
         similarity_findings.get("repeated_phrases") or []
     )
@@ -2014,7 +2183,8 @@ def build_score_report(
         {"dimension": "语言风格自然度", "weight": 8, "score": style_score, "note": style_note},
         {"dimension": "可信度与检索支撑", "weight": 8, "score": credibility_score, "note": credibility_note},
     ]
-    total = sum(item["score"] for item in breakdown)
+    humanness_adjustment = 1 if humanness_score >= 8 else -2 if humanness_score <= 4 else -1 if humanness_score <= 6 else 0
+    total = max(0, min(100, sum(item["score"] for item in breakdown) + humanness_adjustment))
     quality_gates = _build_quality_gates(
         review | {"editorial_review": editorial_review, "depth_signals": depth_signals},
         blueprint,
@@ -2042,6 +2212,7 @@ def build_score_report(
             "补现场、案例和反方边界，让文章真正立起来。" if not quality_gates["depth_passed"] else "",
             "打散段落起手和小标题模式，避免整篇像同一套模板复印。" if not quality_gates["structure_passed"] else "",
             "重写篇章结构和句法节奏，压低模板惩罚。" if not quality_gates["template_penalty_passed"] else "",
+            "根据真人感信号补句长落差、段落节奏和自我修正痕迹。" if humanness_score <= 6 else "",
             "重写开头/结尾和标题层级，主动拉开与最近文章的差异。" if not quality_gates["similarity_passed"] else "",
             "把正文裸链接改成关键节点轻引用，并把完整来源放到文末参考资料卡片。" if not quality_gates["citation_policy_passed"] else "",
             "先把阅读欲望、专业感和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
@@ -2078,6 +2249,7 @@ def build_score_report(
                 "至少留一段真正展开的分析段，不要所有段落都像卡片。",
                 "主动写出反方、误判或适用边界，文章才会更像真人判断。",
             ]
+            + humanness_findings
         ),
         "failed_quality_gates": failed_gates,
         "revision_priorities": list(review.get("revision_priorities") or []),
@@ -2110,6 +2282,10 @@ def build_score_report(
         "citation_findings": citation_findings,
         "interaction_findings": interaction_findings,
         "depth_signals": depth_signals,
+        "humanness_signals": humanness_signals,
+        "humanness_score": humanness_score,
+        "humanness_findings": humanness_findings,
+        "humanness_adjustment": humanness_adjustment,
         "max_similarity": similarity_findings.get("max_similarity", 0),
         "similar_articles": similarity_findings.get("similar_articles", []),
         "repeated_phrases": similarity_findings.get("repeated_phrases", []),
@@ -2220,6 +2396,12 @@ def markdown_score_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## 分项得分", ""])
     for item in report.get("score_breakdown") or []:
         lines.append(f"- {item['dimension']}：`{item['score']}` / `{item['weight']}` - {item['note']}")
+    if report.get("humanness_score") not in (None, ""):
+        lines.extend(["", "## 真人感信号", ""])
+        lines.append(f"- 真人感分：`{report.get('humanness_score', 0)}` / 10")
+        lines.append(f"- 调整分：`{report.get('humanness_adjustment', 0)}`")
+        for item in report.get("humanness_findings") or []:
+            lines.append(f"- {item}")
     lines.extend(["", "## 质量门槛", ""])
     for name, ok in (report.get("quality_gates") or {}).items():
         lines.append(f"- {name}：`{'通过' if ok else '未通过'}`")

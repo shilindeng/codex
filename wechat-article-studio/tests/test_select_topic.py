@@ -30,6 +30,11 @@ class SelectTopicTests(unittest.TestCase):
                                 "recommended_title": "推荐标题",
                                 "angles": ["角度 1", "角度 2"],
                                 "source_url": "https://example.com",
+                                "recommended_archetype": "comparison",
+                                "recommended_enhancement_strategy": "real-voice-comparison",
+                                "writeability_score": 8,
+                                "evidence_potential": 7,
+                                "novelty_reason": "切口更具体。",
                             }
                         ]
                     },
@@ -79,6 +84,9 @@ class SelectTopicTests(unittest.TestCase):
             self.assertEqual(manifest.get("direction"), "角度 1")
             self.assertEqual(manifest.get("selected_title"), "推荐标题")
             self.assertEqual(manifest.get("source_urls"), ["https://example.com"])
+            self.assertEqual(manifest.get("article_archetype"), "comparison")
+            self.assertEqual(manifest.get("recommended_enhancement_strategy"), "real-voice-comparison")
+            self.assertEqual(manifest.get("writeability_score"), 8)
             self.assertEqual(manifest.get("stage"), "initialized")
             self.assertEqual(manifest.get("research_status"), "not_started")
             self.assertEqual(manifest.get("render_status"), "not_started")
@@ -86,6 +94,7 @@ class SelectTopicTests(unittest.TestCase):
             ideation = json.loads((workspace / "ideation.json").read_text(encoding="utf-8"))
             self.assertEqual(ideation.get("selected_title"), "推荐标题")
             self.assertEqual(ideation.get("topic"), "测试主题")
+            self.assertEqual(ideation.get("recommended_archetype"), "comparison")
 
 
 if __name__ == "__main__":

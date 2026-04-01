@@ -22,12 +22,28 @@
 - 输出：更新 `ideation.json`（包含 `outline_meta.viral_blueprint` 与 `viral_blueprint`）
 - 失败条件：工作目录不可写
 
+## `enhance`
+
+- 输入：`--workspace [--title "..."] [--style-sample ...]`
+- 依赖：`ideation.json` 中最好已有 `outline_meta`
+- 输出：
+  - `content-enhancement.json`
+  - `content-enhancement.md`
+- 失败条件：工作目录不可写
+- 说明：
+  - 自动按篇型选择增强策略：角度发现 / 密度强化 / 细节锚定 / 真实体感
+  - 同时写入 `writing_persona`
+  - `run` / `hosted-run` 会自动包含这一步
+
 ## `write`
 
 - 输入：`--workspace [--title "..."] [--outline-file ...] [--style-sample ...]`
 - 依赖：`research.json`、`ideation.json`
 - 输出：`article.md`
 - 失败条件：工作目录不可写
+- 说明：
+  - 默认会消费 `writing_persona` 与 `content-enhancement`
+  - 如果缺少 `content-enhancement.json`，会先自动补齐
 
 ## `review`
 
@@ -35,6 +51,9 @@
 - 依赖：`article.md`
 - 输出：`review-report.json`、`review-report.md`
 - 失败条件：找不到文章
+- 说明：
+  - 会顺手生成 `editorial-anchor-plan.*`
+  - 用来告诉人工如果还想再压一层 AI 味，最后该补哪几句最值钱
 
 ## `score`
 
@@ -42,6 +61,9 @@
 - 依赖：`article.md` 或指定输入
 - 输出：`score-report.json`、`score-report.md`
 - 失败条件：找不到文章
+- 说明：
+  - 额外输出 `humanness_signals / humanness_score / humanness_findings`
+  - 不再只查套话，还会检查句长波动、段落节奏、起手重复、章节单一等真人感信号
 
 ## `revise`
 
@@ -57,7 +79,8 @@
 - 输出：从 `research.json` 到 `article.wechat.html`，必要时追加发布产物
 - 失败条件：发布前置条件不满足
 - 特殊行为：
-  - 默认进入“多轮回炉”：每轮 `review -> score -> revise(promote) -> 再 review/score`，最多 `--max-revision-rounds` 轮；最终保留最佳稿并在 `score-report` 中记录 `revision_rounds/best_round/stop_reason`
+  - 默认顺序为：`research -> titles -> outline -> enhance -> write -> 多轮回炉 -> render`
+  - 多轮回炉：每轮 `review -> score -> revise(promote) -> 再 review/score`，最多 `--max-revision-rounds` 轮；最终保留最佳稿并在 `score-report` 中记录 `revision_rounds/best_round/stop_reason`
 - 常用图片参数：
   - `--image-preset`
   - `--image-style-mode`
@@ -87,6 +110,7 @@
   - `--input-format auto|md|html`
 - 特殊行为：
   - 若 `--topic` 为空或为“开始”，会先走热点发现并输出选题建议
+  - 即使正文来自宿主，也会自动补 `enhance` 并执行更严格的导入预修
 
 ## `render`
 

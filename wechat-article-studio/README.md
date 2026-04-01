@@ -102,6 +102,20 @@ python scripts/studio.py hosted-run \
   --to render
 ```
 
+### 写前增强
+
+```bash
+python scripts/studio.py enhance \
+  --workspace <job-dir>
+```
+
+这一步会自动补：
+
+- 本篇推荐的写法策略
+- 每一节必须落下的细节/证据/边界
+- 默认写作人格
+- 后续评审时也会自动给出“最后补哪一句最值钱”的锚点建议
+
 ### 正式发布到草稿箱
 
 ```bash

@@ -7,13 +7,14 @@
 1. `research`：收集主题、来源、信息缺口
 2. `titles`：生成 3 个左右标题候选，并做标题准入评分
 3. `outline`：生成文章大纲与证据需求，并产出爆款策略蓝图 `viral_blueprint`
-4. `write`：写出 `article.md`（必须消费 `viral_blueprint`）
-5. `review`：生成结构化编辑拆解（爆款拆解 + 句式提炼 + AI 味问题 + 改稿优先级）
-6. `score`：运行启发式评分 + `quality_gates`（硬门槛）
-7. `revise`：低分时按“爆款提分改写”生成候选稿（多轮回炉，默认最多 3 轮）
-8. `plan-images` / `generate-images`
-9. `assemble` / `render`
-10. `publish` / `verify-draft`
+4. `enhance`：在写作前补角度、细节、证据、边界与写作人格，产出 `content-enhancement.*`
+5. `write`：写出 `article.md`（必须消费 `viral_blueprint`、`writing_persona`、`content_enhancement`）
+6. `review`：生成结构化编辑拆解（爆款拆解 + 句式提炼 + AI 味问题 + 改稿优先级）
+7. `score`：运行启发式评分 + `quality_gates`（硬门槛）+ `humanness_signals`
+8. `revise`：低分时按“先补角度/事实/细节/边界，再处理模板腔”的顺序生成候选稿
+9. `plan-images` / `generate-images`
+10. `assemble` / `render`
+11. `publish` / `verify-draft`
 
 ## 必须停下来确认的节点
 
@@ -22,6 +23,7 @@
 - `score` 未达阈值时，不进入正式发布；最多只允许 `--dry-run-publish` 做链路检查
 - 未通过 `quality_gates`（含“情绪价值/刺痛/金句/去 AI 味/可信度”等硬门槛）时，不进入正式发布
 - “可信度与检索支撑”过低，或工作目录里仍存在 placeholder 回退结果时，不进入正式发布
+- 宿主导入的 `--article-file` 也必须先过 `enhance + generation-preflight + review + score`
 - 启用 `gemini-web` 前，必须先有用户同意
 - 进入 `publish` 前，必须确认用户已明确要求发布到草稿箱
 - 未显式传入 `--confirmed-publish` 前，不写入 `publish_intent=true`

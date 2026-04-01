@@ -611,10 +611,13 @@ def generate_diverse_title_variants(
     editorial_blueprint: dict[str, Any] | None = None,
     recent_titles: list[str] | None = None,
     recent_corpus_summary: dict[str, Any] | None = None,
+    writing_persona: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     focus = _short_focus(topic, angle)
     blueprint = editorial_blueprint or {}
+    persona = writing_persona or {}
     style_key = _normalize_key(str(blueprint.get("style_key") or ""))
+    persona_name = _normalize_key(str(persona.get("name") or ""))
     recent_titles = recent_titles or []
     recent_summary = recent_corpus_summary or {}
     blocked_patterns = {item.get("key") for item in (recent_summary.get("overused_title_patterns") or []) if item.get("key")}
@@ -660,6 +663,19 @@ def generate_diverse_title_variants(
             "如果要认真聊{focus}，这几个追问绕不过去",
         ],
     }
+    if persona_name == "sharp-journalist":
+        style_formulas.setdefault(style_key or "generic", [])
+        style_formulas[style_key or "generic"] = [
+            f"{focus}这件事，真正的问题没那么复杂",
+            f"{focus}，真正的分水岭已经出现了",
+            f"别把{focus}看成热闹，它已经开始改结果了",
+        ] + style_formulas.get(style_key or "generic", [])
+    elif persona_name == "cold-analyst":
+        style_formulas.setdefault(style_key or "generic", [])
+        style_formulas[style_key or "generic"] = [
+            f"{focus}进入下一阶段，真正需要重估的是这条判断线",
+            f"看懂{focus}，先把影响路径和边界讲清楚",
+        ] + style_formulas.get(style_key or "generic", [])
     fallback_pool = [
         "{focus}真正值得聊的，不是表面答案，而是判断顺序",
         "{focus}这件事，很多人看热闹，却没看到真正的代价",

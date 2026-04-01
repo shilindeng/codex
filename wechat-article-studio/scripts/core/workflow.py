@@ -31,12 +31,20 @@ from core.author_memory import (
     write_playbook_artifacts,
 )
 from core.content_fingerprint import build_article_fingerprint, build_outline_fingerprint, load_fingerprint, summarize_collisions
+from core.content_enhancement import (
+    build_content_enhancement,
+    enhancement_strategy_for_archetype,
+    load_content_enhancement,
+    write_content_enhancement_artifacts,
+)
+from core.editorial_anchor import build_editorial_anchor_plan, write_editorial_anchor_artifacts
 from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
 from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
 from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
+from core.persona import normalize_writing_persona
 from core.editorial_strategy import (
     generate_diverse_title_variants,
     normalize_editorial_blueprint,
@@ -346,6 +354,10 @@ def attach_author_memory(workspace: Path, manifest: dict[str, Any]) -> dict[str,
     manifest["author_phrase_blacklist"] = bundle.get("phrase_blacklist") or []
     manifest["author_sentence_starters_to_avoid"] = bundle.get("sentence_starters_to_avoid") or []
     manifest["author_lesson_patterns"] = bundle.get("lesson_patterns") or []
+    manifest["author_lesson_rules"] = bundle.get("lesson_rules") or []
+    manifest["author_hard_rules"] = bundle.get("hard_rules") or []
+    manifest["author_soft_rules"] = bundle.get("soft_rules") or []
+    manifest["author_example_snippets"] = bundle.get("example_snippets") or []
     return manifest
 
 
@@ -487,6 +499,7 @@ def rerank_discovery_candidates(
         item = dict(candidate)
         topic = str(item.get("recommended_topic") or item.get("hot_title") or "")
         title = str(item.get("recommended_title") or topic)
+        content_kind = str(item.get("content_kind") or "")
         candidate_tokens = topic_keyword_tokens(topic)
         repeat_hits = [token for token in candidate_tokens if recent_token_counter.get(token.lower(), 0) > 0]
         repeat_penalty = min(8, sum(min(2, recent_token_counter.get(token.lower(), 0)) for token in repeat_hits))
@@ -496,7 +509,7 @@ def rerank_discovery_candidates(
         if title_pattern in title_patterns:
             repeat_penalty += 2
         discussion_score = min(10, 3 + len(item.get("angles") or []) + len(item.get("viewpoints") or []))
-        if str(item.get("content_kind") or "") in {"教程/工具", "事件解读", "趋势观点"}:
+        if content_kind in {"教程/工具", "事件解读", "趋势观点"}:
             discussion_score += 1
         evidence_score = 4
         if str(item.get("source_tier") or "") == "官方":
@@ -507,11 +520,11 @@ def rerank_discovery_candidates(
             evidence_score += 1
         style_hint_score = 0
         if preferred_styles:
-            if "signal-briefing" in preferred_styles and str(item.get("content_kind") or "") in {"产品更新", "趋势观点"}:
+            if "signal-briefing" in preferred_styles and content_kind in {"产品更新", "趋势观点"}:
                 style_hint_score += 2
-            if "case-memo" in preferred_styles and str(item.get("content_kind") or "") in {"事件解读", "产品更新"}:
+            if "case-memo" in preferred_styles and content_kind in {"事件解读", "产品更新"}:
                 style_hint_score += 1
-            if "practical-playbook" in preferred_styles and str(item.get("content_kind") or "") == "教程/工具":
+            if "practical-playbook" in preferred_styles and content_kind == "教程/工具":
                 style_hint_score += 2
         if any(topic.startswith(starter) for starter in starter_blacklist):
             repeat_penalty += 1
@@ -519,7 +532,21 @@ def rerank_discovery_candidates(
         angle_freshness_score = min(10, 4 + len({str(item).strip() for item in (item.get("angles") or []) if str(item).strip()}))
         if repeat_hits:
             angle_freshness_score = max(1, angle_freshness_score - min(3, len(repeat_hits)))
-        audience_fit_score = min(10, 5 + style_hint_score + (1 if str(item.get("content_kind") or "") in {"教程/工具", "趋势观点"} else 0))
+        audience_fit_score = min(10, 5 + style_hint_score + (1 if content_kind in {"教程/工具", "趋势观点"} else 0))
+        recommended_archetype = (
+            "tutorial"
+            if content_kind == "教程/工具"
+            else "case-study"
+            if content_kind in {"事件解读", "产品更新"}
+            else "commentary"
+        )
+        evidence_potential = min(evidence_score, 10)
+        writeability_score = min(10, round((discussion_score + evidence_potential + angle_freshness_score) / 3))
+        novelty_reason = (
+            f"近期重复词较少，优先从“{(item.get('angles') or ['切口'])[0]}”切入。"
+            if not repeat_hits
+            else f"近期已有相近词：{'、'.join(repeat_hits[:3])}，建议换成更窄的切口再写。"
+        )
         propagation_score = min(
             10,
             max(
@@ -549,10 +576,15 @@ def rerank_discovery_candidates(
         item["audience_fit_score"] = audience_fit_score
         item["propagation_score"] = propagation_score
         item["discussion_score"] = min(discussion_score, 10)
-        item["evidence_score"] = min(evidence_score, 10)
+        item["evidence_score"] = evidence_potential
         item["repeat_penalty"] = repeat_penalty
         item["recent_overlap_tokens"] = repeat_hits[:5]
         item["decision_score"] = int(decision_score)
+        item["recommended_archetype"] = recommended_archetype
+        item["recommended_enhancement_strategy"] = enhancement_strategy_for_archetype(recommended_archetype, title)
+        item["writeability_score"] = int(writeability_score)
+        item["evidence_potential"] = int(evidence_potential)
+        item["novelty_reason"] = novelty_reason
         reranked.append(item)
 
     reranked.sort(
@@ -815,11 +847,79 @@ def current_editorial_blueprint(workspace: Path, manifest: dict[str, Any], ideat
             "direction": manifest.get("direction") or ideation.get("direction") or "",
             "audience": manifest.get("audience") or "大众读者",
             "research": load_research(workspace),
-            "article_archetype": (current_viral_blueprint(workspace, manifest, ideation).get("article_archetype") or ""),
+            "article_archetype": (current_viral_blueprint(workspace, manifest, ideation).get("article_archetype") or manifest.get("article_archetype") or ""),
             "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "content_mode": manifest.get("content_mode") or "tech-balanced",
         },
     )
+
+
+def current_writing_persona(workspace: Path, manifest: dict[str, Any], ideation: dict[str, Any] | None = None) -> dict[str, Any]:
+    ideation = ideation or load_ideation(workspace)
+    outline_meta = ideation.get("outline_meta") or {}
+    existing = outline_meta.get("writing_persona") or ideation.get("writing_persona") or manifest.get("writing_persona")
+    blueprint = current_viral_blueprint(workspace, manifest, ideation)
+    return normalize_writing_persona(
+        existing,
+        {
+            "topic": manifest.get("topic") or ideation.get("topic") or manifest.get("selected_title") or "",
+            "selected_title": ideation.get("selected_title") or manifest.get("selected_title") or manifest.get("topic") or "",
+            "direction": manifest.get("direction") or ideation.get("direction") or "",
+            "audience": manifest.get("audience") or "大众读者",
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "article_archetype": blueprint.get("article_archetype") or manifest.get("article_archetype") or "",
+            "author_memory": manifest.get("author_memory") or {},
+        },
+    )
+
+
+def ensure_content_enhancement(
+    workspace: Path,
+    manifest: dict[str, Any],
+    ideation: dict[str, Any] | None = None,
+    *,
+    selected_title: str = "",
+    force: bool = False,
+) -> dict[str, Any]:
+    ideation = ideation or load_ideation(workspace)
+    if not force:
+        existing = load_content_enhancement(workspace)
+        if isinstance(existing, dict) and existing.get("title") == (selected_title or manifest.get("selected_title") or ideation.get("selected_title") or existing.get("title")):
+            manifest["content_enhancement_path"] = "content-enhancement.json"
+            manifest["humanness_signals"] = manifest.get("humanness_signals") or {}
+            return existing
+    outline_meta = dict(ideation.get("outline_meta") or {})
+    title = selected_title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
+    research = load_research(workspace)
+    persona = current_writing_persona(workspace, manifest, ideation)
+    payload = build_content_enhancement(
+        title=title,
+        outline_meta=outline_meta or {"sections": ideation.get("outline") or []},
+        manifest=manifest,
+        research=research,
+        author_memory=manifest.get("author_memory") or {},
+        writing_persona=persona,
+    )
+    write_content_enhancement_artifacts(workspace, payload)
+    ideation["writing_persona"] = persona
+    ideation["content_enhancement"] = payload
+    write_json(workspace / "ideation.json", ideation)
+    manifest["writing_persona"] = persona
+    manifest["content_enhancement_path"] = "content-enhancement.json"
+    return payload
+
+
+def write_editorial_anchor_plan(workspace: Path, manifest: dict[str, Any], *, title: str, review_report: dict[str, Any] | None = None, score_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = build_editorial_anchor_plan(
+        title=title,
+        manifest=manifest,
+        review_report=review_report,
+        score_report=score_report,
+        content_enhancement=load_content_enhancement(workspace),
+    )
+    write_editorial_anchor_artifacts(workspace, payload)
+    manifest["editorial_anchor_plan_path"] = "editorial-anchor-plan.json"
+    return payload
 
 
 def _dedupe_generation_lines(values: list[str]) -> list[str]:
@@ -959,6 +1059,8 @@ def harden_generated_article_body(
                     "corpus_root": manifest.get("corpus_root") or "",
                     "editorial_blueprint": dict((outline_meta or {}).get("editorial_blueprint") or manifest.get("editorial_blueprint") or {}),
                     "author_memory": manifest.get("author_memory") or {},
+                    "writing_persona": manifest.get("writing_persona") or {},
+                    "content_enhancement": load_content_enhancement(workspace),
                     "generation_preflight": initial_report,
                 }
                 result = provider.revise_article(context)
@@ -1087,6 +1189,7 @@ def select_scored_title(
             editorial_blueprint=manifest.get("editorial_blueprint") or {},
             recent_titles=manifest.get("recent_article_titles") or [],
             recent_corpus_summary=recent_corpus_summary if isinstance(recent_corpus_summary, dict) else {},
+            writing_persona=manifest.get("writing_persona") or {},
         )
         decision_report = build_title_decision_report(
             topic=topic,
@@ -1211,6 +1314,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
     topic = manifest.get("topic") or research.get("topic") or "未命名主题"
     audience = manifest.get("audience") or research.get("audience") or "大众读者"
     count = args.count or 3
+    writing_persona = current_writing_persona(workspace, manifest)
     result = provider.generate_titles(
         {
             "topic": topic,
@@ -1223,6 +1327,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
             "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "editorial_blueprint": current_editorial_blueprint(workspace, manifest),
             "author_memory": manifest.get("author_memory") or {},
+            "writing_persona": writing_persona,
         }
     )
     ideation = load_ideation(workspace)
@@ -1257,6 +1362,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
     )
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = ideation.get("selected_title") or manifest.get("selected_title", "")
+    manifest["writing_persona"] = writing_persona
     manifest["ideation_path"] = "ideation.json"
     update_stage(manifest, "titles", "title_status")
     save_manifest(workspace, manifest)
@@ -1276,6 +1382,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
     ideation = load_ideation(workspace)
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
     editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+    writing_persona = current_writing_persona(workspace, manifest, ideation)
     outline_context = {
         "topic": manifest.get("topic") or research.get("topic") or "",
         "selected_title": selected_title,
@@ -1292,6 +1399,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
         "content_mode": manifest.get("content_mode") or "tech-balanced",
         "editorial_blueprint": editorial_blueprint,
         "author_memory": manifest.get("author_memory") or {},
+        "writing_persona": writing_persona,
     }
     result = provider.generate_outline(outline_context)
     normalize_context = {
@@ -1305,6 +1413,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
         "content_mode": manifest.get("content_mode") or "tech-balanced",
         "editorial_blueprint": editorial_blueprint,
         "author_memory": manifest.get("author_memory") or {},
+        "writing_persona": writing_persona,
     }
     outline = normalize_outline_payload(dict(result.payload), normalize_context)
     recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
@@ -1341,16 +1450,69 @@ def cmd_outline(args: argparse.Namespace) -> int:
     ideation["outline_meta"] = outline
     ideation["viral_blueprint"] = outline.get("viral_blueprint") or {}
     ideation["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
+    ideation["writing_persona"] = normalize_writing_persona(
+        writing_persona,
+        {
+            "topic": manifest.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "article_archetype": (outline.get("viral_blueprint") or {}).get("article_archetype") or "",
+            "author_memory": manifest.get("author_memory") or {},
+        },
+    )
     ideation["updated_at"] = now_iso()
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = selected_title
     manifest["outline"] = [item.get("heading", "") for item in outline.get("sections") or []]
     manifest["viral_blueprint"] = outline.get("viral_blueprint") or {}
     manifest["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
+    manifest["writing_persona"] = ideation.get("writing_persona") or writing_persona
     manifest["layout_plan_path"] = "layout-plan.json"
     update_stage(manifest, "outline", "outline_status")
     save_manifest(workspace, manifest)
     print(json.dumps(outline, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_enhance(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    manifest = persist_runtime_preferences(manifest, args)
+    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    manifest = attach_corpus_context(workspace, manifest)
+    manifest = attach_author_memory(workspace, manifest)
+    ideation = load_ideation(workspace)
+    selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
+    if not ideation.get("outline_meta"):
+        editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+        ideation["outline_meta"] = normalize_outline_payload(
+            {
+                "title": selected_title,
+                "sections": ideation.get("outline") or [],
+                "viral_blueprint": ideation.get("viral_blueprint") or manifest.get("viral_blueprint") or {},
+                "editorial_blueprint": ideation.get("editorial_blueprint") or editorial_blueprint,
+            },
+            {
+                "topic": manifest.get("topic") or selected_title,
+                "selected_title": selected_title,
+                "audience": manifest.get("audience") or "大众读者",
+                "direction": manifest.get("direction") or "",
+                "research": load_research(workspace),
+                "style_signals": manifest.get("style_signals") or [],
+                "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+                "content_mode": manifest.get("content_mode") or "tech-balanced",
+                "editorial_blueprint": editorial_blueprint,
+                "author_memory": manifest.get("author_memory") or {},
+            },
+        )
+        write_json(workspace / "ideation.json", ideation)
+    payload = ensure_content_enhancement(workspace, manifest, ideation, selected_title=selected_title, force=True)
+    manifest["writing_persona"] = current_writing_persona(workspace, manifest, ideation)
+    manifest["content_enhancement_path"] = "content-enhancement.json"
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1371,6 +1533,7 @@ def cmd_write(args: argparse.Namespace) -> int:
         outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
     editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+    writing_persona = current_writing_persona(workspace, manifest, ideation)
     outline_meta = normalize_outline_payload(
         outline_meta,
         {
@@ -1384,8 +1547,24 @@ def cmd_write(args: argparse.Namespace) -> int:
             "content_mode": manifest.get("content_mode") or "tech-balanced",
             "editorial_blueprint": editorial_blueprint,
             "author_memory": manifest.get("author_memory") or {},
+            "writing_persona": writing_persona,
         },
     )
+    ideation["outline_meta"] = outline_meta
+    ideation["writing_persona"] = normalize_writing_persona(
+        writing_persona,
+        {
+            "topic": manifest.get("topic") or research.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "article_archetype": (outline_meta.get("viral_blueprint") or {}).get("article_archetype") or "",
+            "author_memory": manifest.get("author_memory") or {},
+        },
+    )
+    write_json(workspace / "ideation.json", ideation)
+    content_enhancement = ensure_content_enhancement(workspace, manifest, ideation, selected_title=selected_title, force=True)
     result = provider.generate_article(
         {
             "topic": manifest.get("topic") or research.get("topic") or selected_title,
@@ -1406,6 +1585,8 @@ def cmd_write(args: argparse.Namespace) -> int:
             "editorial_blueprint": outline_meta.get("editorial_blueprint") or editorial_blueprint,
             "author_memory": manifest.get("author_memory") or {},
             "layout_plan": layout_plan,
+            "writing_persona": ideation.get("writing_persona") or writing_persona,
+            "content_enhancement": content_enhancement,
         }
     )
     body = str(result.payload).strip()
@@ -1431,10 +1612,12 @@ def cmd_write(args: argparse.Namespace) -> int:
             "outline": [item.get("heading", "") for item in (outline_meta.get("sections") or [])],
             "viral_blueprint": outline_meta.get("viral_blueprint") or {},
             "editorial_blueprint": outline_meta.get("editorial_blueprint") or {},
+            "writing_persona": ideation.get("writing_persona") or writing_persona,
             "text_provider": result.provider,
             "text_model": result.model,
             "generation_preflight_path": "generation-preflight.json",
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
+            "content_enhancement_path": "content-enhancement.json",
         }
     )
     write_content_fingerprint_artifact(workspace, selected_title, synced_body or body, manifest, layout_plan=layout_plan)
@@ -1463,6 +1646,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     blueprint = current_viral_blueprint(workspace, manifest)
     layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    content_enhancement = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    writing_persona = current_writing_persona(workspace, manifest)
     provider = active_text_provider()
     if provider.configured():
         result = provider.review_article(
@@ -1484,6 +1669,8 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
                 "author_memory": manifest.get("author_memory") or {},
                 "layout_plan": layout_plan,
+                "writing_persona": writing_persona,
+                "content_enhancement": content_enhancement,
             }
         )
         review_source = result.provider
@@ -1519,6 +1706,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     payload["provider"] = review_source
     payload["model"] = model_name
     payload["generated_at"] = now_iso()
+    write_editorial_anchor_plan(workspace, manifest, title=title, review_report=payload, score_report=read_json(workspace / "score-report.json", default={}) or {})
     write_json(workspace / "review-report.json", payload)
     write_text(workspace / "review-report.md", markdown_review_report(payload))
     manifest["review_report_path"] = "review-report.json"
@@ -1609,6 +1797,8 @@ def cmd_revise(args: argparse.Namespace) -> int:
         body = synced_body
     body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
+    manifest["writing_persona"] = current_writing_persona(workspace, manifest)
+    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     report = read_json(workspace / "score-report.json", default={}) or {}
     if not report:
         threshold = manifest.get("score_threshold") or legacy.DEFAULT_THRESHOLD
@@ -1792,7 +1982,7 @@ def _reset_manifest_progress(manifest: dict[str, Any]) -> None:
             continue
         manifest[key] = "not_started"
     # Reset revision-related state on topic change.
-    for key in ["revision_round", "revision_rounds", "stop_reason", "best_round", "viral_blueprint"]:
+    for key in ["revision_round", "revision_rounds", "stop_reason", "best_round", "viral_blueprint", "editorial_blueprint", "writing_persona", "content_enhancement_path", "humanness_signals"]:
         manifest.pop(key, None)
 
 
@@ -1833,6 +2023,8 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
     selected_title = str(candidate.get("recommended_title") or candidate.get("hot_title") or new_topic).strip()
     source_url = str(candidate.get("source_url") or "").strip()
     source_urls = [source_url] if source_url else []
+    recommended_archetype = str(candidate.get("recommended_archetype") or "").strip()
+    recommended_enhancement_strategy = str(candidate.get("recommended_enhancement_strategy") or "").strip()
 
     previous_topic = str(manifest.get("topic") or "").strip()
     research = read_json(workspace / "research.json", default={}) or {}
@@ -1851,6 +2043,11 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "topic_selected_from": discovery_rel,
             "topic_selected_index": index,
             "topic_selected_at": now_iso(),
+            "article_archetype": recommended_archetype or manifest.get("article_archetype") or "",
+            "recommended_enhancement_strategy": recommended_enhancement_strategy or manifest.get("recommended_enhancement_strategy") or "",
+            "writeability_score": candidate.get("writeability_score"),
+            "evidence_potential": candidate.get("evidence_potential"),
+            "topic_novelty_reason": candidate.get("novelty_reason") or "",
         }
     )
 
@@ -1861,6 +2058,8 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "direction": angle,
             "selected_title": selected_title,
             "updated_at": now_iso(),
+            "recommended_archetype": recommended_archetype,
+            "recommended_enhancement_strategy": recommended_enhancement_strategy,
         }
     )
     write_json(workspace / "ideation.json", ideation)
@@ -2196,6 +2395,7 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
 
 def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str, audience: str, angle: str, requested_title: str = "") -> None:
     ideation = load_ideation(workspace)
+    writing_persona = current_writing_persona(workspace, manifest, ideation)
     if not ideation.get("titles"):
         provider = active_text_provider()
         research = load_research(workspace)
@@ -2212,6 +2412,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                     "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
                     "editorial_blueprint": current_editorial_blueprint(workspace, manifest, ideation),
                     "author_memory": manifest.get("author_memory") or {},
+                    "writing_persona": writing_persona,
                 }
             )
             if isinstance(result.payload, list):
@@ -2242,12 +2443,15 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                         editorial_blueprint=current_editorial_blueprint(workspace, manifest, ideation),
                         recent_titles=manifest.get("recent_article_titles") or [],
                         recent_corpus_summary=manifest.get("recent_corpus_summary") or {},
+                        writing_persona=writing_persona,
                     ),
                     "updated_at": now_iso(),
                     "provider": "local-heuristic",
                     "model": "builtin",
                 }
             )
+    ideation["writing_persona"] = writing_persona
+    manifest["writing_persona"] = writing_persona
     ideation, _ = select_scored_title(workspace, manifest, ideation, topic, audience, angle, requested_title)
     write_json(workspace / "ideation.json", ideation)
 
@@ -2284,6 +2488,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
     ideation = load_ideation(workspace)
     if not ideation.get("titles"):
         default_editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+        writing_persona = current_writing_persona(workspace, manifest, ideation)
         title_result = provider.generate_titles(
             {
                 "topic": topic,
@@ -2296,6 +2501,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
                 "editorial_blueprint": default_editorial_blueprint,
                 "author_memory": manifest.get("author_memory") or {},
+                "writing_persona": writing_persona,
             }
         )
         if isinstance(title_result.payload, list):
@@ -2317,12 +2523,14 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
         )
         write_json(workspace / "ideation.json", ideation)
         manifest["selected_title"] = ideation.get("selected_title") or title
+        manifest["writing_persona"] = writing_persona
         update_stage(manifest, "titles", "title_status")
     title = title or ideation.get("selected_title") or manifest.get("selected_title") or topic
 
     outline_meta = dict(ideation.get("outline_meta") or {})
     if not outline_meta.get("sections"):
         default_editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+        writing_persona = current_writing_persona(workspace, manifest, ideation)
         outline_result = provider.generate_outline(
             {
                 "topic": topic,
@@ -2340,6 +2548,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
                 "editorial_blueprint": default_editorial_blueprint,
                 "author_memory": manifest.get("author_memory") or {},
+                "writing_persona": writing_persona,
             }
         )
         outline_meta = normalize_outline_payload(
@@ -2355,6 +2564,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "content_mode": manifest.get("content_mode") or "tech-balanced",
                 "editorial_blueprint": default_editorial_blueprint,
                 "author_memory": manifest.get("author_memory") or {},
+                "writing_persona": writing_persona,
             },
         )
         if not outline_meta.get("sections"):
@@ -2364,6 +2574,18 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
         ideation["outline_meta"] = outline_meta
         ideation["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
         ideation["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
+        ideation["writing_persona"] = normalize_writing_persona(
+            writing_persona,
+            {
+                "topic": topic,
+                "selected_title": title,
+                "audience": audience,
+                "direction": angle,
+                "content_mode": manifest.get("content_mode") or "tech-balanced",
+                "article_archetype": (outline_meta.get("viral_blueprint") or {}).get("article_archetype") or "",
+                "author_memory": manifest.get("author_memory") or {},
+            },
+        )
         ideation["updated_at"] = now_iso()
         ideation["provider"] = outline_result.provider
         ideation["model"] = outline_result.model
@@ -2371,7 +2593,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
         manifest["outline"] = [item.get("heading", "") for item in outline_meta.get("sections") or []]
         manifest["viral_blueprint"] = outline_meta.get("viral_blueprint") or {}
         manifest["editorial_blueprint"] = outline_meta.get("editorial_blueprint") or {}
+        manifest["writing_persona"] = ideation.get("writing_persona") or writing_persona
         update_stage(manifest, "outline", "outline_status")
+    content_enhancement = ensure_content_enhancement(workspace, manifest, ideation, selected_title=title, force=True)
 
     article_result = provider.generate_article(
         {
@@ -2392,6 +2616,8 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "content_mode": manifest.get("content_mode") or "tech-balanced",
             "editorial_blueprint": outline_meta.get("editorial_blueprint") or current_editorial_blueprint(workspace, manifest, ideation),
             "author_memory": manifest.get("author_memory") or {},
+            "writing_persona": ideation.get("writing_persona") or current_writing_persona(workspace, manifest, ideation),
+            "content_enhancement": content_enhancement,
         }
     )
     body = str(article_result.payload).strip()
@@ -2419,6 +2645,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "text_model": article_result.model,
             "generation_preflight_path": "generation-preflight.json",
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
+            "content_enhancement_path": "content-enhancement.json",
         }
     )
     update_stage(manifest, "draft", "draft_status")
@@ -2436,6 +2663,7 @@ def _import_hosted_article(
 ) -> str:
     manifest = attach_corpus_context(workspace, manifest)
     manifest = attach_author_memory(workspace, manifest)
+    manifest["writing_persona"] = current_writing_persona(workspace, manifest)
     article_path = workspace / "article.md"
     if article_file:
         raw = read_input_file(article_file)
@@ -2450,6 +2678,7 @@ def _import_hosted_article(
     meta, body = split_frontmatter(read_text(article_path))
     title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
     summary = summary_hint or meta.get("summary") or extract_summary(body)
+    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     hardened_body, preflight = harden_generated_article_body(
         workspace,
         manifest,
@@ -2470,6 +2699,7 @@ def _import_hosted_article(
             "text_model": "session",
             "generation_preflight_path": "generation-preflight.json",
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
+            "content_enhancement_path": "content-enhancement.json",
         }
     )
     update_stage(manifest, "draft", "draft_status")
@@ -2481,12 +2711,14 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
     manifest["score_report_path"] = "score-report.json"
     manifest["score_total"] = score_report.get("total_score")
     manifest["score_passed"] = score_report.get("passed")
+    manifest["humanness_signals"] = score_report.get("humanness_signals") or {}
     manifest["stage"] = "score"
     review_payload = read_json(workspace / "review-report.json", default={}) or {}
     # Prefer the structured, real review if present; only fall back to score-derived review when missing.
     if not (isinstance(review_payload, dict) and review_payload.get("viral_analysis")):
         review_payload = build_review_from_score(title, score_report, manifest)
         write_review_report(workspace, manifest, review_payload)
+    write_editorial_anchor_plan(workspace, manifest, title=title, review_report=review_payload, score_report=score_report)
     save_manifest(workspace, manifest)
     return review_payload
 
@@ -2497,6 +2729,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
+    manifest = attach_author_memory(workspace, manifest)
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -2507,6 +2740,8 @@ def cmd_score(args: argparse.Namespace) -> int:
         body = synced_body
     body = legacy.strip_image_directives(body)
     title = legacy.infer_title(manifest, meta, body)
+    manifest["writing_persona"] = current_writing_persona(workspace, manifest)
+    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     threshold = args.threshold or manifest.get("score_threshold")
     review = read_json(workspace / "review-report.json", default={}) or {}
     layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
@@ -2552,6 +2787,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest["score_breakdown"] = report["score_breakdown"]
     manifest["score_total"] = report["total_score"]
     manifest["score_passed"] = report["passed"]
+    manifest["humanness_signals"] = report.get("humanness_signals") or {}
     manifest["score_report_path"] = "score-report.json"
     manifest["score_status"] = "done"
     save_manifest(workspace, manifest)
@@ -2702,6 +2938,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     ideation = load_ideation(workspace)
     if not ideation.get("outline"):
         cmd_outline(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), style_sample=style_sample))
+    cmd_enhance(argparse.Namespace(workspace=str(workspace), title=args.title or load_ideation(workspace).get("selected_title"), style_sample=style_sample, content_mode=manifest.get("content_mode") or "tech-balanced", wechat_header_mode=manifest.get("wechat_header_mode") or "drop-title"))
     if not (workspace / "article.md").exists():
         cmd_write(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), outline_file=None, style_sample=style_sample))
     score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
@@ -2787,6 +3024,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     refreshed = load_ideation(workspace)
     title = args.title or refreshed.get("selected_title") or manifest.get("selected_title") or topic
     _write_hosted_ideation(workspace, manifest, title, args.outline_file)
+    cmd_enhance(argparse.Namespace(workspace=str(workspace), title=title, style_sample=style_sample, content_mode=manifest.get("content_mode") or "tech-balanced", wechat_header_mode=manifest.get("wechat_header_mode") or "drop-title"))
     title = _import_hosted_article(workspace, manifest, args.article_file, title, args.summary, angle, audience)
     save_manifest(workspace, manifest)
     score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
@@ -2905,6 +3143,12 @@ def build_parser() -> argparse.ArgumentParser:
     outline.add_argument("--title")
     outline.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     outline.set_defaults(func=cmd_outline)
+
+    enhance = subparsers.add_parser("enhance", help="在正式写作前补角度、细节、证据和写作人格")
+    enhance.add_argument("--workspace", required=True)
+    enhance.add_argument("--title")
+    enhance.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
+    enhance.set_defaults(func=cmd_enhance)
 
     write = subparsers.add_parser("write", help="基于 research + ideation 产出 article.md 初稿")
     write.add_argument("--workspace", required=True)

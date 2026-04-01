@@ -10,6 +10,10 @@
 - `title-report.json`：标题多维评分与准入结果
 - `title-decision-report.json`：标题五项联评与入选/淘汰原因
 - `title-report.md`：面向人读的标题评分摘要
+- `content-enhancement.json`：写前增强结果（角度、细节、证据、边界、章节硬要求）
+- `content-enhancement.md`：面向人读的写前增强摘要
+- `editorial-anchor-plan.json`：建议人工最后补一句的关键位置清单
+- `editorial-anchor-plan.md`：面向人读的锚点建议
 - `article.md`：当前活跃正文
 - `review-report.json`：编辑评审结果
 - `review-report.md`：面向人读的评审摘要
@@ -67,6 +71,10 @@
 - `content_fingerprint_path`
 - `layout_plan_path`
 - `acceptance_report_path`
+- `writing_persona`
+- `content_enhancement_path`
+- `editorial_anchor_plan_path`
+- `humanness_signals`
 - `publish_intent`
 - `content_mode`
 - `wechat_header_mode`
@@ -99,6 +107,9 @@
 - `passed`
 - `score_breakdown`
 - `quality_gates`
+- `humanness_signals`
+- `humanness_score`
+- `humanness_findings`
 - `interaction_score`
 - `score_profile`
 - `mandatory_revisions`

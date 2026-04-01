@@ -181,6 +181,9 @@ def generate_revision_candidate(
             "corpus_root": manifest.get("corpus_root") or "",
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
             "author_memory": manifest.get("author_memory") or {},
+            "writing_persona": manifest.get("writing_persona") or {},
+            "content_enhancement": legacy.read_json(workspace / "content-enhancement.json", default={}) or {},
+            "humanness_signals": report.get("humanness_signals") or {},
         }
         result = provider.revise_article(context)
         provider_name = result.provider

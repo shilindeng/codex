@@ -137,6 +137,7 @@ python {SKILL_DIR}/scripts/studio.py hosted-run \
 
 系统会自动继续：
 
+- 写前增强（角度、细节、证据、边界、写作人格）
 - 评分
 - 多轮回炉改写
 - 图片规划
