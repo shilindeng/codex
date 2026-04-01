@@ -376,7 +376,7 @@ export async function load_browser_cookies(
   }
 
   const profileDir = process.env.GEMINI_WEB_CHROME_PROFILE_DIR?.trim() || resolveGeminiWebChromeProfileDir();
-  const cookies = await fetch_google_cookies_via_cdp(profileDir, 120_000, verbose);
+  const cookies = await fetch_google_cookies_via_cdp(profileDir, 300_000, verbose);
 
   const filtered: CookieMap = {};
   for (const [k, v] of Object.entries(cookies)) {

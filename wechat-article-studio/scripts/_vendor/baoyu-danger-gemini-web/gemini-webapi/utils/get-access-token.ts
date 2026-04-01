@@ -95,6 +95,7 @@ export async function get_access_token(
   const cachedFile = await read_cookie_file(cookieFilePath);
   const forceLogin = !!(process.env.GEMINI_WEB_LOGIN?.trim() || process.env.GEMINI_WEB_FORCE_LOGIN?.trim());
   const shouldUseChromeFirst = forceLogin || (!cachedFile && !base_cookies['__Secure-1PSID'] && !base_cookies['__Secure-1PSIDTS']);
+  let browserCandidatesLoaded = false;
 
   if (shouldUseChromeFirst) {
     try {
@@ -102,6 +103,7 @@ export async function get_access_token(
       for (const cookies of Object.values(browser)) {
         candidates.push(merge_cookie_maps(extra, cookies));
       }
+      browserCandidatesLoaded = candidates.length > 0;
     } catch (e) {
       if (verbose) logger.warning(`Failed to load cookies via Chrome CDP: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -171,6 +173,9 @@ export async function get_access_token(
     await write_cookie_file(cookies, resolveGeminiWebCookiePath(), 'init').catch(() => {});
     return [token, cookies];
   } catch {
+    if (browserCandidatesLoaded) {
+      throw new AuthError('Failed to initialize client with freshly loaded browser cookies. Please ensure the dedicated Gemini window is fully logged in and has finished跳转到 Gemini 主页面。');
+    }
     if (verbose) logger.debug('Cookie attempts failed. Falling back to Chrome CDP cookie load...');
   }
 
