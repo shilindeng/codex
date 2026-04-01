@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import net from 'node:net';
@@ -109,6 +109,59 @@ async function get_free_port(): Promise<number> {
   });
 }
 
+function cleanup_existing_browser_processes(profileDir: string, verbose: boolean): void {
+  try {
+    if (process.platform === 'win32') {
+      execFileSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          "$p=$env:GEMINI_WEB_PROFILE_DIR; Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe' or name = 'msedge.exe'\" | Where-Object { $_.CommandLine -like \"*$p*\" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+        ],
+        {
+          env: { ...process.env, GEMINI_WEB_PROFILE_DIR: profileDir },
+          stdio: 'ignore',
+          timeout: 10000,
+        },
+      );
+      return;
+    }
+    if (process.platform === 'darwin' || process.platform === 'linux') {
+      execFileSync('pkill', ['-f', profileDir], { stdio: 'ignore', timeout: 10000 });
+    }
+  } catch (e) {
+    if (verbose) logger.debug(`Skipping profile browser cleanup: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+function detect_existing_debug_port(profileDir: string, verbose: boolean): number | null {
+  try {
+    if (process.platform === 'win32') {
+      const raw = execFileSync(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          "$p=$env:GEMINI_WEB_PROFILE_DIR; Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe' or name = 'msedge.exe'\" | Where-Object { $_.CommandLine -like \"*$p*\" -and $_.CommandLine -match '--remote-debugging-port=(\\d+)' } | Select-Object -ExpandProperty CommandLine",
+        ],
+        {
+          env: { ...process.env, GEMINI_WEB_PROFILE_DIR: profileDir },
+          encoding: 'utf-8',
+          timeout: 10000,
+        },
+      ).trim();
+      if (!raw) return null;
+      const match = raw.match(/--remote-debugging-port=(\d+)/);
+      if (match) return parseInt(match[1]!, 10);
+      return null;
+    }
+  } catch (e) {
+    if (verbose) logger.debug(`Skipping existing debug browser detection: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return null;
+}
+
 function find_chrome_executable(): string | null {
   const override = process.env.GEMINI_WEB_CHROME_PATH?.trim();
   if (override && fs.existsSync(override)) return override;
@@ -210,13 +263,29 @@ async function fetch_google_cookies_via_cdp(
   verbose: boolean,
 ): Promise<CookieMap> {
   await mkdir(profileDir, { recursive: true });
-
-  const port = await get_free_port();
-  const chrome = await launch_chrome(profileDir, port);
+  let port = detect_existing_debug_port(profileDir, verbose);
+  let chrome: ChildProcess | null = null;
+  if (!port) {
+    cleanup_existing_browser_processes(profileDir, verbose);
+    port = await get_free_port();
+    chrome = await launch_chrome(profileDir, port);
+  }
 
   let cdp: CdpConnection | null = null;
   try {
-    const wsUrl = await wait_for_chrome_debug_port(port, 30_000);
+    let wsUrl: string;
+    try {
+      wsUrl = await wait_for_chrome_debug_port(port, 60_000);
+    } catch (e) {
+      if (!chrome && port) {
+        cleanup_existing_browser_processes(profileDir, verbose);
+        port = await get_free_port();
+        chrome = await launch_chrome(profileDir, port);
+        wsUrl = await wait_for_chrome_debug_port(port, 60_000);
+      } else {
+        throw e;
+      }
+    }
     cdp = await CdpConnection.connect(wsUrl, 15_000);
 
     const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', {
@@ -234,20 +303,24 @@ async function fetch_google_cookies_via_cdp(
     let last: CookieMap = {};
 
     while (Date.now() - start < timeoutMs) {
-      const { cookies } = await cdp.send<{ cookies: Array<{ name: string; value: string }> }>(
-        'Network.getCookies',
-        { urls: ['https://gemini.google.com/', 'https://accounts.google.com/', 'https://www.google.com/'] },
-        { sessionId, timeoutMs: 10_000 },
-      );
+      try {
+        const { cookies } = await cdp.send<{ cookies: Array<{ name: string; value: string }> }>(
+          'Network.getCookies',
+          { urls: ['https://gemini.google.com/', 'https://accounts.google.com/', 'https://www.google.com/'] },
+          { sessionId, timeoutMs: 20_000 },
+        );
 
-      const m: CookieMap = {};
-      for (const c of cookies) {
-        if (c?.name && typeof c.value === 'string') m[c.name] = c.value;
-      }
+        const m: CookieMap = {};
+        for (const c of cookies) {
+          if (c?.name && typeof c.value === 'string') m[c.name] = c.value;
+        }
 
-      last = m;
-      if (await is_gemini_session_ready(m, verbose)) {
-        return m;
+        last = m;
+        if (await is_gemini_session_ready(m, verbose)) {
+          return m;
+        }
+      } catch (e) {
+        if (verbose) logger.debug(`CDP getCookies retry: ${e instanceof Error ? e.message : String(e)}`);
       }
 
       await sleep(1000);
@@ -262,24 +335,44 @@ async function fetch_google_cookies_via_cdp(
       cdp.close();
     }
 
-    try {
-      chrome.kill('SIGTERM');
-    } catch {}
-    setTimeout(() => {
-      if (!chrome.killed) {
-        try {
-          chrome.kill('SIGKILL');
-        } catch {}
-      }
-    }, 2_000).unref?.();
+    if (chrome) {
+      try {
+        chrome.kill('SIGTERM');
+      } catch {}
+      setTimeout(() => {
+        if (chrome && !chrome.killed) {
+          try {
+            chrome.kill('SIGKILL');
+          } catch {}
+        }
+      }, 2_000).unref?.();
+    }
   }
 }
 
-export async function load_browser_cookies(domain_name: string = '', verbose: boolean = true): Promise<Record<string, CookieMap>> {
-  const force = process.env.GEMINI_WEB_LOGIN?.trim() || process.env.GEMINI_WEB_FORCE_LOGIN?.trim();
+function has_required_session_cookies(cookies: CookieMap | null | undefined): boolean {
+  if (!cookies) return false;
+  return !!(cookies['__Secure-1PSID'] && cookies['__Secure-1PSIDTS']);
+}
+
+async function write_cached_sidts(cookies: CookieMap): Promise<void> {
+  const sid = cookies['__Secure-1PSID'];
+  const sidts = cookies['__Secure-1PSIDTS'];
+  if (!sid || !sidts) return;
+  const dir = path.dirname(resolveGeminiWebCookiePath());
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `.cached_1psidts_${sid}.txt`), sidts, 'utf8');
+}
+
+export async function load_browser_cookies(
+  domain_name: string = '',
+  verbose: boolean = true,
+  force_refresh: boolean = false,
+): Promise<Record<string, CookieMap>> {
+  const force = force_refresh || !!(process.env.GEMINI_WEB_LOGIN?.trim() || process.env.GEMINI_WEB_FORCE_LOGIN?.trim());
   if (!force) {
     const cached = await read_cookie_file();
-    if (cached) return { chrome: cached };
+    if (has_required_session_cookies(cached)) return { chrome: cached };
   }
 
   const profileDir = process.env.GEMINI_WEB_CHROME_PROFILE_DIR?.trim() || resolveGeminiWebChromeProfileDir();
@@ -290,6 +383,7 @@ export async function load_browser_cookies(domain_name: string = '', verbose: bo
     if (typeof v === 'string' && v.length > 0) filtered[k] = v;
   }
 
+  await write_cached_sidts(filtered).catch(() => {});
   await write_cookie_file(filtered, resolveGeminiWebCookiePath(), 'cdp');
   void domain_name;
   return { chrome: filtered };

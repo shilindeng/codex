@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.browser_cookie_sync import import_google_cookies
 
 
 SESSION_STATE_FILE = "session-state.json"
@@ -87,6 +88,34 @@ def explicit_profile_path(env: dict[str, str] | None = None) -> Path | None:
     return _path_if_exists(env.get("GEMINI_WEB_CHROME_PROFILE_DIR") or "")
 
 
+def _cookie_has_required_pair(path: Path | None) -> bool:
+    if not path or not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    cookie_map = payload.get("cookieMap") if isinstance(payload, dict) else {}
+    if not isinstance(cookie_map, dict):
+        return False
+    return bool(cookie_map.get("__Secure-1PSID") and cookie_map.get("__Secure-1PSIDTS"))
+
+
+def sync_system_browser_cookies() -> dict[str, Any]:
+    result = import_google_cookies(shared_cookie_path())
+    if result.get("ok"):
+        save_session_state(
+            {
+                "active_cookie_path": str(shared_cookie_path()),
+                "shared_cookie_path": str(shared_cookie_path()),
+                "profile_dir": str(shared_profile_dir()),
+                "last_source": "system-browser-sync",
+                "sync_error": "",
+            }
+        )
+    return result
+
+
 def _profile_has_state(path: Path | None) -> bool:
     if not path or not path.exists() or not path.is_dir():
         return False
@@ -100,14 +129,14 @@ def has_session_material(env: dict[str, str] | None = None) -> bool:
     env = env or os.environ
     if str(env.get("GEMINI_WEB_COOKIE") or "").strip():
         return True
-    if explicit_cookie_path(env):
+    if _cookie_has_required_pair(explicit_cookie_path(env)):
         return True
     if _profile_has_state(explicit_profile_path(env)):
         return True
     state = load_session_state()
-    if _path_if_exists(str(state.get("active_cookie_path") or "")):
+    if _cookie_has_required_pair(_path_if_exists(str(state.get("active_cookie_path") or ""))):
         return True
-    if shared_cookie_path().exists():
+    if _cookie_has_required_pair(shared_cookie_path()):
         return True
     return _profile_has_state(shared_profile_dir())
 
@@ -124,14 +153,19 @@ def prepare_session_env(base_env: dict[str, str] | None = None) -> tuple[dict[st
     cached_cookie = shared_cookie_path() if shared_cookie_path().exists() else None
     recovery_cookie = _path_if_exists(str(state.get("active_cookie_path") or ""))
     candidates: list[tuple[str, Path]] = []
-    if recovery_cookie:
+    if recovery_cookie and _cookie_has_required_pair(recovery_cookie):
         candidates.append(("shared-recovery", recovery_cookie))
-    if explicit_cookie:
+    if explicit_cookie and _cookie_has_required_pair(explicit_cookie):
         candidates.append(("explicit-cookie", explicit_cookie))
     if inline_cookie:
         candidates.append(("inline-cookie", inline_cookie))
-    if cached_cookie:
+    if cached_cookie and _cookie_has_required_pair(cached_cookie):
         candidates.append(("shared-cache", cached_cookie))
+
+    if not candidates:
+        sync_result = sync_system_browser_cookies()
+        if sync_result.get("ok") and _cookie_has_required_pair(shared_cookie_path()):
+            candidates.append(("system-browser-sync", shared_cookie_path()))
 
     active_source = "profile-only"
     active_cookie = None
@@ -210,6 +244,7 @@ def run_gemini_web_command(
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, Any]]:
     env, info = prepare_session_env(base_env)
     browser_refresh_attempted = False
+    browser_cookie_sync_attempted = False
     for _ in range(2):
         completed = subprocess.run(
             command,
@@ -226,6 +261,14 @@ def run_gemini_web_command(
             return completed, finalize_session_run(env, info, browser_refresh_attempted=browser_refresh_attempted)
         combined = "\n".join(part for part in [completed.stdout or "", completed.stderr or ""] if part).lower()
         if not browser_refresh_attempted and any(marker in combined for marker in AUTH_MARKERS):
+            if not browser_cookie_sync_attempted and not str(info.get("explicit_cookie_path") or "").strip():
+                sync_result = sync_system_browser_cookies()
+                browser_cookie_sync_attempted = True
+                if sync_result.get("ok") and _cookie_has_required_pair(shared_cookie_path()):
+                    env["GEMINI_WEB_COOKIE_PATH"] = str(shared_cookie_path())
+                    info["active_source"] = "system-browser-sync"
+                    info["active_cookie_path"] = str(shared_cookie_path())
+                    continue
             env.pop("GEMINI_WEB_COOKIE_PATH", None)
             env["GEMINI_WEB_LOGIN"] = "1"
             env["GEMINI_WEB_CHROME_PROFILE_DIR"] = str(shared_profile_dir())

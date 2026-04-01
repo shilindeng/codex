@@ -37,6 +37,11 @@ function merge_cookie_maps(...maps: Array<Record<string, string> | null | undefi
   return out;
 }
 
+function has_secure_cookie_pair(cookies: Record<string, string> | null | undefined): boolean {
+  if (!cookies) return false;
+  return !!(cookies['__Secure-1PSID'] && cookies['__Secure-1PSIDTS']);
+}
+
 function read_cached_1psidts_file(dir: string, sid: string): string | null {
   try {
     const p = path.join(dir, `.cached_1psidts_${sid}.txt`);
@@ -109,7 +114,15 @@ export async function get_access_token(
   }
 
   if (cachedFile) {
-    candidates.push(merge_cookie_maps(extra, cachedFile));
+    if (has_secure_cookie_pair(cachedFile)) {
+      candidates.push(merge_cookie_maps(extra, cachedFile));
+    } else if (cachedFile['__Secure-1PSID']) {
+      const sid = cachedFile['__Secure-1PSID'];
+      const sidts = read_cached_1psidts_file(cacheDir, sid);
+      if (sidts) {
+        candidates.push(merge_cookie_maps(extra, cachedFile, { '__Secure-1PSIDTS': sidts }));
+      }
+    }
   }
 
   if (base_cookies['__Secure-1PSID'] && !base_cookies['__Secure-1PSIDTS']) {
@@ -161,7 +174,7 @@ export async function get_access_token(
     if (verbose) logger.debug('Cookie attempts failed. Falling back to Chrome CDP cookie load...');
   }
 
-  const browser = await load_browser_cookies('google.com', verbose);
+  const browser = await load_browser_cookies('google.com', verbose, true);
   let valid = 0;
   for (const cookies of Object.values(browser)) {
     if (cookies['__Secure-1PSID']) valid++;
