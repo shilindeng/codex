@@ -10,10 +10,12 @@ from typing import Any, Iterable
 LAYOUT_STYLE_CHOICES = (
     "auto",
     "clean",
+    "editorial-clean",
     "cards",
     "magazine",
     "business",
     "warm",
+    "warm-journal",
     "poster",
     "tech",
     "blueprint",
@@ -43,6 +45,17 @@ def _hex_to_rgba(value: str, alpha: float) -> str:
 
 def _normalize_key(value: str) -> str:
     return (value or "").strip().lower().replace("_", "-")
+
+
+STYLE_ALIASES = {
+    "editorial-clean": "clean",
+    "warm-journal": "warm",
+}
+
+
+def _normalize_style(value: str) -> str:
+    key = _normalize_key(value)
+    return STYLE_ALIASES.get(key, key)
 
 
 @dataclass(frozen=True)
@@ -377,7 +390,7 @@ def choose_layout_style(
     *,
     rich_blocks: Iterable[str] = (),
 ) -> LayoutDecision:
-    req = _normalize_key(requested or "auto")
+    req = _normalize_style(requested or "auto")
     if req and req != "auto":
         if req not in THEMES:
             return LayoutDecision(style="clean", reason=f"unknown_layout_style={req} -> clean")
@@ -391,7 +404,7 @@ def choose_layout_style(
         return LayoutDecision(style="tech", reason=f"inline_code_count={content_signals.inline_code_count} archetype={archetype or 'none'} -> tech")
 
     layout_plan = manifest.get("layout_plan") or {}
-    planned_style = _normalize_key(str(layout_plan.get("recommended_style") or ""))
+    planned_style = _normalize_style(str(layout_plan.get("recommended_style") or ""))
     planned_modules = layout_plan.get("module_types") or []
     if planned_style in THEMES and len(planned_modules) >= 3:
         return LayoutDecision(style=planned_style, reason=f"layout_plan={planned_style} modules={len(planned_modules)} -> {planned_style}")
@@ -746,6 +759,39 @@ _ALLOWED_TAGS = {
 }
 
 _WX_RICH_ROLES = {
+    "hero-judgment",
+    "hero-scene",
+    "hero-checkpoint",
+    "hero-compare",
+    "hero-kicker",
+    "hero-title",
+    "hero-strap",
+    "hero-meta",
+    "lead-note",
+    "lead-note-text",
+    "evidence-strip",
+    "evidence-strip-label",
+    "boundary-card",
+    "boundary-label",
+    "keyline",
+    "keyline-text",
+    "scene-card",
+    "scene-label",
+    "turning-point-card",
+    "turning-point-label",
+    "pitfall-card",
+    "pitfall-label",
+    "fit-card",
+    "fit-label",
+    "emotion-turn",
+    "emotion-turn-label",
+    "summary-close",
+    "action-close",
+    "migration-close",
+    "soft-close",
+    "decision-close",
+    "section-break",
+    "section-label",
     "steps",
     "steps-item",
     "steps-index",
@@ -954,7 +1000,7 @@ class _Sanitizer(HTMLParser):
             tone = (raw.get("data-wx-tone") or "").strip().lower()
             if tone in {"tip", "takeaway", "warning", "checklist", "mythfact"}:
                 keep["data-wx-tone"] = tone
-        if tag in {"section", "p", "span", "a"}:
+        if tag in {"section", "p", "span", "a", "h2", "h3", "h4"}:
             role = (raw.get("data-wx-role") or "").strip().lower()
             if role in _WX_RICH_ROLES:
                 keep["data-wx-role"] = role
@@ -1033,6 +1079,60 @@ class _Sanitizer(HTMLParser):
         accent_soft_strong = _hex_to_rgba(self._accent, 0.18)
         accent_tint = _hex_to_rgba(self._accent, 0.08)
         outline = f"1px solid {t.line}"
+        if tag == "section" and role in {"hero-judgment", "hero-scene", "hero-checkpoint", "hero-compare"}:
+            bg = t.soft
+            if role == "hero-scene":
+                bg = t.soft2
+            if role == "hero-compare":
+                bg = accent_tint
+            return (
+                f"margin:0 0 24px;padding:18px 18px 20px;border-radius:{t.radius};"
+                f"background:{bg};border:{outline};"
+                "box-shadow:0 12px 28px rgba(15,23,42,0.05);"
+            )
+        if tag == "p" and role == "hero-kicker":
+            return f"margin:0 0 8px;color:{self._accent};font-size:12px;line-height:1.4;font-weight:900;letter-spacing:0.18em;text-transform:uppercase;"
+        if tag == "p" and role == "hero-title":
+            return f"margin:0;color:{t.heading};font-size:28px;line-height:1.26;font-weight:900;letter-spacing:0.04em;"
+        if tag == "p" and role == "hero-strap":
+            return f"margin:12px 0 0;color:{t.text};font-size:16px;line-height:1.9;font-weight:700;"
+        if tag == "p" and role == "hero-meta":
+            return f"margin:10px 0 0;color:{t.muted};font-size:13px;line-height:1.75;"
+        if tag == "section" and role == "lead-note":
+            return f"margin:0 0 22px;padding:14px 16px;border-radius:{t.radius};background:{accent_tint};border:{outline};"
+        if tag == "p" and role == "lead-note-text":
+            return f"margin:0;color:{t.text};font-size:15px;line-height:1.88;font-weight:600;"
+        if tag == "section" and role in {"evidence-strip", "boundary-card", "scene-card", "turning-point-card", "pitfall-card", "fit-card", "emotion-turn"}:
+            bg_map = {
+                "evidence-strip": t.soft2,
+                "boundary-card": "#fff7ed" if t.key != "warm" else "#fff1f2",
+                "scene-card": t.soft,
+                "turning-point-card": accent_tint,
+                "pitfall-card": "#fff7ed",
+                "fit-card": t.soft2,
+                "emotion-turn": t.soft2,
+            }
+            return (
+                f"margin:18px 0 24px;padding:16px 16px 14px;border-radius:{t.radius};"
+                f"background:{bg_map.get(role, t.soft)};border:{outline};"
+                "box-shadow:0 8px 22px rgba(15,23,42,0.04);"
+            )
+        if tag == "p" and role in {"evidence-strip-label", "boundary-label", "scene-label", "turning-point-label", "pitfall-label", "fit-label", "emotion-turn-label"}:
+            return f"margin:0 0 8px;color:{self._accent};font-size:12px;line-height:1.45;font-weight:900;letter-spacing:0.12em;text-transform:uppercase;"
+        if tag == "section" and role in {"summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
+            return (
+                f"margin:30px 0 0;padding:18px 18px 16px;border-radius:{t.radius};"
+                f"background:{t.soft};border:{outline};"
+                "box-shadow:0 10px 26px rgba(15,23,42,0.04);"
+            )
+        if tag == "section" and role == "keyline":
+            return f"margin:20px 0;padding:18px 18px 16px;border-radius:{t.radius};background:{accent_tint};border:{outline};"
+        if tag == "p" and role == "keyline-text":
+            return f"margin:0;color:{t.heading};font-size:18px;line-height:1.86;font-weight:800;letter-spacing:0.02em;"
+        if tag in {"h2", "h3", "h4"} and role == "section-break":
+            return f"margin:42px 0 16px;padding:0 0 10px;border:none;border-bottom:1px solid {t.line};color:{t.heading};font-size:23px;line-height:1.35;font-weight:900;letter-spacing:0.04em;"
+        if tag in {"h2", "h3", "h4"} and role == "section-label":
+            return f"margin:30px 0 12px;padding:0;color:{t.heading};font-size:20px;line-height:1.42;font-weight:800;"
         if tag == "section" and role == "steps":
             return f"margin:22px 0;padding:18px 18px 6px;border-radius:{t.radius};background:{t.soft};border:{outline};"
         if tag == "section" and role == "steps-item":

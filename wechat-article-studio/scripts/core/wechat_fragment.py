@@ -1,8 +1,56 @@
 from __future__ import annotations
 
 import html
+import re
 
 from core.layout import Theme, apply_callout_blocks, sanitize_and_style_for_wechat
+
+
+def _plain_text(value: str) -> str:
+    cleaned = re.sub(r"<[^>]+>", " ", value or "")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def build_header_module_html(
+    *,
+    title: str,
+    summary: str,
+    hero_module: str,
+    archetype: str,
+    lead_text: str = "",
+) -> str:
+    normalized_hero = (hero_module or "hero-judgment").strip().lower()
+    normalized_archetype = (archetype or "commentary").strip().lower()
+    kicker_map = {
+        "commentary": "判断拆解",
+        "tutorial": "实操卡点",
+        "case-study": "案例复盘",
+        "narrative": "场景观察",
+        "comparison": "对比判断",
+    }
+    kicker = kicker_map.get(normalized_archetype, "内容编排")
+    strap = (summary or "").strip()
+    lead = _plain_text(lead_text)
+    if not strap and lead:
+        strap = lead
+    meta = ""
+    if normalized_hero == "hero-checkpoint":
+        meta = "这篇先帮读者看清问题卡点，再进入正文。"
+    elif normalized_hero == "hero-compare":
+        meta = "先把比较对象和判断方向亮出来，再看细节。"
+    elif normalized_hero == "hero-scene":
+        meta = "先给一个可代入的处境，再把判断慢慢托起来。"
+    else:
+        meta = "先把主判断立住，再往下展开证据和边界。"
+    parts = [f'<section class="wx-header wx-hero" data-wx-role="{html.escape(normalized_hero, quote=True)}">']
+    parts.append(f'<p class="wx-hero-kicker" data-wx-role="hero-kicker">{html.escape(kicker)}</p>')
+    parts.append(f'<p class="wx-hero-title" data-wx-role="hero-title">{html.escape(title)}</p>')
+    if strap:
+        parts.append(f'<p class="wx-hero-strap" data-wx-role="hero-strap">{html.escape(strap)}</p>')
+    if meta:
+        parts.append(f'<p class="wx-hero-meta" data-wx-role="hero-meta">{html.escape(meta)}</p>')
+    parts.append("</section>")
+    return "".join(parts)
 
 
 def _title_style(theme: Theme, chosen_style: str) -> str:
@@ -104,22 +152,32 @@ def render_wechat_fragment(
     accent: str,
     chosen_style: str,
     header_mode: str = "keep",
+    hero_module: str = "hero-judgment",
+    layout_archetype: str = "commentary",
+    lead_text: str = "",
 ) -> str:
     """Render a WeChat-compatible HTML fragment with full inline styles."""
     content_html = apply_callout_blocks(content_html)
     styled_body = sanitize_and_style_for_wechat(content_html, theme=theme, accent=accent)
 
     normalized_header_mode = (header_mode or "keep").strip().lower()
-    title_style = _title_style(theme, chosen_style)
-    summary_style = _summary_style(theme, chosen_style)
     outer_style, inner_style, header_shell_style = _container_styles(theme, chosen_style, accent)
-    header_parts: list[str] = []
-    if normalized_header_mode == "keep":
-        header_parts.append(f'<h1 style="{title_style}">{html.escape(title)}</h1>')
-    if normalized_header_mode in {"keep", "drop-title"} and summary.strip():
-        header_parts.append(f'<p style="{summary_style}">{html.escape(summary)}</p>')
     header = ""
-    if header_parts:
+    if normalized_header_mode in {"keep", "drop-title"}:
+        header_html = build_header_module_html(
+            title=title,
+            summary=summary,
+            hero_module=hero_module,
+            archetype=layout_archetype,
+            lead_text=lead_text,
+        )
+        header = sanitize_and_style_for_wechat(header_html, theme=theme, accent=accent)
+    elif normalized_header_mode == "keep":
+        title_style = _title_style(theme, chosen_style)
+        summary_style = _summary_style(theme, chosen_style)
+        header_parts: list[str] = [f'<h1 style="{title_style}">{html.escape(title)}</h1>']
+        if summary.strip():
+            header_parts.append(f'<p style="{summary_style}">{html.escape(summary)}</p>')
         header = f'<section style="{header_shell_style}">' + "".join(header_parts) + "</section>"
     return f'<section style="{outer_style}"><section style="{inner_style}">' + header + styled_body + "</section></section>"
 

@@ -1583,7 +1583,7 @@ def _citation_findings(body: str, manifest: dict[str, Any]) -> dict[str, Any]:
         "inline_citation_count": len(marker_ids),
         "dangling_citations": dangling,
         "reference_count": refs["reference_count"],
-        "citation_policy_passed": len(raw_urls) == 0 and not dangling and (refs["reference_count"] == 0 or len(marker_ids) > 0),
+        "citation_policy_passed": len(raw_urls) == 0 and not dangling,
     }
 
 
@@ -1765,7 +1765,7 @@ def build_heuristic_review(
             "把写前增强准备好的来源材料、场景细节和边界提醒真正写进正文" if enhancement_findings else "",
             "把语气、证据摆法和节奏重新拉回这篇既定的人格" if persona_findings else "",
             "打散固定开头和结尾套路，别再回到一句话结论 + 万能清单" if any("先说结论" in str(item.get("evidence") or "") or "最后给你一个可执行清单" in str(item.get("evidence") or "") for item in ai_smell_findings) else "",
-            "去掉正文裸链接，把引用收敛到关键节点和文末参考资料卡片" if citation_findings.get("raw_url_count", 0) else "",
+            "去掉正文裸链接，把来源自然融进句子里，不要再挂 [1][2] 或文末参考资料尾卡" if citation_findings.get("raw_url_count", 0) else "",
             "重写开头和结尾，避开近期高频套路句与结构" if not similarity_findings.get("similarity_passed", True) else "",
         ]
     )
@@ -2115,7 +2115,7 @@ def _score_credibility(body: str, manifest: dict[str, Any], review: dict[str, An
     citation = _citation_findings(body, manifest)
     refs = _references_summary(manifest)
     source_urls = manifest.get("source_urls") or []
-    evidence_bonus = min(3, citation.get("inline_citation_count", 0))
+    evidence_bonus = min(3, max(citation.get("inline_citation_count", 0), refs.get("reference_count", 0)))
     data_bonus = len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\d+倍|第\d+", body))
     argument_modes = _normalize_list(review.get("viral_analysis", {}).get("argument_diversity"))
     depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
@@ -2130,7 +2130,7 @@ def _score_credibility(body: str, manifest: dict[str, Any], review: dict[str, An
     )
     if citation.get("raw_url_count", 0):
         score = max(0, score - 2)
-    return score, "事实型内容必须经得起回溯，最好通过关键段轻引用和文末参考资料来支撑，而不是在正文堆链接。"
+    return score, "事实型内容必须经得起回溯，正文里不要裸贴链接；系统保留来源记录用于校验和回看。"
 
 
 def _build_quality_gates(
@@ -2267,7 +2267,7 @@ def build_score_report(
             "重写篇章结构和句法节奏，压低模板惩罚。" if not quality_gates["template_penalty_passed"] else "",
             "根据真人感信号补句长落差、段落节奏和自我修正痕迹。" if humanness_score <= 6 else "",
             "重写开头/结尾和标题层级，主动拉开与最近文章的差异。" if not quality_gates["similarity_passed"] else "",
-            "把正文裸链接改成关键节点轻引用，并把完整来源放到文末参考资料卡片。" if not quality_gates["citation_policy_passed"] else "",
+            "把正文裸链接改成自然来源表述，不要再挂 [1][2] 或文末参考资料尾卡。" if not quality_gates["citation_policy_passed"] else "",
             "先把阅读欲望、专业感和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
         ]
         + list(review.get("revision_priorities") or [])

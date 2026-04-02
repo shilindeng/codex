@@ -622,6 +622,8 @@ def normalize_publication_body(title: str, body: str) -> str:
     normalized = body or ""
     # Strip templated gold-quote labels while preserving the actual quote text.
     normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
+    normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
+    normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
 
     # Remove markdown callout reference blocks; the system will render a unified references section.
     normalized = re.sub(
@@ -700,40 +702,27 @@ def apply_reference_policy(workspace: Path, manifest: dict[str, Any], title: str
     payload = build_references_payload(workspace, manifest, body)
     items = payload.get("items") or []
     body_urls = _extract_body_urls(body)
-    body_citation_urls = body_urls[:4]
-    marker_map = {url: f"[{index + 1}]" for index, url in enumerate(body_citation_urls)}
     title_map = {item["url"]: item["title"] for item in items}
 
     def replace_markdown_link(match: re.Match[str]) -> str:
         label = match.group(1).strip()
         url = match.group(2).strip()
-        if url in marker_map:
-            return f"{label} {marker_map[url]}"
         return label or title_map.get(url, _reference_label(url))
 
     normalized_body = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", replace_markdown_link, body)
 
     def replace_raw_url(match: re.Match[str]) -> str:
         url = match.group(0).strip()
-        return marker_map.get(url, title_map.get(url, _reference_label(url)))
+        return title_map.get(url, _reference_label(url))
 
     normalized_body = re.sub(r"https?://[^\s)>\]]+", replace_raw_url, normalized_body)
-    if not re.search(r"\[\d+\]", normalized_body) and items:
-        paragraphs = [block for block in re.split(r"\n\s*\n", normalized_body) if block.strip()]
-        injected = 0
-        rebuilt: list[str] = []
-        for block in paragraphs:
-            candidate = block
-            if injected < min(4, len(items)) and not candidate.lstrip().startswith("#") and legacy.cjk_len(candidate) >= 35:
-                if re.search(r"\d{4}年|\d+(?:\.\d+)?%|官方|研究|报告|数据显示|文档|发布|上线|Stars|release", candidate):
-                    candidate = candidate.rstrip() + f" [{items[injected]['index']}]"
-                    injected += 1
-            rebuilt.append(candidate)
-        normalized_body = "\n\n".join(rebuilt)
+    normalized_body = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized_body)
+    normalized_body = re.sub(r"【\s*\d{1,2}\s*】", "", normalized_body)
+    normalized_body = re.sub(r"\s{2,}", " ", normalized_body)
     findings = {
         "raw_urls_before": len(body_urls),
         "raw_urls_after": len(_extract_body_urls(normalized_body)),
-        "body_citation_count": len(re.findall(r"\[\d+\]", normalized_body)),
+        "body_citation_count": len(re.findall(r"\[\d+\]|【\s*\d{1,2}\s*】", normalized_body)),
         "reference_count": len(items),
         "citation_policy_passed": len(_extract_body_urls(normalized_body)) == 0,
     }

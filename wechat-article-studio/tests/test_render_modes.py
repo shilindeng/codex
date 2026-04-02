@@ -73,6 +73,7 @@ class RenderModeTests(unittest.TestCase):
             self.assertIn("这是一段摘要", wechat_html)
             self.assertNotIn("<h1", wechat_html)
             self.assertIn("<code>OPENAI_API_KEY</code>", preview_html)
+            self.assertIn("wx-hero", preview_html)
 
     def test_strip_leading_h1_is_tolerant(self):
         body = "# 《OpenAI：API-上手》\n\n正文内容"
@@ -104,7 +105,7 @@ class RenderModeTests(unittest.TestCase):
         )
         self.assertEqual(decision.style, "magazine")
 
-    def test_render_appends_reference_cards_without_raw_urls(self):
+    def test_render_keeps_references_internal_but_does_not_append_tail_cards(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / "manifest.json").write_text(
@@ -147,13 +148,10 @@ class RenderModeTests(unittest.TestCase):
             )
             wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
             preview_html = (workspace / "article.html").read_text(encoding="utf-8")
-            self.assertIn("参考资料", wechat_html)
-            self.assertIn("官方文档", wechat_html)
-            self.assertIn("查看原文", wechat_html)
-            self.assertNotIn(">https://example.com/a<", wechat_html)
-            self.assertIn('data-wx-role="reference-card"', preview_html)
-            self.assertIn("display:block;box-sizing:border-box;width:100%", wechat_html)
-            self.assertIn("text-align:center", wechat_html)
+            self.assertNotIn("参考资料", wechat_html)
+            self.assertNotIn("查看原文", wechat_html)
+            self.assertIn("正文内容里有一个判断", wechat_html)
+            self.assertNotIn("[1]", wechat_html)
 
     def test_publication_cleanup_removes_quote_labels_and_manual_reference_block(self):
         body = "\n".join(
@@ -232,7 +230,7 @@ class RenderModeTests(unittest.TestCase):
             wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
             self.assertNotIn("金句 1：", wechat_html)
             self.assertNotIn("提示</strong> 参考资料", wechat_html)
-            self.assertIn("参考资料", wechat_html)
+            self.assertNotIn("参考资料", wechat_html)
 
 
 if __name__ == "__main__":

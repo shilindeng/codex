@@ -23,7 +23,7 @@ from core.layout import (
     sanitize_html_fragment,
 )
 from core.manifest import ensure_workspace, load_manifest, relative_posix, save_manifest, workspace_path
-from core.wechat_fragment import render_wechat_fragment
+from core.wechat_fragment import build_header_module_html, render_wechat_fragment
 
 
 _TECH_MASK_PREFIX = "__WXMASK"
@@ -131,6 +131,8 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str
 def normalize_publication_markdown(title: str, body: str) -> str:
     normalized = body or ""
     normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
+    normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
+    normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
     normalized = re.sub(
         r"(?ms)^\s*>\s*\[!(?:TIP|NOTE)\]\s*(?:参考资料|参考来源|参考与延伸).*?(?=^\s*(?:#|$)|\Z)",
         "",
@@ -173,10 +175,6 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     content_html, rich_blocks = enhance_content_html(content_html, manifest)
 
-    reference_cards_html = build_reference_cards_html(workspace, manifest)
-    if reference_cards_html:
-        content_html = content_html + "\n" + reference_cards_html
-
     signals = analyze_content_signals(content_source if fmt == "md" else content_html, fmt)
     layout_style_arg = getattr(args, "layout_style", "auto")
     layout_decision = choose_layout_style(str(layout_style_arg), signals, manifest, rich_blocks=rich_blocks)
@@ -196,6 +194,16 @@ def cmd_render(args: argparse.Namespace) -> int:
     safe_preview_html = sanitize_html_fragment(preview_html)
     summary_source = body if fmt == "md" else plain_text_from_html(safe_preview_html)
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(summary_source)
+    layout_plan = manifest.get("layout_plan") or {}
+    hero_module = str(layout_plan.get("hero_module") or "hero-judgment")
+    layout_archetype = str(layout_plan.get("layout_archetype") or (manifest.get("viral_blueprint") or {}).get("article_archetype") or "commentary")
+    lead_text = ""
+    for block in re.split(r"\n\s*\n", body):
+        candidate = block.strip()
+        if not candidate or candidate.startswith("#"):
+            continue
+        lead_text = candidate
+        break
 
     skill_dir = Path(__file__).resolve().parents[2]
     assets_dir = skill_dir / "assets"
@@ -205,13 +213,20 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     theme_class = f"wx-theme-{chosen_style}"
     article_style = f"--accent:{accent_decision.accent};"
+    header_html = build_header_module_html(
+        title=title,
+        summary=summary,
+        hero_module=hero_module,
+        archetype=layout_archetype,
+        lead_text=lead_text,
+    )
 
     rendered = (
         template.replace("{{title}}", html.escape(title))
-        .replace("{{summary}}", html.escape(summary))
         .replace("{{style}}", themed_css)
         .replace("{{theme_class}}", theme_class)
         .replace("{{article_style}}", article_style)
+        .replace("{{header}}", textwrap.indent(header_html, "    ").strip())
         .replace("{{content}}", textwrap.indent(safe_preview_html, "      ").strip())
     )
 
@@ -228,6 +243,9 @@ def cmd_render(args: argparse.Namespace) -> int:
         accent=accent_decision.accent,
         chosen_style=chosen_style,
         header_mode=wechat_header_mode,
+        hero_module=hero_module,
+        layout_archetype=layout_archetype,
+        lead_text=lead_text,
     )
 
     wechat_output = workspace / (Path(output_path.name).stem + ".wechat.html")

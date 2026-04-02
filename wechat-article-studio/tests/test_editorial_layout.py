@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 from core.editorial import enhance_content_html  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style, markdown_to_html, sanitize_html_fragment  # noqa: E402
+from core.layout_plan import build_layout_plan  # noqa: E402
 from core.render import cmd_render  # noqa: E402
 
 
@@ -165,6 +166,45 @@ class EditorialLayoutTests(unittest.TestCase):
             self.assertNotIn("data-wx-role", wechat_html)
             self.assertEqual(manifest.get("layout_style"), "tech")
             self.assertEqual(manifest.get("layout_rich_blocks"), ["steps"])
+
+    def test_layout_plan_drives_heading_roles_and_closing_module(self):
+        md = "\n".join(
+            [
+                "导语第一段。",
+                "",
+                "## 大家真正误判了什么",
+                "",
+                "这里是第一节。",
+                "",
+                "## 真正拉开差距的分水岭",
+                "",
+                "这里是第二节。",
+                "",
+                "## 最后的判断",
+                "",
+                "这里是结尾。",
+            ]
+        )
+        html = markdown_to_html(md)
+        plan = build_layout_plan(
+            "测试标题",
+            "摘要",
+            {
+                "sections": [
+                    {"heading": "大家真正误判了什么", "goal": "先拆误区", "evidence_need": "案例和误判"},
+                    {"heading": "真正拉开差距的分水岭", "goal": "展开证据和判断", "evidence_need": "数据和事实"},
+                    {"heading": "最后的判断", "goal": "收束判断", "evidence_need": "边界"},
+                ],
+                "viral_blueprint": {"article_archetype": "commentary"},
+            },
+            {"viral_blueprint": {"article_archetype": "commentary"}},
+        )
+        enhanced, rich_blocks = enhance_content_html(html, {"layout_plan": plan})
+        preview = sanitize_html_fragment(enhanced)
+        self.assertIn('data-wx-role="lead-note"', preview)
+        self.assertIn('data-wx-role="section-break"', preview)
+        self.assertIn('data-wx-role="summary-close"', preview)
+        self.assertIn("summary-close", rich_blocks)
 
 
 if __name__ == "__main__":

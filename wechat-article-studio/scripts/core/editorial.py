@@ -244,6 +244,141 @@ def _render_stats(stats: list[tuple[str, str]]) -> str:
     return "".join(parts)
 
 
+def _add_role_attr(block: str, role: str) -> str:
+    if not block or not role:
+        return block
+    if 'data-wx-role="' in block:
+        return re.sub(r'data-wx-role="[^"]+"', f'data-wx-role="{html.escape(role, quote=True)}"', block, count=1)
+    return re.sub(r"(?is)^<([a-z0-9]+)\b", lambda m: f'<{m.group(1)} data-wx-role="{html.escape(role, quote=True)}"', block, count=1)
+
+
+def _split_sections_from_blocks(blocks: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    intro_blocks: list[str] = []
+    sections: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for block in blocks:
+        tag = _top_tag(block)
+        if tag in {"h2", "h3", "h4"}:
+            current = {
+                "heading_block": block,
+                "heading_text": _strip_tags(_inner_html(block)),
+                "content_blocks": [],
+            }
+            sections.append(current)
+            continue
+        if current is None:
+            intro_blocks.append(block)
+        else:
+            current["content_blocks"].append(block)
+    return intro_blocks, sections
+
+
+def _flatten_sections(intro_blocks: list[str], sections: list[dict[str, Any]]) -> list[str]:
+    parts: list[str] = []
+    parts.extend(block for block in intro_blocks if str(block).strip())
+    for section in sections:
+        if section.get("heading_block"):
+            parts.append(str(section["heading_block"]))
+        parts.extend(str(block) for block in (section.get("content_blocks") or []) if str(block).strip())
+    return parts
+
+
+def _wrap_module(role: str, blocks: list[str], *, label: str = "") -> list[str]:
+    content = "".join(blocks).strip()
+    if not content:
+        return blocks
+    parts = [f'<section data-wx-role="{role}">']
+    label_role_map = {
+        "evidence-strip": "evidence-strip-label",
+        "boundary-card": "boundary-label",
+        "scene-card": "scene-label",
+        "turning-point-card": "turning-point-label",
+        "pitfall-card": "pitfall-label",
+        "fit-card": "fit-label",
+        "emotion-turn": "emotion-turn-label",
+    }
+    label_role = label_role_map.get(role)
+    if label and label_role:
+        parts.append(f'<p data-wx-role="{label_role}">{html.escape(label)}</p>')
+    parts.append(content)
+    parts.append("</section>")
+    return ["".join(parts)]
+
+
+def _render_keyline(blocks: list[str]) -> list[str]:
+    for index, block in enumerate(blocks):
+        if _top_tag(block) == "p":
+            text = _strip_tags(_inner_html(block))
+            if text:
+                keyline = (
+                    '<section data-wx-role="keyline">'
+                    f'<p data-wx-role="keyline-text">{html.escape(text)}</p>'
+                    "</section>"
+                )
+                return [keyline] + [item for j, item in enumerate(blocks) if j != index]
+    return _wrap_module("keyline", blocks)
+
+
+def _apply_layout_plan(enhanced_blocks: list[str], manifest: dict[str, Any] | None = None) -> list[str]:
+    manifest = manifest or {}
+    layout_plan = manifest.get("layout_plan") or {}
+    section_modules = list(layout_plan.get("section_modules") or layout_plan.get("section_plans") or [])
+    if not section_modules:
+        return enhanced_blocks
+
+    intro_blocks, sections = _split_sections_from_blocks(enhanced_blocks)
+    if not sections:
+        return enhanced_blocks
+
+    if intro_blocks:
+        first_plan = section_modules[0] if section_modules else {}
+        if str(first_plan.get("module_type") or "") == "lead-note":
+            for index, block in enumerate(intro_blocks):
+                if _top_tag(block) == "p":
+                    text = _strip_tags(_inner_html(block))
+                    if text:
+                        intro_blocks[index] = (
+                            '<section data-wx-role="lead-note">'
+                            f'<p data-wx-role="lead-note-text">{html.escape(text)}</p>'
+                            "</section>"
+                        )
+                        break
+
+    label_text_map = {
+        "evidence-strip": "事实 / 依据",
+        "boundary-card": "边界 / 误判",
+        "scene-card": "场景片段",
+        "turning-point-card": "关键转折",
+        "pitfall-card": "易错点",
+        "fit-card": "适用场景",
+        "emotion-turn": "情绪转折",
+    }
+
+    for index, section in enumerate(sections):
+        plan = section_modules[index] if index < len(section_modules) else {}
+        heading_role = str(plan.get("heading_role") or "")
+        if heading_role and section.get("heading_block"):
+            section["heading_block"] = _add_role_attr(str(section["heading_block"]), heading_role)
+        module_type = str(plan.get("module_type") or "")
+        content_blocks = list(section.get("content_blocks") or [])
+        if not content_blocks:
+            continue
+        if module_type == "keyline":
+            section["content_blocks"] = _render_keyline(content_blocks)
+        elif module_type in {"evidence-strip", "boundary-card", "scene-card", "turning-point-card", "pitfall-card", "fit-card", "emotion-turn", "summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
+            section["content_blocks"] = _wrap_module(module_type, content_blocks, label=label_text_map.get(module_type, ""))
+        elif module_type == "quote-card":
+            if not any('data-wx-role="quote-card"' in block for block in content_blocks):
+                section["content_blocks"] = _render_keyline(content_blocks)
+        elif module_type == "compare-grid":
+            if not any('data-wx-role="compare"' in block for block in content_blocks):
+                section["content_blocks"] = _wrap_module("fit-card", content_blocks, label="比较维度")
+        elif module_type == "step-stack":
+            if not any('data-wx-role="steps"' in block for block in content_blocks):
+                section["content_blocks"] = _wrap_module("pitfall-card", content_blocks, label="步骤说明")
+    return _flatten_sections(intro_blocks, sections)
+
+
 def _dialogue_from_blocks(blocks: list[str], start: int) -> tuple[str, int] | None:
     entries: list[tuple[str, str]] = []
     cursor = start
@@ -355,5 +490,14 @@ def enhance_content_html(raw_html: str, manifest: dict[str, Any] | None = None) 
         enhanced.append(block)
         cursor += 1
 
+    enhanced = _apply_layout_plan(enhanced, manifest)
     unique_used = list(dict.fromkeys(used))
-    return "\n".join(enhanced), unique_used
+    section_modules = list(((manifest or {}).get("layout_plan") or {}).get("section_modules") or [])
+    unique_used.extend(
+        [
+            str(item.get("module_type") or "")
+            for item in section_modules
+            if str(item.get("module_type") or "") and str(item.get("module_type") or "") not in unique_used
+        ]
+    )
+    return "\n".join(block for block in enhanced if str(block).strip()), unique_used

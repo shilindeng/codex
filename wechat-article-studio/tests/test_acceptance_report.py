@@ -18,7 +18,7 @@ class AcceptanceReportTests(unittest.TestCase):
     def test_acceptance_report_passes_for_balanced_article(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            (workspace / "article.wechat.html").write_text("<section><p>摘要</p><h2>参考资料</h2></section>", encoding="utf-8")
+            (workspace / "article.wechat.html").write_text("<section><p>摘要</p><p>正文片段</p></section>", encoding="utf-8")
             (workspace / "references.json").write_text(
                 json.dumps({"items": [{"index": 1, "url": "https://example.com", "title": "官方文档"}]}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -47,7 +47,7 @@ class AcceptanceReportTests(unittest.TestCase):
                 [
                     "那天会议室里，大家第一次认真讨论 AI 要替团队扛什么结果。",
                     "真正的问题不是会不会用，而是先把什么结果讲清楚。",
-                    "一份官方文档已经把边界写得很明白 [1]。",
+                    "一份官方文档已经把边界写得很明白。",
                     "但如果忽略责任归属，再好的工具也会被用成热闹。",
                 ]
             )
