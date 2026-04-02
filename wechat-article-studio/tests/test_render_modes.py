@@ -146,10 +146,14 @@ class RenderModeTests(unittest.TestCase):
                 )
             )
             wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
+            preview_html = (workspace / "article.html").read_text(encoding="utf-8")
             self.assertIn("参考资料", wechat_html)
             self.assertIn("官方文档", wechat_html)
             self.assertIn("查看原文", wechat_html)
             self.assertNotIn(">https://example.com/a<", wechat_html)
+            self.assertIn('data-wx-role="reference-card"', preview_html)
+            self.assertIn("display:block;box-sizing:border-box;width:100%", wechat_html)
+            self.assertIn("text-align:center", wechat_html)
 
     def test_publication_cleanup_removes_quote_labels_and_manual_reference_block(self):
         body = "\n".join(

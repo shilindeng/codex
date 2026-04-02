@@ -891,12 +891,14 @@ def ensure_content_enhancement(
     outline_meta = dict(ideation.get("outline_meta") or {})
     title = selected_title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
     research = load_research(workspace)
+    evidence_report = read_json(workspace / "evidence-report.json", default={}) or {}
     persona = current_writing_persona(workspace, manifest, ideation)
     payload = build_content_enhancement(
         title=title,
         outline_meta=outline_meta or {"sections": ideation.get("outline") or []},
         manifest=manifest,
         research=research,
+        evidence_report=evidence_report,
         author_memory=manifest.get("author_memory") or {},
         writing_persona=persona,
     )
@@ -936,11 +938,14 @@ def build_generation_preflight_report(
     body: str,
     manifest: dict[str, Any],
     outline_meta: dict[str, Any] | None = None,
+    content_enhancement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blueprint = dict((outline_meta or {}).get("viral_blueprint") or manifest.get("viral_blueprint") or {})
     depth = generation_depth_signals(body, blueprint)
     ai_smell = generation_ai_smell_findings(body, manifest)
     template_findings = generation_template_findings(title, body, manifest)
+    enhancement = content_enhancement or manifest.get("content_enhancement") or {}
+    section_enhancements = list(enhancement.get("section_enhancements") or []) if isinstance(enhancement, dict) else []
     missing_elements: list[str] = []
     if depth.get("scene_paragraph_count", 0) < 1:
         missing_elements.append("开头缺少具体场景、动作或瞬间。")
@@ -950,6 +955,13 @@ def build_generation_preflight_report(
         missing_elements.append("全文缺少反方、误判或适用边界。")
     if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4:
         missing_elements.append("缺少真正展开的分析段，段落太碎。")
+    if section_enhancements:
+        if depth.get("evidence_paragraph_count", 0) < 1 and any(item.get("support_quotes") or item.get("support_sources") for item in section_enhancements):
+            missing_elements.append("写前增强已经准备了来源材料，但正文还没把证据真正写进去。")
+        if depth.get("scene_paragraph_count", 0) < 1 and any(item.get("detail_anchors") for item in section_enhancements):
+            missing_elements.append("写前增强已经规划了场景细节，但首屏还没真正落下现场。")
+        if depth.get("counterpoint_paragraph_count", 0) < 1 and any(item.get("counterpoint_targets") for item in section_enhancements):
+            missing_elements.append("写前增强已经给了边界提醒，但正文还没把反方或适用边界写进去。")
 
     severe_types = {"author_phrase", "author_starter", "repeated_starter", "repeated_sentence_opener", "heading_monotony", "outline_like"}
     severe_findings = [item for item in ai_smell if str(item.get("type") or "") in severe_types]
@@ -969,6 +981,16 @@ def build_generation_preflight_report(
             "补一处案例、数据或事实支撑。" if depth.get("evidence_paragraph_count", 0) < 1 else "",
             "补一处反方、误判或适用边界。" if depth.get("counterpoint_paragraph_count", 0) < 1 else "",
             "把卡片段落合并成至少一段真正展开的分析。" if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4 else "",
+            (
+                f"优先把这一条来源材料写进正文：{((section_enhancements[0].get('support_quotes') or [{}])[0].get('text') or (section_enhancements[0].get('support_sources') or [{}])[0].get('title') or '')}"
+                if section_enhancements and (section_enhancements[0].get("support_quotes") or section_enhancements[0].get("support_sources")) and depth.get("evidence_paragraph_count", 0) < 1
+                else ""
+            ),
+            (
+                f"优先把这一节的现场写出来：{(section_enhancements[0].get('detail_anchors') or [''])[0]}"
+                if section_enhancements and section_enhancements[0].get("detail_anchors") and depth.get("scene_paragraph_count", 0) < 1
+                else ""
+            ),
         ]
         + [f"删掉作者明确避开的句式：{item.get('pattern')}" for item in ai_smell if str(item.get("type") or "") in {"author_phrase", "author_starter"}]
     )
@@ -1014,7 +1036,10 @@ def harden_generated_article_body(
     outline_meta: dict[str, Any] | None = None,
     allow_model_repair: bool = True,
 ) -> tuple[str, dict[str, Any]]:
-    initial_report = build_generation_preflight_report(title, body, manifest, outline_meta)
+    enhancement = load_content_enhancement(workspace)
+    if enhancement:
+        manifest["content_enhancement"] = enhancement
+    initial_report = build_generation_preflight_report(title, body, manifest, outline_meta, content_enhancement=enhancement)
     final_body = body.strip()
     actions: list[str] = []
     final_report = initial_report
@@ -1068,7 +1093,7 @@ def harden_generated_article_body(
                 if revised:
                     final_body = revised
                     actions.append("模型预修：先处理生成阶段的模板风险")
-        final_report = build_generation_preflight_report(title, final_body, manifest, outline_meta)
+        final_report = build_generation_preflight_report(title, final_body, manifest, outline_meta, content_enhancement=enhancement)
     report = {
         "title": title,
         "generated_at": now_iso(),
@@ -1565,6 +1590,7 @@ def cmd_write(args: argparse.Namespace) -> int:
     )
     write_json(workspace / "ideation.json", ideation)
     content_enhancement = ensure_content_enhancement(workspace, manifest, ideation, selected_title=selected_title, force=True)
+    manifest["content_enhancement"] = content_enhancement
     result = provider.generate_article(
         {
             "topic": manifest.get("topic") or research.get("topic") or selected_title,
@@ -1647,6 +1673,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     blueprint = current_viral_blueprint(workspace, manifest)
     layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
     content_enhancement = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    manifest["content_enhancement"] = content_enhancement
     writing_persona = current_writing_persona(workspace, manifest)
     provider = active_text_provider()
     if provider.configured():
@@ -1798,7 +1825,7 @@ def cmd_revise(args: argparse.Namespace) -> int:
     body = legacy.strip_image_directives(body)
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     manifest["writing_persona"] = current_writing_persona(workspace, manifest)
-    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    manifest["content_enhancement"] = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     report = read_json(workspace / "score-report.json", default={}) or {}
     if not report:
         threshold = manifest.get("score_threshold") or legacy.DEFAULT_THRESHOLD
@@ -2678,7 +2705,7 @@ def _import_hosted_article(
     meta, body = split_frontmatter(read_text(article_path))
     title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
     summary = summary_hint or meta.get("summary") or extract_summary(body)
-    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=True)
     hardened_body, preflight = harden_generated_article_body(
         workspace,
         manifest,
@@ -2686,7 +2713,7 @@ def _import_hosted_article(
         summary,
         strip_leading_h1(body, title),
         outline_meta=load_ideation(workspace).get("outline_meta") or {},
-        allow_model_repair=False,
+        allow_model_repair=True,
     )
     write_text(article_path, join_frontmatter({"title": title, "summary": summary}, hardened_body))
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
@@ -2741,7 +2768,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     body = legacy.strip_image_directives(body)
     title = legacy.infer_title(manifest, meta, body)
     manifest["writing_persona"] = current_writing_persona(workspace, manifest)
-    ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    manifest["content_enhancement"] = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     threshold = args.threshold or manifest.get("score_threshold")
     review = read_json(workspace / "review-report.json", default={}) or {}
     layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}

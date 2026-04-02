@@ -109,13 +109,24 @@ class EnhancementAndPersonaTests(unittest.TestCase):
                 ],
             },
             manifest={"topic": "RAG 实战指南"},
-            research={"evidence_items": ["GitHub 官方示例", "一次真实项目复盘"]},
+            research={
+                "sources": [
+                    {"title": "GitHub 官方示例", "url": "https://example.com/a", "note": "官方"},
+                    {"title": "生产环境复盘", "url": "https://example.com/b", "note": "案例"},
+                ],
+                "evidence_items": [
+                    {"page_title": "GitHub 官方示例", "sentence": "示例里第一步不是调参，而是先把数据入口理顺。", "url": "https://example.com/a"},
+                    {"page_title": "生产环境复盘", "sentence": "一次真实项目里，团队卡住的并不是模型，而是同步链路。", "url": "https://example.com/b"},
+                ],
+            },
             author_memory={"example_snippets": [{"slot": "opening", "text": "我第一次上线时，问题并不在模型。"}]},
             writing_persona=persona,
         )
         self.assertEqual(payload.get("strategy_key"), "density-strengthening")
         self.assertTrue(payload.get("section_enhancements"))
         self.assertTrue(payload["section_enhancements"][0].get("must_include"))
+        self.assertTrue(payload["section_enhancements"][0].get("support_quotes"))
+        self.assertTrue(payload.get("shared_materials", {}).get("source_cards"))
 
     def test_cmd_enhance_writes_artifacts_and_persona(self):
         with tempfile.TemporaryDirectory() as tmp:

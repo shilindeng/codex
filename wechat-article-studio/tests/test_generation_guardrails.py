@@ -50,6 +50,35 @@ class GenerationGuardrailTests(unittest.TestCase):
         self.assertIn("repeated_starter", severe_types)
         self.assertIn("author_phrase", severe_types)
 
+    def test_generation_preflight_uses_content_enhancement_material_hints(self):
+        manifest = {
+            "audience": "大众读者",
+            "direction": "",
+            "source_urls": [],
+            "content_enhancement": {
+                "section_enhancements": [
+                    {
+                        "support_quotes": [{"text": "一次真实案例显示，团队卡住的不是模型，而是责任边界。"}],
+                        "support_sources": [{"title": "官方案例", "url": "https://example.com/a"}],
+                        "detail_anchors": ["补一个会议室里的瞬间。"],
+                        "counterpoint_targets": ["补一句适用边界。"],
+                    }
+                ]
+            },
+        }
+        body = "\n\n".join(
+            [
+                "首先，我们来看看这件事。",
+                "",
+                "其次，这确实值得讨论。",
+                "",
+                "最后，综上所述，事情大概就是这样。",
+            ]
+        )
+        report = build_generation_preflight_report("测试标题", body, manifest, {})
+        self.assertTrue(any("来源材料" in item for item in report.get("missing_elements") or []))
+        self.assertTrue(any("优先把这一条来源材料写进正文" in item for item in report.get("rewrite_focus") or []))
+
     def test_harden_generated_article_body_runs_local_pre_fix(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

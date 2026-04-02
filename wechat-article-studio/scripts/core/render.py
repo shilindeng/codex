@@ -103,20 +103,28 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str
     items = payload.get("items") or []
     if not items:
         return ""
-    cards: list[str] = ['<h2>参考资料</h2>']
+    cards: list[str] = ['<section data-wx-role="reference-list">', '<h2>参考资料</h2>']
     for item in items:
         index = int(item.get("index") or 0)
         title = html.escape(str(item.get("title") or "参考资料").strip())
         domain = html.escape(str(item.get("domain") or urlparse(str(item.get("url") or "")).netloc.replace("www.", "")).strip())
         note = html.escape(str(item.get("note") or "").strip())
         url = html.escape(str(item.get("url") or "").strip(), quote=True)
+        meta_html = domain
+        if note:
+            meta_html += f'<span data-wx-role="reference-dot">·</span>{note}'
+        card_parts = [
+            '<section data-wx-role="reference-card">',
+            f'<p data-wx-role="reference-title"><span data-wx-role="reference-index">[{index}]</span>{title}</p>',
+            f'<p data-wx-role="reference-meta">{meta_html}</p>',
+        ]
+        if url:
+            card_parts.append(f'<a data-wx-role="reference-link" href="{url}">查看原文</a>')
+        card_parts.append("</section>")
         cards.append(
-            '<blockquote data-wx-tone="tip">'
-            f'<p><strong>[{index}]</strong> {title}</p>'
-            f'<p>{domain}' + (f" · {note}" if note else "") + '</p>'
-            + (f'<p><a href="{url}">查看原文</a></p>' if url else "")
-            + '</blockquote>'
+            "".join(card_parts)
         )
+    cards.append("</section>")
     return "\n".join(cards)
 
 

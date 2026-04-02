@@ -1087,6 +1087,11 @@ def _author_memory(manifest: dict[str, Any]) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _content_enhancement(manifest: dict[str, Any]) -> dict[str, Any]:
+    payload = manifest.get("content_enhancement") or {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _contains_scene_signal(paragraph: str) -> bool:
     value = _clean_block_text(paragraph)
     if not value:
@@ -1206,6 +1211,40 @@ def _humanness_score(signals: dict[str, Any], persona: dict[str, Any] | None = N
     if persona_name == "cold-analyst" and float(signals.get("adverb_density") or 0) <= 0.035:
         score += 1
     return max(0, min(score, 10)), findings[:6]
+
+
+def _persona_alignment_findings(body: str, depth: dict[str, Any], persona: dict[str, Any]) -> list[str]:
+    persona_name = str((persona or {}).get("name") or "").strip()
+    findings: list[str] = []
+    if not persona_name:
+        return findings
+    if persona_name == "cold-analyst":
+        if any(word in body for word in ["DNA动了", "杀疯了", "遥遥领先", "卷不动", "格局打开"]):
+            findings.append("当前写法偏离了冷静研究员的人格，网络腔过重。")
+    elif persona_name == "warm-editor":
+        if depth.get("scene_paragraph_count", 0) < 1:
+            findings.append("当前写法偏离了温和编辑的人格，首屏缺少具体处境。")
+    elif persona_name == "sharp-journalist":
+        if depth.get("long_paragraph_count", 0) >= 3:
+            findings.append("当前写法偏离了锐评记者的人格，段落过长不够利落。")
+    elif persona_name == "industry-observer":
+        if depth.get("evidence_paragraph_count", 0) < 1:
+            findings.append("当前写法偏离了行业观察者的人格，关键判断还缺事实托底。")
+    return findings
+
+
+def _enhancement_alignment_findings(depth: dict[str, Any], enhancement: dict[str, Any]) -> list[str]:
+    if not enhancement:
+        return []
+    findings: list[str] = []
+    sections = list(enhancement.get("section_enhancements") or [])
+    if sections and depth.get("evidence_paragraph_count", 0) < 1 and any(item.get("support_quotes") or item.get("support_sources") for item in sections):
+        findings.append("写前准备好的来源材料还没真正落进正文。")
+    if sections and depth.get("scene_paragraph_count", 0) < 1 and any(item.get("detail_anchors") for item in sections):
+        findings.append("写前规划的场景细节还没在首屏落下来。")
+    if sections and depth.get("counterpoint_paragraph_count", 0) < 1 and any(item.get("counterpoint_targets") for item in sections):
+        findings.append("写前规划的反方或边界提醒还没被正文消费。")
+    return findings
 
 
 def _ai_smell_gate_hits(findings: list[dict[str, Any]]) -> int:
@@ -1643,6 +1682,8 @@ def build_heuristic_review(
     )
     humanness_signals = build_humanness_signals(body, manifest, {"depth_signals": depth_signals})
     humanness_score, humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
+    enhancement_findings = _enhancement_alignment_findings(depth_signals, _content_enhancement(manifest))
+    persona_findings = _persona_alignment_findings(body, depth_signals, manifest.get("writing_persona") or {})
     interaction_design = _interaction_design(body, blueprint, signature_lines)
     similarity_findings = _similarity_findings(title, body, manifest)
     citation_findings = _citation_findings(body, manifest)
@@ -1692,6 +1733,14 @@ def build_heuristic_review(
         issues.append("真人感还不够稳，句长、段落或锚点分布仍然偏齐。")
     else:
         strengths.append("正文在句长、段落和锚点上更接近真人写作节奏。")
+    if enhancement_findings:
+        issues.append("写前增强准备好的材料还没有被正文充分消费。")
+    else:
+        strengths.append("写前增强给出的角度、证据和边界基本被正文接住了。")
+    if persona_findings:
+        issues.append("正文语气和节奏还没有完全贴住这篇既定的人格。")
+    elif manifest.get("writing_persona"):
+        strengths.append("正文语气和节奏基本贴住了既定写作人格。")
     if depth_signals.get("repeated_starter_count", 0) >= 3:
         issues.append("段落起手反复撞在同一类句式上，读者很容易闻到 AI 味。")
     if similarity_findings.get("max_similarity", 0) > 0.42:
@@ -1713,6 +1762,8 @@ def build_heuristic_review(
             "补反方、误判或适用边界，别把文章写成单向宣讲" if depth_signals.get("counterpoint_paragraph_count", 0) < 1 else "",
             "重写段落节奏，至少保留一两段真正展开的分析段" if depth_signals.get("outline_like") else "",
             "清理模板连接词，继续去 AI 味" if ai_smell_findings else "",
+            "把写前增强准备好的来源材料、场景细节和边界提醒真正写进正文" if enhancement_findings else "",
+            "把语气、证据摆法和节奏重新拉回这篇既定的人格" if persona_findings else "",
             "打散固定开头和结尾套路，别再回到一句话结论 + 万能清单" if any("先说结论" in str(item.get("evidence") or "") or "最后给你一个可执行清单" in str(item.get("evidence") or "") for item in ai_smell_findings) else "",
             "去掉正文裸链接，把引用收敛到关键节点和文末参考资料卡片" if citation_findings.get("raw_url_count", 0) else "",
             "重写开头和结尾，避开近期高频套路句与结构" if not similarity_findings.get("similarity_passed", True) else "",
@@ -1759,6 +1810,8 @@ def build_heuristic_review(
         "humanness_signals": humanness_signals,
         "humanness_score": humanness_score,
         "humanness_findings": humanness_findings,
+        "enhancement_findings": enhancement_findings,
+        "persona_findings": persona_findings,
         "editorial_review": editorial_review,
         "revision_priorities": revision_priorities,
         "manifest_context": {

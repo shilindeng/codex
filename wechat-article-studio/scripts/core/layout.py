@@ -774,6 +774,13 @@ _WX_RICH_ROLES = {
     "stat-card",
     "stat-value",
     "stat-label",
+    "reference-list",
+    "reference-card",
+    "reference-title",
+    "reference-index",
+    "reference-meta",
+    "reference-dot",
+    "reference-link",
 }
 _WX_SIDES = {"left", "right"}
 
@@ -947,7 +954,7 @@ class _Sanitizer(HTMLParser):
             tone = (raw.get("data-wx-tone") or "").strip().lower()
             if tone in {"tip", "takeaway", "warning", "checklist", "mythfact"}:
                 keep["data-wx-tone"] = tone
-        if tag in {"section", "p", "span"}:
+        if tag in {"section", "p", "span", "a"}:
             role = (raw.get("data-wx-role") or "").strip().lower()
             if role in _WX_RICH_ROLES:
                 keep["data-wx-role"] = role
@@ -1097,6 +1104,29 @@ class _Sanitizer(HTMLParser):
             return f"margin:0;color:{self._accent};font-size:28px;line-height:1.15;font-weight:900;"
         if tag == "p" and role == "stat-label":
             return f"margin:8px 0 0;color:{t.muted};font-size:13px;line-height:1.7;"
+        if tag == "section" and role == "reference-list":
+            return "margin:26px 0 0;"
+        if tag == "section" and role == "reference-card":
+            return (
+                f"margin:14px 0 0;padding:16px 16px 14px;border-radius:{t.radius};"
+                f"background:{t.soft};border:1px solid {t.line};"
+                "box-shadow:0 8px 22px rgba(15,23,42,0.04);"
+            )
+        if tag == "p" and role == "reference-title":
+            return f"margin:0;color:{t.heading};font-size:16px;line-height:1.78;font-weight:800;letter-spacing:0.04px;"
+        if tag == "span" and role == "reference-index":
+            return f"display:inline-block;margin-right:8px;color:{self._accent};font-size:13px;font-weight:900;vertical-align:1px;"
+        if tag == "p" and role == "reference-meta":
+            return f"margin:8px 0 0;color:{t.muted};font-size:13px;line-height:1.72;"
+        if tag == "span" and role == "reference-dot":
+            return "display:inline-block;margin:0 6px;"
+        if tag == "a" and role == "reference-link":
+            return (
+                "display:block;box-sizing:border-box;width:100%;"
+                f"margin:12px 0 0;padding:11px 14px;border-radius:999px;"
+                f"background:{_hex_to_rgba(self._accent, 0.10)};color:{self._accent};"
+                "text-align:center;font-size:14px;font-weight:800;text-decoration:none;border:none;"
+            )
         return None
 
     def _style_for_tag(self, tag: str, attrs: dict[str, str]) -> str:

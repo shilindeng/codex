@@ -22,11 +22,46 @@ def _normalize_text(value: str) -> str:
 
 def _normalize_list(value: Any) -> list[str]:
     if isinstance(value, list):
-        return [_normalize_text(str(item)) for item in value if _normalize_text(str(item))]
+        output: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                value_text = _normalize_text(
+                    str(
+                        item.get("sentence")
+                        or item.get("quote")
+                        or item.get("text")
+                        or item.get("page_title")
+                        or item.get("title")
+                        or item.get("url")
+                        or ""
+                    )
+                )
+            else:
+                value_text = _normalize_text(str(item))
+            if value_text:
+                output.append(value_text)
+        return output
     if isinstance(value, str):
         items = [_normalize_text(item) for item in re.split(r"[；;\n]", value) if _normalize_text(item)]
         return items
     return []
+
+
+def _keyword_tokens(*values: str) -> list[str]:
+    raw = " ".join(_normalize_text(value) for value in values if _normalize_text(value))
+    if not raw:
+        return []
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9._-]{1,}|[\u4e00-\u9fff]{2,8}", raw)
+    output: list[str] = []
+    seen: set[str] = set()
+    stop = {"这个", "那个", "问题", "事情", "方法", "步骤", "工具", "系统", "平台", "最后", "真正", "先别", "怎么", "如何"}
+    for token in tokens:
+        lowered = token.lower()
+        if lowered in seen or token in stop:
+            continue
+        seen.add(lowered)
+        output.append(token)
+    return output[:10]
 
 
 def enhancement_strategy_for_archetype(archetype: str, title: str = "") -> str:
@@ -50,18 +85,107 @@ def _dedupe(values: list[str]) -> list[str]:
     return output
 
 
-def _section_evidence_targets(section: dict[str, Any], research: dict[str, Any]) -> list[str]:
-    evidence_need = _normalize_text(str(section.get("evidence_need") or ""))
-    evidence_items = _normalize_list(research.get("evidence_items"))[:6]
-    sources = []
-    for item in research.get("sources") or []:
+def _dedupe_dicts(items: list[dict[str, Any]], *, key_fields: tuple[str, ...]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        key = "||".join(_normalize_text(str(item.get(field) or "")) for field in key_fields)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        output.append(item)
+    return output
+
+
+def _source_cards(research: dict[str, Any], evidence_report: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for item in (research.get("sources") or []):
         if isinstance(item, dict):
-            label = _normalize_text(str(item.get("title") or item.get("url") or ""))
+            title = _normalize_text(str(item.get("title") or item.get("page_title") or item.get("url") or ""))
+            url = _normalize_text(str(item.get("url") or ""))
+            note = _normalize_text(str(item.get("note") or item.get("credibility") or item.get("source_type") or ""))
+            quote = _normalize_text(str(item.get("sentence") or item.get("quote") or item.get("description") or ""))
         else:
-            label = _normalize_text(str(item))
-        if label:
-            sources.append(label)
-    output = _dedupe([evidence_need, *evidence_items[:2], *sources[:2]])
+            title = _normalize_text(str(item))
+            url = _normalize_text(str(item))
+            note = ""
+            quote = ""
+        if title or url:
+            cards.append({"title": title or url, "url": url, "note": note, "quote": quote})
+    for item in ((evidence_report or {}).get("items") or []):
+        if not isinstance(item, dict):
+            continue
+        title = _normalize_text(str(item.get("page_title") or item.get("title") or item.get("url") or ""))
+        url = _normalize_text(str(item.get("url") or ""))
+        note = _normalize_text(str(item.get("description") or item.get("source_type") or item.get("domain") or ""))
+        quote = _normalize_text(str(item.get("sentence") or item.get("quote") or ""))
+        if title or url or quote:
+            cards.append({"title": title or url or "来源", "url": url, "note": note, "quote": quote})
+    return _dedupe_dicts(cards, key_fields=("title", "url", "quote"))[:8]
+
+
+def _evidence_quotes(research: dict[str, Any], evidence_report: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for item in (research.get("evidence_items") or []):
+        if isinstance(item, dict):
+            text = _normalize_text(str(item.get("sentence") or item.get("quote") or item.get("text") or item.get("page_title") or ""))
+            title = _normalize_text(str(item.get("page_title") or item.get("title") or item.get("url") or ""))
+            url = _normalize_text(str(item.get("url") or ""))
+            note = _normalize_text(str(item.get("description") or item.get("source_type") or ""))
+        else:
+            text = _normalize_text(str(item))
+            title = ""
+            url = ""
+            note = ""
+        if text:
+            entries.append({"text": text, "title": title, "url": url, "note": note})
+    for item in ((evidence_report or {}).get("items") or []):
+        if not isinstance(item, dict):
+            continue
+        text = _normalize_text(str(item.get("sentence") or item.get("quote") or ""))
+        title = _normalize_text(str(item.get("page_title") or item.get("title") or item.get("url") or ""))
+        url = _normalize_text(str(item.get("url") or ""))
+        note = _normalize_text(str(item.get("description") or item.get("source_type") or item.get("domain") or ""))
+        if text:
+            entries.append({"text": text, "title": title, "url": url, "note": note})
+    return _dedupe_dicts(entries, key_fields=("text", "url"))[:12]
+
+
+def _match_materials(section: dict[str, Any], materials: list[dict[str, Any]], title: str, limit: int = 3) -> list[dict[str, Any]]:
+    section_tokens = _keyword_tokens(
+        title,
+        str(section.get("heading") or ""),
+        str(section.get("goal") or ""),
+        str(section.get("evidence_need") or ""),
+    )
+    if not materials:
+        return []
+
+    def score(item: dict[str, Any]) -> tuple[int, int]:
+        text = " ".join(str(item.get(field) or "") for field in ["text", "title", "note", "quote"])
+        material_tokens = set(_keyword_tokens(text))
+        overlap = len(set(section_tokens) & material_tokens)
+        richness = 1 if item.get("url") else 0
+        if item.get("quote") or item.get("text"):
+            richness += 1
+        return overlap, richness
+
+    ranked = sorted(materials, key=score, reverse=True)
+    best = [item for item in ranked if score(item)[0] > 0][:limit]
+    if len(best) < limit:
+        for item in ranked[:limit]:
+            if item not in best:
+                best.append(item)
+            if len(best) >= limit:
+                break
+    return best[:limit]
+
+
+def _section_evidence_targets(section: dict[str, Any], research: dict[str, Any], evidence_report: dict[str, Any] | None = None) -> list[str]:
+    evidence_need = _normalize_text(str(section.get("evidence_need") or ""))
+    evidence_items = [item.get("text") or item.get("quote") or "" for item in _evidence_quotes(research, evidence_report)[:3]]
+    sources = [item.get("title") or item.get("url") or "" for item in _source_cards(research, evidence_report)[:3]]
+    output = _dedupe([evidence_need, *evidence_items, *sources])
     return output[:4]
 
 
@@ -126,11 +250,13 @@ def _shared_materials(
     author_memory: dict[str, Any],
     writing_persona: dict[str, Any],
     strategy: str,
+    evidence_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blueprint = outline_meta.get("viral_blueprint") or {}
     core_judgment = _normalize_text(str(blueprint.get("core_viewpoint") or title))
     secondary = _normalize_list(blueprint.get("secondary_viewpoints"))
-    evidence_items = _normalize_list(research.get("evidence_items"))
+    evidence_items = _evidence_quotes(research, evidence_report)
+    sources = _source_cards(research, evidence_report)
     exemplar_snippets = []
     for item in (author_memory.get("example_snippets") or [])[:3]:
         if isinstance(item, dict):
@@ -156,7 +282,9 @@ def _shared_materials(
         "core_judgment": core_judgment,
         "mainstream_views": secondary[:4],
         "counter_angles": counter_angles,
-        "evidence_targets": evidence_items[:4],
+        "evidence_targets": [item.get("text") or "" for item in evidence_items[:4]],
+        "source_cards": sources[:4],
+        "evidence_quotes": evidence_items[:4],
         "disallowed_moves": disallowed_moves,
         "exemplar_snippets": exemplar_snippets[:3],
     }
@@ -168,10 +296,12 @@ def build_content_enhancement(
     outline_meta: dict[str, Any],
     manifest: dict[str, Any],
     research: dict[str, Any] | None = None,
+    evidence_report: dict[str, Any] | None = None,
     author_memory: dict[str, Any] | None = None,
     writing_persona: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     research = research or {}
+    evidence_report = evidence_report or {}
     author_memory = author_memory or {}
     writing_persona = writing_persona or {}
     blueprint = outline_meta.get("viral_blueprint") or {}
@@ -189,7 +319,7 @@ def build_content_enhancement(
     archetype = _normalize_text(str(blueprint.get("article_archetype") or manifest.get("article_archetype") or "commentary")).lower()
     strategy = enhancement_strategy_for_archetype(archetype, title)
     strategy_meta = ENHANCEMENT_STRATEGIES.get(strategy, ENHANCEMENT_STRATEGIES["angle-discovery"])
-    shared = _shared_materials(title, outline_meta, research, author_memory, writing_persona, strategy)
+    shared = _shared_materials(title, outline_meta, research, author_memory, writing_persona, strategy, evidence_report)
     hard_requirements = _dedupe(
         [
             "至少有一节明确补场景或动作瞬间。",
@@ -200,16 +330,22 @@ def build_content_enhancement(
         + [f"这篇稿子默认使用“{strategy_meta['label']}”策略。", strategy_meta["goal"]]
     )[:6]
     section_enhancements = []
+    all_quotes = _evidence_quotes(research, evidence_report)
+    all_sources = _source_cards(research, evidence_report)
     for index, section in enumerate(sections, start=1):
+        matched_quotes = _match_materials(section, all_quotes, title, limit=2)
+        matched_sources = _match_materials(section, all_sources, title, limit=2)
         section_enhancements.append(
             {
                 "index": index,
                 "heading": _normalize_text(str(section.get("heading") or f"第 {index} 节")),
                 "section_goal": _normalize_text(str(section.get("goal") or "展开该章节")),
                 "must_include": _section_must_include(strategy, section, title),
-                "evidence_targets": _section_evidence_targets(section, research),
+                "evidence_targets": _section_evidence_targets(section, research, evidence_report),
                 "detail_anchors": _detail_anchors(title, section, archetype),
                 "counterpoint_targets": _counterpoint_targets(section, archetype),
+                "support_quotes": matched_quotes,
+                "support_sources": matched_sources,
             }
         )
     return {
@@ -220,6 +356,10 @@ def build_content_enhancement(
         "strategy_label": strategy_meta["label"],
         "strategy_goal": strategy_meta["goal"],
         "writing_persona": (writing_persona or {}).get("name") or "",
+        "research_snapshot": {
+            "source_count": len(all_sources),
+            "evidence_count": len(all_quotes),
+        },
         "hard_requirements": hard_requirements,
         "shared_materials": shared,
         "section_enhancements": section_enhancements,
@@ -242,12 +382,26 @@ def markdown_content_enhancement(payload: dict[str, Any]) -> str:
         lines.append(f"角度提醒：{item}")
     for item in shared.get("evidence_targets") or []:
         lines.append(f"证据目标：{item}")
+    for item in shared.get("source_cards") or []:
+        if isinstance(item, dict):
+            title_text = item.get("title") or item.get("url") or "来源"
+            note_text = item.get("note") or ""
+            lines.append(f"来源卡：{title_text}" + (f"｜{note_text}" if note_text else ""))
+    for item in shared.get("evidence_quotes") or []:
+        if isinstance(item, dict):
+            lines.append(f"证据句：{item.get('text') or ''}")
     for item in payload.get("section_enhancements") or []:
         heading = item.get("heading") or "未命名章节"
         lines.append(f"章节：{heading}")
         for field in ["must_include", "evidence_targets", "detail_anchors", "counterpoint_targets"]:
             for value in item.get(field) or []:
                 lines.append(f"{heading} / {field}：{value}")
+        for support in item.get("support_quotes") or []:
+            if isinstance(support, dict):
+                lines.append(f"{heading} / support_quotes：{support.get('text') or ''}")
+        for support in item.get("support_sources") or []:
+            if isinstance(support, dict):
+                lines.append(f"{heading} / support_sources：{support.get('title') or support.get('url') or ''}")
     report_lines = [line for line in lines if line]
     return "# 写前增强\n\n" + "\n".join(f"- {line}" for line in report_lines) + "\n"
 
