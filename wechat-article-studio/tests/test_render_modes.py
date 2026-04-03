@@ -14,11 +14,33 @@ if str(SCRIPTS) not in sys.path:
 
 import legacy_studio as legacy  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
-from core.workflow import normalize_publication_body  # noqa: E402
+from core.workflow import apply_reference_policy, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
 
 
 class RenderModeTests(unittest.TestCase):
+    def test_apply_reference_policy_preserves_markdown_breaks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            body = "\n".join(
+                [
+                    "First paragraph with https://example.com/source",
+                    "",
+                    "## Section Two",
+                    "",
+                    "Second paragraph [1]",
+                    "",
+                    "Third paragraph【2】",
+                ]
+            )
+            normalized, findings = apply_reference_policy(workspace, {}, "Test title", body)
+            self.assertIn("First paragraph with example.com", normalized)
+            self.assertIn("\n\n## Section Two\n\n", normalized)
+            self.assertIn("Second paragraph", normalized)
+            self.assertIn("Third paragraph", normalized)
+            self.assertNotIn("https://example.com/source", normalized)
+            self.assertEqual(findings["raw_urls_after"], 0)
+
     def test_highlight_technical_terms_is_conservative(self):
         source = "\n".join(
             [

@@ -718,7 +718,8 @@ def apply_reference_policy(workspace: Path, manifest: dict[str, Any], title: str
     normalized_body = re.sub(r"https?://[^\s)>\]]+", replace_raw_url, normalized_body)
     normalized_body = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized_body)
     normalized_body = re.sub(r"【\s*\d{1,2}\s*】", "", normalized_body)
-    normalized_body = re.sub(r"\s{2,}", " ", normalized_body)
+    # Preserve markdown structure while still collapsing accidental runs of spaces.
+    normalized_body = re.sub(r"[ \t]{2,}", " ", normalized_body)
     findings = {
         "raw_urls_before": len(body_urls),
         "raw_urls_after": len(_extract_body_urls(normalized_body)),

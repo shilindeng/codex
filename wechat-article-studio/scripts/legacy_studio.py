@@ -455,7 +455,7 @@ IMAGE_TYPE_PROMPT_MODULES: dict[str, str] = {
     "封面图": "Create a high-recognition hero image for WeChat: one dominant focal idea, strong atmosphere, strong crop safety, and no headline baked into the image.",
     "信息图": "Compress the key structure into a scan-friendly visual summary. Favor modular grouping, icon logic, and one clear reading path.",
     "流程图": "Show a real sequence or operational path with just enough direction cues to be understood. Avoid sterile flowchart defaults if a more visual sequence can carry the idea.",
-    "对比图": "Make the contrast obvious at first glance through composition, grouping, and opposing cues. Avoid verbose labels or spreadsheet-like tables.",
+    "对比图": "Make the contrast obvious at first glance through composition, grouping, and opposing cues. Show the difference through objects, position, color, and metaphor instead of readable words.",
     "分隔图": "Reset the reading rhythm with a thematic visual pause that still belongs to the article's visual world.",
     "正文插图": "Support the nearby paragraph through metaphor, objects, scenes, or conceptual framing. Do not fall back to a generic diagram unless the text truly demands structure.",
 }
@@ -2655,6 +2655,9 @@ def image_size_hint(aspect: str) -> tuple[int, int, str]:
     return mapping.get(aspect, (1536, 1024, "1536x1024"))
 
 
+GENERIC_SECTION_HEADING_RE = re.compile(r"^正文段落\s*\d+$")
+
+
 def png_dimensions(path: Path) -> tuple[int, int] | None:
     data = path.read_bytes()
     if data[:8] != b"\x89PNG\r\n\x1a\n":
@@ -3082,7 +3085,7 @@ def visual_profile_for_item(controls: dict[str, Any], item: dict[str, Any]) -> d
 
 
 def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dict[str, Any], audience: str) -> str:
-    section = item.get("section_heading") or item.get("alt")
+    section = image_section_focus(item, 56)
     style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
     theme = item.get("visual_theme") or controls.get("theme", "") or "content-led visual direction"
     style = item.get("visual_style") or controls.get("style", "") or "distinctive editorial illustration"
@@ -3092,6 +3095,9 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
     profile_key = controls.get("profile_key") or article_strategy.get("profile_key") or ""
     style_family = article_strategy.get("style_family") or IMAGE_AUTO_STYLE_PROFILES.get(profile_key, {}).get("label", "")
     content_mode = article_strategy.get("content_mode") or "conceptual"
+    content_summary = cleaned_image_signal_text(summary, 140) or cleaned_image_signal_text(title, 80)
+    anchor_excerpt = image_anchor_excerpt(item, 110)
+    section_excerpt = image_section_excerpt(item, 120)
     instructions = [
         "Create a polished visual for a Chinese WeChat Official Account article.",
         f"Article title: {title}",
@@ -3101,7 +3107,7 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         f"Style: {style}",
         f"Mood: {mood}",
         f"Visual brief: {brief}",
-        f"Content summary: {summary}",
+        f"Content summary: {content_summary}",
         f"Article visual direction: {article_strategy.get('visual_direction') or title}",
         f"Article style family: {style_family or 'content-driven auto'}",
         f"Article content mode: {content_mode}",
@@ -3127,10 +3133,10 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
             instructions.append("Keep the same visual language across cover, infographic, and inline illustrations for this article.")
     if section:
         instructions.append(f"Section focus: {section}")
-    if item.get("anchor_block_excerpt"):
-        instructions.append("Image will be inserted right after the following paragraph. Anchor excerpt: " + str(item["anchor_block_excerpt"]))
-    if item.get("section_excerpt"):
-        instructions.append("Section excerpt: " + str(item["section_excerpt"]))
+    if anchor_excerpt:
+        instructions.append("Image will be inserted right after the following paragraph. Anchor excerpt: " + anchor_excerpt)
+    if section_excerpt:
+        instructions.append("Section excerpt: " + section_excerpt)
     if item.get("layout_variant_label"):
         instructions.append(f"Layout variant: {item['layout_variant_label']}")
     if item.get("layout_variant_instruction"):
@@ -3144,6 +3150,9 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
         instructions.append("Use little to no embedded text. Prefer pure imagery, symbols, objects, and composition over words.")
     else:
         instructions.append("Keep embedded text extremely sparse. Use at most a few short labels, and prefer icons, arrows, grouping, and hierarchy over paragraphs.")
+    if item["type"] in {"封面图", "正文插图", "分隔图", "对比图"}:
+        instructions.append("Do not include any readable Chinese or English words, letters, numbers, UI text, or labels in the final image.")
+    instructions.append("Never render copied article paragraphs, generic section labels, or UI cards filled with body text.")
     instructions.extend(IMAGE_DIFFERENTIATION_MODULES)
     instructions.append("Avoid clutter, excessive small text, watermarks, and brand logos unless explicitly requested.")
     return " ".join(instructions)
@@ -3156,6 +3165,45 @@ def image_position_label(item: dict[str, Any]) -> str:
         return "closing-summary"
     target = item.get("target_section") or f"section-{item.get('target_section_index', -1)}"
     return f"{target}@block-{item.get('placement_block_index', 0)}"
+
+
+def is_generated_section_heading(value: str) -> bool:
+    return bool(GENERIC_SECTION_HEADING_RE.match((value or "").strip()))
+
+
+def cleaned_image_signal_text(text: str, limit: int = 120) -> str:
+    value = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", text or "")
+    value = re.sub(r"【\s*\d{1,2}\s*】", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if not value:
+        return ""
+    return extract_summary(value, limit)
+
+
+def image_section_focus(item: dict[str, Any], limit: int = 64) -> str:
+    heading = str(item.get("section_heading") or item.get("target_section") or "").strip()
+    if is_generated_section_heading(heading):
+        heading = ""
+    excerpt = cleaned_image_signal_text(
+        str(item.get("anchor_block_excerpt") or item.get("section_excerpt") or item.get("semantic_focus") or ""),
+        limit,
+    )
+    focus = " ".join(part for part in [heading, excerpt] if part).strip()
+    if focus:
+        return extract_summary(focus, limit)
+    return cleaned_image_signal_text(str(item.get("alt") or ""), limit) or "current section"
+
+
+def image_anchor_excerpt(item: dict[str, Any], limit: int = 110) -> str:
+    return cleaned_image_signal_text(str(item.get("anchor_block_excerpt") or ""), limit)
+
+
+def image_section_excerpt(item: dict[str, Any], limit: int = 120) -> str:
+    excerpt = cleaned_image_signal_text(str(item.get("section_excerpt") or ""), limit)
+    anchor = image_anchor_excerpt(item, limit)
+    if excerpt and anchor and (excerpt.startswith(anchor) or anchor.startswith(excerpt)):
+        return ""
+    return excerpt
 
 
 def image_purpose_label(item: dict[str, Any]) -> str:
@@ -3171,10 +3219,8 @@ def image_purpose_label(item: dict[str, Any]) -> str:
 
 
 def image_visual_content(item: dict[str, Any]) -> str:
-    excerpt = item.get("section_excerpt") or ""
-    heading = item.get("section_heading") or item.get("target_section") or item.get("alt") or ""
     layout = item.get("layout_variant_label") or "默认构图"
-    focus = extract_summary(f"{heading} {excerpt}".strip(), 160)
+    focus = image_section_focus(item, 96)
     return f"{focus}；采用{layout}，并保持与全文统一主题一致。"
 
 
@@ -3228,10 +3274,8 @@ def image_label_strategy(item: dict[str, Any]) -> list[str]:
 
 
 def image_visual_elements(item: dict[str, Any]) -> list[str]:
-    heading = item.get("section_heading") or item.get("target_section") or ""
-    excerpt = item.get("section_excerpt") or ""
     image_type = item.get("type", "正文插图")
-    focus = extract_summary(f"{heading} {excerpt}".strip(), 100)
+    focus = image_section_focus(item, 72)
     if image_type == "封面图":
         return ["单一主视觉物件", "高识别度背景氛围", f"围绕“{focus}”的象征隐喻"]
     if image_type == "流程图":
@@ -3348,11 +3392,11 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         "",
         "## 锚定段落（插入点）摘录",
         "",
-        item.get("anchor_block_excerpt") or "无",
+        image_anchor_excerpt(item, 120) or "无",
         "",
         "## 章节摘要",
         "",
-        item.get("section_excerpt") or "无",
+        image_section_excerpt(item, 140) or "无",
         "",
         "## Prompt",
         "",
@@ -4539,18 +4583,23 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
             except SystemExit as exc:
                 fallback = fallback_image_provider(provider)
                 message = str(exc)
-                if fallback and ("没有返回图片" in message or GEMINI_WEB_NO_IMAGE_MARKER in message):
-                    if fallback == "gemini-api":
-                        result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
-                    else:
-                        result = generate_openai_image(effective_prompt, output_path, args.openai_model, aspect)
-                    result["source_meta"] = {
-                        **result.get("source_meta", {}),
-                        "fallback_from": "gemini-web",
-                        "fallback_reason": message,
-                    }
-                    provider = fallback
-                else:
+                result = None
+                if fallback:
+                    try:
+                        if fallback == "gemini-api":
+                            result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
+                        else:
+                            result = generate_openai_image(effective_prompt, output_path, args.openai_model, aspect)
+                        result["source_meta"] = {
+                            **result.get("source_meta", {}),
+                            "fallback_from": "gemini-web",
+                            "fallback_reason": message,
+                        }
+                        provider = fallback
+                    except SystemExit as fallback_exc:
+                        message = f"{message}; fallback {fallback} failed: {fallback_exc}"
+                        result = None
+                if result is None:
                     width, height = make_fallback_card_png(output_path, item)
                     result = {
                         "provider": "local-card",
@@ -4659,6 +4708,8 @@ def cmd_assemble(args: argparse.Namespace) -> int:
     for item in plan.get("items") or []:
         asset_path = item.get("asset_path")
         if not asset_path:
+            continue
+        if (item.get("source_meta") or {}).get("fallback_local_card"):
             continue
         if item.get("type") == "封面图" or item.get("insert_strategy") == "cover_only":
             continue
