@@ -97,6 +97,40 @@ class RenderModeTests(unittest.TestCase):
             self.assertIn("<code>OPENAI_API_KEY</code>", preview_html)
             self.assertIn("wx-hero", preview_html)
 
+    def test_render_trims_hero_strap_for_mobile_first_screen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            long_summary = "银行业开始高频谈 AI，甚至出现“去年实现超 8000 人替代效率”这种说法。真正值得看的，不是一句口号，而是传统行业第一次把 AI 的效率红利直接折算进组织结构。"
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "银行业 AI 竞争突然提速",
+                        "summary": long_summary,
+                        "article_path": "article.md",
+                        "wechat_header_mode": "drop-title",
+                        "layout_plan": {"hero_module": "hero-checkpoint", "layout_archetype": "commentary"},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("正文第一段。\n\n正文第二段。", encoding="utf-8")
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
+            self.assertIn("银行业开始高频谈 AI", wechat_html)
+            self.assertNotIn("真正值得看的，不是一句口号，而是传统行业第一次把 AI 的效率红利直接折算进组织结构", wechat_html)
+
     def test_strip_leading_h1_is_tolerant(self):
         body = "# 《OpenAI：API-上手》\n\n正文内容"
         stripped = legacy.strip_leading_h1(body, "OpenAI API 上手")

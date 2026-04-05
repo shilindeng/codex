@@ -23,6 +23,7 @@ from core.artifacts import (
     write_text,
 )
 from core.acceptance import build_acceptance_report, markdown_acceptance_report
+from core.account_strategy import load_account_strategy, research_requirements_status
 from core.author_memory import (
     append_lesson_payload,
     build_author_memory_bundle,
@@ -65,7 +66,7 @@ from core.viral import (
     normalize_review_payload,
     normalize_viral_blueprint,
 )
-from core.title_decision import build_title_decision_report, markdown_title_decision_report
+from core.title_decision import build_title_decision_report, markdown_title_decision_report, title_integrity_report
 from providers.text.gemini_web import GeminiWebTextProvider
 from providers.text.openai_compatible import OpenAICompatibleTextProvider, placeholder_article, placeholder_outline
 from publishers.wechat import cmd_publish as wechat_publish
@@ -102,6 +103,110 @@ def persist_runtime_preferences(manifest: dict[str, Any], args: argparse.Namespa
         getattr(args, "wechat_header_mode", None) or manifest.get("wechat_header_mode")
     )
     return manifest
+
+
+def attach_account_strategy(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    strategy = load_account_strategy(workspace, manifest, create_if_missing=True)
+    manifest.setdefault("audience", strategy.get("target_reader_label") or "泛科技读者")
+    controls = dict(manifest.get("image_controls") or {})
+    controls.setdefault("density", strategy.get("image_density") or "minimal")
+    manifest["image_controls"] = controls
+    return manifest
+
+
+def _normalize_title_value(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or "")).strip()
+
+
+def _selected_title_truth(workspace: Path, manifest: dict[str, Any]) -> str:
+    candidates = [
+        manifest.get("selected_title"),
+        (read_json(workspace / "title-decision-report.json", default={}) or {}).get("selected_title"),
+        (read_json(workspace / "title-report.json", default={}) or {}).get("selected_title"),
+        (read_json(workspace / "ideation.json", default={}) or {}).get("selected_title"),
+    ]
+    for item in candidates:
+        if _normalize_title_value(str(item or "")):
+            return str(item).strip()
+    return ""
+
+
+def sync_title_truth(workspace: Path, manifest: dict[str, Any], selected_title: str) -> None:
+    title_value = str(selected_title or "").strip()
+    if not title_value:
+        return
+    manifest["selected_title"] = title_value
+    ideation = read_json(workspace / "ideation.json", default={}) or {}
+    if ideation:
+        ideation["selected_title"] = title_value
+        write_json(workspace / "ideation.json", ideation)
+    title_report = read_json(workspace / "title-report.json", default={}) or {}
+    if title_report:
+        title_report["selected_title"] = title_value
+        write_json(workspace / "title-report.json", title_report)
+    decision_report = read_json(workspace / "title-decision-report.json", default={}) or {}
+    if decision_report:
+        decision_report["selected_title"] = title_value
+        write_json(workspace / "title-decision-report.json", decision_report)
+
+
+def collect_title_consistency_issues(workspace: Path, manifest: dict[str, Any]) -> list[str]:
+    expected = _selected_title_truth(workspace, manifest)
+    if not expected:
+        return []
+    normalized_expected = _normalize_title_value(expected)
+    sources = {
+        "manifest.json": manifest.get("selected_title"),
+        "ideation.json": (read_json(workspace / "ideation.json", default={}) or {}).get("selected_title"),
+        "title-report.json": (read_json(workspace / "title-report.json", default={}) or {}).get("selected_title"),
+        "title-decision-report.json": (read_json(workspace / "title-decision-report.json", default={}) or {}).get("selected_title"),
+    }
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    if article_path.exists():
+        meta, _ = split_frontmatter(read_text(article_path))
+        sources["article.md"] = meta.get("title") or ""
+    issues: list[str] = []
+    for source_name, raw in sources.items():
+        value = str(raw or "").strip()
+        if value and _normalize_title_value(value) != normalized_expected:
+            issues.append(f"{source_name} 标题与当前真源不一致：{value}")
+    return issues
+
+
+def research_requirements_report(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    existing = manifest.get("research_requirements")
+    if isinstance(existing, dict) and existing:
+        return existing
+    strategy = load_account_strategy(workspace, manifest, create_if_missing=True)
+    research = load_research(workspace)
+    report = research_requirements_status(research, manifest, strategy)
+    return report
+
+
+def _update_research_requirements(workspace: Path, manifest: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    strategy = load_account_strategy(workspace, manifest, create_if_missing=True)
+    report = research_requirements_status(payload, manifest, strategy)
+    payload["minimum_requirements"] = report
+    manifest["research_requirements"] = report
+    return report
+
+
+def collect_render_blockers(workspace: Path, manifest: dict[str, Any], score_report: dict[str, Any] | None = None) -> list[str]:
+    blockers: list[str] = []
+    report = score_report or (read_json(workspace / "score-report.json", default={}) or {})
+    if not report:
+        blockers.append("缺少 score-report.json，无法确认是否可继续正式产出。")
+    else:
+        if not bool(report.get("passed", manifest.get("score_passed"))):
+            blockers.append("当前稿件评分未达继续产出阈值。")
+        failed_gates = [name for name, ok in (report.get("quality_gates") or {}).items() if not ok]
+        if failed_gates:
+            blockers.append(f"评分硬门槛未通过：{'、'.join(failed_gates)}")
+    research_report = research_requirements_report(workspace, manifest)
+    if research_report.get("requires_evidence") and not research_report.get("passed"):
+        blockers.append(f"调研门槛未通过：{'；'.join(research_report.get('reasons') or [])}")
+    blockers.extend(collect_title_consistency_issues(workspace, manifest))
+    return blockers
 
 
 def active_text_provider():
@@ -146,11 +251,15 @@ def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
     review = read_json(workspace / "review-report.json", default={}) or {}
     if review.get("placeholder"):
         reasons.append("review-report.json 仍是 placeholder 评审结果")
+    research_requirements = research_requirements_report(workspace, manifest)
+    if research_requirements.get("requires_evidence") and not research_requirements.get("passed"):
+        reasons.append(f"调研门槛未通过：{'；'.join(research_requirements.get('reasons') or [])}")
     return reasons
 
 
 def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
     blockers = placeholder_reasons(workspace, manifest)
+    blockers.extend(collect_title_consistency_issues(workspace, manifest))
     report = read_json(workspace / "score-report.json", default={}) or {}
     if not report:
         blockers.append("缺少 score-report.json，无法确认是否可发布")
@@ -176,6 +285,10 @@ def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[
         credibility_score = score_dimension_value(report, "可信度与检索支撑")
         if credibility_score < PUBLISH_MIN_CREDIBILITY_SCORE:
             blockers.append(f"可信度与检索支撑得分过低（{credibility_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
+    publish_result = read_json(workspace / "publish-result.json", default={}) or {}
+    if publish_result:
+        if not bool(acceptance.get("passed")) or not bool(report.get("passed", manifest.get("score_passed"))):
+            blockers.append("工作目录里已存在历史 publish-result.json，但对应稿件未满足当前发布前置条件。")
     return blockers
 
 
@@ -480,7 +593,9 @@ def rerank_discovery_candidates(
     recent_titles: list[str],
     recent_corpus_summary: dict[str, Any],
     author_memory: dict[str, Any],
+    account_strategy: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    strategy = account_strategy or {}
     title_patterns = {str(item.get("key") or "") for item in (recent_corpus_summary.get("overused_title_patterns") or []) if item.get("key")}
     recent_token_counter: Counter[str] = Counter()
     for title in recent_titles:
@@ -493,6 +608,8 @@ def rerank_discovery_candidates(
         if str(item).strip()
     }
     starter_blacklist = {str(item).strip() for item in (author_memory.get("sentence_starters_to_avoid") or []) if str(item).strip()}
+    priority_keywords = {str(item).strip() for item in (strategy.get("discovery_priority_keywords") or []) if str(item).strip()}
+    deprioritize_keywords = {str(item).strip() for item in (strategy.get("discovery_deprioritize_keywords") or []) if str(item).strip()}
 
     reranked: list[dict[str, Any]] = []
     for candidate in candidates:
@@ -500,6 +617,14 @@ def rerank_discovery_candidates(
         topic = str(item.get("recommended_topic") or item.get("hot_title") or "")
         title = str(item.get("recommended_title") or topic)
         content_kind = str(item.get("content_kind") or "")
+        corpus = " ".join(
+            [
+                topic,
+                title,
+                " ".join(str(raw).strip() for raw in (item.get("angles") or []) if str(raw).strip()),
+                " ".join(str(raw).strip() for raw in (item.get("viewpoints") or []) if str(raw).strip()),
+            ]
+        )
         candidate_tokens = topic_keyword_tokens(topic)
         repeat_hits = [token for token in candidate_tokens if recent_token_counter.get(token.lower(), 0) > 0]
         repeat_penalty = min(8, sum(min(2, recent_token_counter.get(token.lower(), 0)) for token in repeat_hits))
@@ -532,7 +657,17 @@ def rerank_discovery_candidates(
         angle_freshness_score = min(10, 4 + len({str(item).strip() for item in (item.get("angles") or []) if str(item).strip()}))
         if repeat_hits:
             angle_freshness_score = max(1, angle_freshness_score - min(3, len(repeat_hits)))
-        audience_fit_score = min(10, 5 + style_hint_score + (1 if content_kind in {"教程/工具", "趋势观点"} else 0))
+        reader_value_score = 3
+        if content_kind in {"事件解读", "趋势观点"}:
+            reader_value_score += 2
+        if any(keyword in corpus for keyword in priority_keywords):
+            reader_value_score += 3
+        if any(keyword in corpus for keyword in {"成本", "代价", "岗位", "影响", "误判", "风险", "谁会先"}):
+            reader_value_score += 2
+        if any(keyword in corpus for keyword in deprioritize_keywords):
+            reader_value_score -= 2
+        audience_fit_score = min(10, 4 + style_hint_score + (1 if content_kind in {"教程/工具", "趋势观点"} else 0) + max(0, reader_value_score - 4))
+        series_potential_score = min(10, 3 + len({str(raw).strip() for raw in (item.get("angles") or []) if str(raw).strip()}) + (1 if priority_keywords and any(keyword in corpus for keyword in priority_keywords) else 0))
         recommended_archetype = (
             "tutorial"
             if content_kind == "教程/工具"
@@ -567,6 +702,8 @@ def rerank_discovery_candidates(
             + angle_freshness_score * 2
             + min(evidence_score, 10) * 2
             + audience_fit_score * 2
+            + max(1, reader_value_score) * 3
+            + series_potential_score * 2
             + discussion_score
             - repeat_penalty
         )
@@ -577,6 +714,8 @@ def rerank_discovery_candidates(
         item["propagation_score"] = propagation_score
         item["discussion_score"] = min(discussion_score, 10)
         item["evidence_score"] = evidence_potential
+        item["reader_value_score"] = int(max(1, min(10, reader_value_score)))
+        item["series_potential_score"] = int(series_potential_score)
         item["repeat_penalty"] = repeat_penalty
         item["recent_overlap_tokens"] = repeat_hits[:5]
         item["decision_score"] = int(decision_score)
@@ -840,6 +979,7 @@ def current_editorial_blueprint(workspace: Path, manifest: dict[str, Any], ideat
             "article_archetype": (current_viral_blueprint(workspace, manifest, ideation).get("article_archetype") or manifest.get("article_archetype") or ""),
             "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "account_strategy": manifest.get("account_strategy") or {},
         },
     )
 
@@ -859,6 +999,7 @@ def current_writing_persona(workspace: Path, manifest: dict[str, Any], ideation:
             "content_mode": manifest.get("content_mode") or "tech-balanced",
             "article_archetype": blueprint.get("article_archetype") or manifest.get("article_archetype") or "",
             "author_memory": manifest.get("author_memory") or {},
+            "account_strategy": manifest.get("account_strategy") or {},
         },
     )
 
@@ -953,7 +1094,9 @@ def build_generation_preflight_report(
         if depth.get("counterpoint_paragraph_count", 0) < 1 and any(item.get("counterpoint_targets") for item in section_enhancements):
             missing_elements.append("写前增强已经给了边界提醒，但正文还没把反方或适用边界写进去。")
 
-    severe_types = {"author_phrase", "author_starter", "repeated_starter", "repeated_sentence_opener", "heading_monotony", "outline_like"}
+    if any(str(item.get("type") or "") == "prompt_leak" for item in ai_smell):
+        missing_elements.append("正文里泄漏了内部提示语或写作说明。")
+    severe_types = {"author_phrase", "author_starter", "repeated_starter", "repeated_sentence_opener", "heading_monotony", "outline_like", "prompt_leak"}
     severe_findings = [item for item in ai_smell if str(item.get("type") or "") in severe_types]
     if any(str(item.get("pattern") or "").startswith(("ending-pattern:", "heading-pattern:", "author-starter:")) for item in template_findings):
         severe_findings.extend(
@@ -971,6 +1114,7 @@ def build_generation_preflight_report(
             "补一处案例、数据或事实支撑。" if depth.get("evidence_paragraph_count", 0) < 1 else "",
             "补一处反方、误判或适用边界。" if depth.get("counterpoint_paragraph_count", 0) < 1 else "",
             "把卡片段落合并成至少一段真正展开的分析。" if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4 else "",
+            "删除内部提示语、写作说明和蓝图口吻。" if any(str(item.get("type") or "") == "prompt_leak" for item in ai_smell) else "",
             (
                 f"优先把这一条来源材料写进正文：{((section_enhancements[0].get('support_quotes') or [{}])[0].get('text') or (section_enhancements[0].get('support_sources') or [{}])[0].get('title') or '')}"
                 if section_enhancements and (section_enhancements[0].get("support_quotes") or section_enhancements[0].get("support_sources")) and depth.get("evidence_paragraph_count", 0) < 1
@@ -1193,6 +1337,7 @@ def select_scored_title(
         research=research,
         editorial_blueprint=manifest.get("editorial_blueprint") or {},
         selected_title=selected_title,
+        account_strategy=manifest.get("account_strategy") or {},
     )
     ranked_titles = list(decision_report.get("candidates") or [])
     selected = ranked_titles[0] if ranked_titles else None
@@ -1205,6 +1350,7 @@ def select_scored_title(
             recent_titles=manifest.get("recent_article_titles") or [],
             recent_corpus_summary=recent_corpus_summary if isinstance(recent_corpus_summary, dict) else {},
             writing_persona=manifest.get("writing_persona") or {},
+            account_strategy=manifest.get("account_strategy") or {},
         )
         decision_report = build_title_decision_report(
             topic=topic,
@@ -1215,19 +1361,25 @@ def select_scored_title(
             research=research,
             editorial_blueprint=manifest.get("editorial_blueprint") or {},
             selected_title=selected_title,
+            account_strategy=manifest.get("account_strategy") or {},
         )
         ranked_titles = list(decision_report.get("candidates") or [])
         selected = ranked_titles[0] if ranked_titles else None
-    chosen_title = selected_title or (selected.get("title") if selected else topic)
+    chosen_title = selected.get("title") if selected else topic
     if selected_title:
         selected_candidate = next((item for item in ranked_titles if str(item.get("title") or "") == selected_title), None)
-        if selected_candidate:
+        integrity = title_integrity_report(selected_title, topic=topic, account_strategy=manifest.get("account_strategy") or {})
+        if selected_candidate and selected_candidate.get("title_gate_passed", False):
+            chosen_title = selected_title
             ideation["selected_title_score"] = selected_candidate.get("title_score", 0)
             ideation["selected_title_gate_passed"] = selected_candidate.get("title_gate_passed", False)
+        elif selected_candidate:
+            ideation["selected_title_score"] = selected_candidate.get("title_score", 0)
+            ideation["selected_title_gate_passed"] = False
         else:
             selected_report = legacy.title_dimension_score(selected_title, audience, angle)
-            ideation["selected_title_score"] = selected_report["total_score"]
-            ideation["selected_title_gate_passed"] = selected_report["passed"]
+            ideation["selected_title_score"] = min(selected_report["total_score"], int((integrity.get("score") or 0) * 10))
+            ideation["selected_title_gate_passed"] = selected_report["passed"] and bool(integrity.get("passed"))
     elif selected:
         chosen_title = selected["title"]
         ideation["selected_title_score"] = selected.get("title_score", 0)
@@ -1247,6 +1399,7 @@ def select_scored_title(
     manifest["title_gate_threshold"] = ideation.get("title_threshold") or legacy.TITLE_SCORE_THRESHOLD
     manifest["title_gate_passed"] = ideation.get("selected_title_gate_passed", False)
     manifest["title_score"] = ideation.get("selected_title_score", 0)
+    sync_title_truth(workspace, manifest, chosen_title)
     return ideation, selected
 
 
@@ -1281,6 +1434,7 @@ def apply_research_credibility_boost(report: dict[str, Any], research: dict[str,
 def cmd_research(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     provider = require_live_text_provider("research")
     source_urls = normalize_urls(args.source_url or manifest.get("source_urls") or [])
     topic = args.topic or manifest.get("topic") or "未命名主题"
@@ -1292,6 +1446,7 @@ def cmd_research(args: argparse.Namespace) -> int:
             "angle": angle,
             "audience": audience,
             "source_urls": source_urls,
+            "account_strategy": manifest.get("account_strategy") or {},
         }
     )
     payload = dict(result.payload)
@@ -1301,6 +1456,7 @@ def cmd_research(args: argparse.Namespace) -> int:
     payload["provider"] = result.provider
     payload["model"] = result.model
     payload["generated_at"] = now_iso()
+    _update_research_requirements(workspace, manifest, payload)
     write_json(workspace / "research.json", payload)
     manifest.update(
         {
@@ -1322,6 +1478,7 @@ def cmd_research(args: argparse.Namespace) -> int:
 def cmd_titles(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = attach_corpus_context(workspace, manifest)
     manifest = attach_author_memory(workspace, manifest)
     provider = require_live_text_provider("titles")
@@ -1343,6 +1500,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
             "editorial_blueprint": current_editorial_blueprint(workspace, manifest),
             "author_memory": manifest.get("author_memory") or {},
             "writing_persona": writing_persona,
+            "account_strategy": manifest.get("account_strategy") or {},
         }
     )
     ideation = load_ideation(workspace)
@@ -1388,6 +1546,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
 def cmd_outline(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
@@ -1415,6 +1574,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
         "editorial_blueprint": editorial_blueprint,
         "author_memory": manifest.get("author_memory") or {},
         "writing_persona": writing_persona,
+        "account_strategy": manifest.get("account_strategy") or {},
     }
     result = provider.generate_outline(outline_context)
     normalize_context = {
@@ -1429,6 +1589,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
         "editorial_blueprint": editorial_blueprint,
         "author_memory": manifest.get("author_memory") or {},
         "writing_persona": writing_persona,
+        "account_strategy": manifest.get("account_strategy") or {},
     }
     outline = normalize_outline_payload(dict(result.payload), normalize_context)
     recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
@@ -1494,6 +1655,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
 def cmd_enhance(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
@@ -1534,6 +1696,7 @@ def cmd_enhance(args: argparse.Namespace) -> int:
 def cmd_write(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
@@ -1603,6 +1766,7 @@ def cmd_write(args: argparse.Namespace) -> int:
             "layout_plan": layout_plan,
             "writing_persona": ideation.get("writing_persona") or writing_persona,
             "content_enhancement": content_enhancement,
+            "account_strategy": manifest.get("account_strategy") or {},
         }
     )
     body = str(result.payload).strip()
@@ -1646,6 +1810,7 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
@@ -1688,6 +1853,7 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "layout_plan": layout_plan,
                 "writing_persona": writing_persona,
                 "content_enhancement": content_enhancement,
+                "account_strategy": manifest.get("account_strategy") or {},
             }
         )
         review_source = result.provider
@@ -1800,6 +1966,7 @@ def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) ->
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
@@ -1960,6 +2127,7 @@ def cmd_consent(args: argparse.Namespace) -> int:
 def cmd_discover_topics(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = attach_corpus_context(workspace, manifest)
     manifest = attach_author_memory(workspace, manifest)
     window_hours = int(args.window_hours or 24)
@@ -1979,13 +2147,16 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
         manifest.get("recent_article_titles") or [],
         manifest.get("recent_corpus_summary") or {},
         manifest.get("author_memory") or {},
+        manifest.get("account_strategy") or {},
     )[:limit]
     legacy.write_topic_discovery_artifacts(workspace, payload)
     manifest["topic_discovery_path"] = "topic-discovery.json"
     manifest["topic_discovery_provider"] = payload.get("provider") or legacy.normalize_discovery_provider(provider)
     manifest["topic_discovery_focus"] = payload.get("focus") or legacy.normalize_discovery_focus(focus)
     controls = dict(manifest.get("image_controls") or {})
-    controls.setdefault("density", "balanced")
+    strategy = manifest.get("account_strategy") or {}
+    controls.setdefault("density", str(strategy.get("image_density") or "minimal"))
+    controls.setdefault("layout_family", str(strategy.get("image_layout_family") or "editorial"))
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -2006,6 +2177,7 @@ def _reset_manifest_progress(manifest: dict[str, Any]) -> None:
 def cmd_select_topic(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
 
     discovery_rel = str(manifest.get("topic_discovery_path") or "topic-discovery.json")
     discovery_path = workspace / discovery_rel
@@ -2080,6 +2252,7 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
         }
     )
     write_json(workspace / "ideation.json", ideation)
+    sync_title_truth(workspace, manifest, selected_title)
     save_manifest(workspace, manifest)
     print(
         json.dumps(
@@ -2106,6 +2279,7 @@ def _merge_url_list(base: list[str], extra: list[str]) -> list[str]:
 def cmd_evidence(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
 
     max_urls = int(getattr(args, "limit", 6) or 6)
     max_items = int(getattr(args, "max_items", 6) or 6)
@@ -2185,7 +2359,9 @@ def cmd_evidence(args: argparse.Namespace) -> int:
         research["placeholder"] = False
     elif "placeholder" not in research:
         research["placeholder"] = False if research_exists else True
+    _update_research_requirements(workspace, manifest, research)
     write_json(research_path, research)
+    save_manifest(workspace, manifest)
 
     print(
         json.dumps(
@@ -2292,11 +2468,16 @@ def _effective_image_provider(args: argparse.Namespace) -> str | None:
 
 def _sync_image_controls(workspace: Path, args: argparse.Namespace) -> None:
     manifest = load_manifest(workspace)
-    manifest["image_controls"] = legacy.resolve_image_controls(manifest.get("image_controls"), args)
+    manifest = attach_account_strategy(workspace, manifest)
+    controls = legacy.resolve_image_controls(manifest.get("image_controls"), args)
+    strategy = manifest.get("account_strategy") or {}
+    controls.setdefault("density", str(strategy.get("image_density") or "minimal"))
+    manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
 
 
 def _write_hosted_research(workspace: Path, manifest: dict[str, Any], topic: str, angle: str, audience: str, source_urls: list[str]) -> None:
+    manifest = attach_account_strategy(workspace, manifest)
     payload = {
         "topic": topic,
         "angle": angle,
@@ -2310,6 +2491,7 @@ def _write_hosted_research(workspace: Path, manifest: dict[str, Any], topic: str
         "generated_at": now_iso(),
         "hosted": True,
     }
+    _update_research_requirements(workspace, manifest, payload)
     write_json(workspace / "research.json", payload)
     manifest.update(
         {
@@ -2326,6 +2508,7 @@ def _write_hosted_research(workspace: Path, manifest: dict[str, Any], topic: str
 
 
 def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str, outline_file: str | None) -> None:
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = attach_corpus_context(workspace, manifest)
     manifest = attach_author_memory(workspace, manifest)
     ideation = load_ideation(workspace)
@@ -2403,6 +2586,7 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
         manifest["editorial_blueprint"] = editorial_blueprint
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = title
+    sync_title_truth(workspace, manifest, title)
     manifest["content_mode"] = manifest.get("content_mode") or "tech-balanced"
     if outline_items:
         manifest["outline"] = outline_items
@@ -2411,6 +2595,7 @@ def _write_hosted_ideation(workspace: Path, manifest: dict[str, Any], title: str
 
 
 def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str, audience: str, angle: str, requested_title: str = "") -> None:
+    manifest = attach_account_strategy(workspace, manifest)
     ideation = load_ideation(workspace)
     writing_persona = current_writing_persona(workspace, manifest, ideation)
     if not ideation.get("titles"):
@@ -2430,6 +2615,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                     "editorial_blueprint": current_editorial_blueprint(workspace, manifest, ideation),
                     "author_memory": manifest.get("author_memory") or {},
                     "writing_persona": writing_persona,
+                    "account_strategy": manifest.get("account_strategy") or {},
                 }
             )
             if isinstance(result.payload, list):
@@ -2461,6 +2647,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                         recent_titles=manifest.get("recent_article_titles") or [],
                         recent_corpus_summary=manifest.get("recent_corpus_summary") or {},
                         writing_persona=writing_persona,
+                        account_strategy=manifest.get("account_strategy") or {},
                     ),
                     "updated_at": now_iso(),
                     "provider": "local-heuristic",
@@ -2474,6 +2661,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
 
 
 def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: str, title: str, angle: str, audience: str) -> str:
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = attach_corpus_context(workspace, manifest)
     manifest = attach_author_memory(workspace, manifest)
     provider = require_live_text_provider("hosted-run 自动补正文")
@@ -2486,6 +2674,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "angle": angle,
                 "audience": audience,
                 "source_urls": source_urls,
+                "account_strategy": manifest.get("account_strategy") or {},
             }
         )
         payload = dict(result.payload)
@@ -2519,6 +2708,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "editorial_blueprint": default_editorial_blueprint,
                 "author_memory": manifest.get("author_memory") or {},
                 "writing_persona": writing_persona,
+                "account_strategy": manifest.get("account_strategy") or {},
             }
         )
         if isinstance(title_result.payload, list):
@@ -2566,6 +2756,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "editorial_blueprint": default_editorial_blueprint,
                 "author_memory": manifest.get("author_memory") or {},
                 "writing_persona": writing_persona,
+                "account_strategy": manifest.get("account_strategy") or {},
             }
         )
         outline_meta = normalize_outline_payload(
@@ -2582,6 +2773,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "editorial_blueprint": default_editorial_blueprint,
                 "author_memory": manifest.get("author_memory") or {},
                 "writing_persona": writing_persona,
+                "account_strategy": manifest.get("account_strategy") or {},
             },
         )
         if not outline_meta.get("sections"):
@@ -2635,6 +2827,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "author_memory": manifest.get("author_memory") or {},
             "writing_persona": ideation.get("writing_persona") or current_writing_persona(workspace, manifest, ideation),
             "content_enhancement": content_enhancement,
+            "account_strategy": manifest.get("account_strategy") or {},
         }
     )
     body = str(article_result.payload).strip()
@@ -2665,6 +2858,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "content_enhancement_path": "content-enhancement.json",
         }
     )
+    sync_title_truth(workspace, manifest, title)
     update_stage(manifest, "draft", "draft_status")
     return title
 
@@ -2678,6 +2872,7 @@ def _import_hosted_article(
     angle: str,
     audience: str,
 ) -> str:
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = attach_corpus_context(workspace, manifest)
     manifest = attach_author_memory(workspace, manifest)
     manifest["writing_persona"] = current_writing_persona(workspace, manifest)
@@ -2743,6 +2938,7 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
 def cmd_score(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
     manifest = attach_corpus_context(workspace, manifest)
@@ -2920,6 +3116,7 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
 def cmd_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     style_sample = list(getattr(args, "style_sample", []) or [])
     manifest = persist_style_samples(workspace, manifest, style_sample)
@@ -2961,6 +3158,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
     manifest = load_manifest(workspace)
     _finalize_after_score(workspace, manifest, manifest.get("selected_title") or topic, score_report)
+    render_blockers = collect_render_blockers(workspace, manifest, score_report)
+    if render_blockers:
+        detail = "\n".join(f"- {item}" for item in render_blockers)
+        raise SystemExit(f"当前稿件不满足 render 前置条件：\n{detail}")
     _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)
     legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
@@ -3014,6 +3215,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_hosted_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
     manifest = persist_runtime_preferences(manifest, args)
     style_sample = list(getattr(args, "style_sample", []) or [])
     manifest = persist_style_samples(workspace, manifest, style_sample)
@@ -3047,6 +3249,10 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
     score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
     manifest = load_manifest(workspace)
     _finalize_after_score(workspace, manifest, title, score_report)
+    render_blockers = collect_render_blockers(workspace, manifest, score_report)
+    if render_blockers:
+        detail = "\n".join(f"- {item}" for item in render_blockers)
+        raise SystemExit(f"当前稿件不满足 render 前置条件：\n{detail}")
 
     _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)

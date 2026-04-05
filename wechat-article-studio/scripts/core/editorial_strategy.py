@@ -508,6 +508,10 @@ def _pick_from_candidates(candidates: list[dict[str, Any]], summary: dict[str, A
         ]
     )
     content_mode = _normalize_key(str(context.get("content_mode") or ""))
+    strategy = context.get("account_strategy") or {}
+    target_reader = _normalize_key(str(strategy.get("target_reader") or ""))
+    primary_goal = _normalize_key(str(strategy.get("primary_goal") or ""))
+    preferred_styles = {_normalize_key(str(item)) for item in (strategy.get("preferred_editorial_styles") or []) if _normalize_key(str(item))}
     best: dict[str, Any] | None = None
     best_score = -10**9
 
@@ -520,6 +524,13 @@ def _pick_from_candidates(candidates: list[dict[str, Any]], summary: dict[str, A
             if keyword and keyword in corpus:
                 score += 2
         score -= style_counts.get(style_key, 0) * 4
+        if preferred_styles and style_key in preferred_styles:
+            score += 3
+        if target_reader == "general-tech" and primary_goal == "open-and-read":
+            if style_key in {"field-observation", "case-memo"}:
+                score += 4
+            if style_key in {"signal-briefing", "qa-cross-exam"}:
+                score -= 2
 
         allowed_patterns = {_normalize_key(str(item)) for item in (profile.get("allowed_title_patterns") or []) if _normalize_key(str(item))}
         overlap_pressure = len({item for item in allowed_patterns if overused_title_counts.get(item, 0) > 0})
@@ -564,6 +575,16 @@ def default_editorial_blueprint(context: dict[str, Any]) -> dict[str, Any]:
     chosen["blocked_opening_patterns"] = [item.get("key") for item in (summary.get("overused_opening_patterns") or [])][:3] if isinstance(summary, dict) else []
     chosen["blocked_ending_patterns"] = [item.get("key") for item in (summary.get("overused_ending_patterns") or [])][:3] if isinstance(summary, dict) else []
     chosen["blocked_heading_patterns"] = [item.get("key") for item in (summary.get("overused_heading_patterns") or [])][:3] if isinstance(summary, dict) else []
+    account_strategy = context.get("account_strategy") or {}
+    if account_strategy:
+        preferred_opening = [str(item).strip() for item in (account_strategy.get("preferred_opening_modes") or []) if str(item).strip()]
+        preferred_ending = [str(item).strip() for item in (account_strategy.get("preferred_ending_modes") or []) if str(item).strip()]
+        if preferred_opening:
+            chosen["preferred_opening_modes"] = preferred_opening[:4]
+            chosen["opening_strategy"] = f"{preferred_opening[0]}优先，不要先上抽象判断。"
+        if preferred_ending:
+            chosen["preferred_ending_modes"] = preferred_ending[:4]
+            chosen["ending_strategy"] = f"{preferred_ending[0]}优先，少做模板化清单收尾。"
     chosen["diversity_note"] = (
         f"最近语料里高频出现的标题/开头/结尾模式要主动避开，当前优先改用“{chosen['style_label']}”这一路数。"
     )
@@ -598,9 +619,11 @@ def normalize_editorial_blueprint(payload: Any, context: dict[str, Any]) -> dict
 
 def _short_focus(topic: str, angle: str = "") -> str:
     source = _normalize_text(f"{topic} {angle}")
+    source = re.sub(r"(这次真正的信号|真正值得聊的|真正的分水岭在这里|别急着下结论|先别急着站队|很多人看热闹|最容易被忽略的那一步|更深一层)", "", source)
+    source = re.split(r"[，,:：。！？?]", source, maxsplit=1)[0].strip()
     if not source:
         return "这个问题"
-    return source[:26]
+    return source[:22]
 
 
 def generate_diverse_title_variants(
@@ -612,35 +635,39 @@ def generate_diverse_title_variants(
     recent_titles: list[str] | None = None,
     recent_corpus_summary: dict[str, Any] | None = None,
     writing_persona: dict[str, Any] | None = None,
+    account_strategy: dict[str, Any] | None = None,
 ) -> list[dict[str, str]]:
     focus = _short_focus(topic, angle)
     blueprint = editorial_blueprint or {}
     persona = writing_persona or {}
+    strategy = account_strategy or {}
     style_key = _normalize_key(str(blueprint.get("style_key") or ""))
     persona_name = _normalize_key(str(persona.get("name") or ""))
     recent_titles = recent_titles or []
     recent_summary = recent_corpus_summary or {}
     blocked_patterns = {item.get("key") for item in (recent_summary.get("overused_title_patterns") or []) if item.get("key")}
+    blocked_patterns.update({str(item).strip() for item in (strategy.get("blocked_title_patterns") or []) if str(item).strip()})
+    blocked_fragments = {str(item).strip() for item in (strategy.get("blocked_title_fragments") or []) if str(item).strip()}
     style_formulas: dict[str, list[str]] = {
         "signal-briefing": [
-            "{focus}这次真正的信号，不在表面热闹，而在更深一层",
-            "看懂{focus}，先别急着站队，真正的分水岭在这里",
-            "关于{focus}，市场真正开始重新定价的，是这一层",
+            "{focus}这件事别只看热闹，更该看它先改写了谁的处境",
+            "看懂{focus}，关键不是跟着站队，而是看清现实代价落在谁身上",
+            "关于{focus}，真正该盯住的不是表面结果，而是后面谁会先被影响",
         ],
         "counterintuitive-column": [
-            "大家都在聊{focus}，但真正值得警惕的不是热度",
-            "{focus}最容易被说反的一点，其实是这件事",
-            "别把{focus}看浅了，真正变化发生在更底层",
+            "大家都在聊{focus}，但最容易被低估的是它带来的现实后果",
+            "{focus}看上去像一条新闻，真正扎人的其实是它改写了日常判断",
+            "别把{focus}只当热度，更该看它会把哪些旧做法逼到墙角",
         ],
         "case-memo": [
-            "复盘{focus}：真正拉开差距的，不是资源，而是判断顺序",
-            "{focus}这件事，最该拆的不是结果，而是中间那一步",
-            "{focus}看上去是条新闻，拆开其实是一份流程备忘录",
+            "复盘{focus}：最值得拆开的，不是热闹，而是它为什么会先影响这群人",
+            "{focus}这件事，真正该拆的不是结果，而是中间那步判断怎么变了",
+            "{focus}看上去像条新闻，拆开更像一份现实代价清单",
         ],
         "field-observation": [
             "我最近反复看到一种{focus}时刻，它比新闻本身更值得写",
-            "{focus}最刺人的地方，不是结论，而是那个具体瞬间",
-            "很多人谈{focus}只看结果，但我更在意那个细节",
+            "{focus}最刺人的地方，不在结论，而在那个普通人立刻能感到不对劲的瞬间",
+            "很多人谈{focus}只看结果，但真正该写的是那个现实细节",
         ],
         "myth-buster": [
             "关于{focus}，这几个说法最容易把人带偏",
@@ -677,9 +704,9 @@ def generate_diverse_title_variants(
             f"看懂{focus}，先把影响路径和边界讲清楚",
         ] + style_formulas.get(style_key or "generic", [])
     fallback_pool = [
-        "{focus}真正值得聊的，不是表面答案，而是判断顺序",
-        "{focus}这件事，很多人看热闹，却没看到真正的代价",
-        "{focus}别急着下结论，先看最容易被忽略的那一步",
+        "{focus}这件事，最容易被低估的是它会先改变谁的现实处境",
+        "关于{focus}，先把代价、边界和误判讲清，再谈最后结论",
+        "{focus}看上去只是个新变化，更该看它会让哪些旧判断失效",
     ]
     formulas = list(style_formulas.get(style_key, [])) + fallback_pool
     seen: set[str] = set()
@@ -696,6 +723,8 @@ def generate_diverse_title_variants(
             continue
         pattern_key = title_template_key(title)
         if blocked_patterns and pattern_key in blocked_patterns:
+            continue
+        if any(fragment in title for fragment in blocked_fragments):
             continue
         output.append(
             {
@@ -720,6 +749,8 @@ def generate_diverse_title_variants(
             if compact in seen or title in recent_titles:
                 continue
             if blocked_patterns and title_template_key(title) in blocked_patterns:
+                continue
+            if any(fragment in title for fragment in blocked_fragments):
                 continue
             output.append(
                 {

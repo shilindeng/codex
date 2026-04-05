@@ -97,6 +97,16 @@ class EnhancementAndPersonaTests(unittest.TestCase):
     def test_persona_and_enhancement_follow_archetype(self):
         persona = normalize_writing_persona({}, {"article_archetype": "narrative", "content_mode": "tech-balanced", "author_memory": {}})
         self.assertEqual(persona.get("name"), "warm-editor")
+        strategy_persona = normalize_writing_persona(
+            {},
+            {
+                "article_archetype": "commentary",
+                "content_mode": "tech-balanced",
+                "author_memory": {},
+                "account_strategy": {"target_reader": "general-tech", "primary_goal": "open-and-read", "preferred_persona": "warm-editor"},
+            },
+        )
+        self.assertEqual(strategy_persona.get("name"), "warm-editor")
         self.assertEqual(enhancement_strategy_for_archetype("tutorial"), "density-strengthening")
 
         payload = build_content_enhancement(

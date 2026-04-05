@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +99,8 @@ class ImageControlTests(unittest.TestCase):
             self.assertIn(plan["items"][0].get("native_aspect_ratio"), {"3:2", "2:3"})
             self.assertTrue(plan["items"][0].get("safe_crop_policy"))
             self.assertTrue(plan["items"][0].get("visual_reason"))
+            self.assertEqual(plan["image_controls"].get("preset"), "notion")
+            self.assertEqual(plan["image_controls"].get("preset_label"), "知识卡片")
 
     def test_generate_images_falls_back_to_local_card_when_gemini_web_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -123,7 +126,7 @@ class ImageControlTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with unittest.mock.patch.object(legacy, "generate_gemini_web_image", side_effect=SystemExit("gemini-web 图片生成失败")):
+            with patch.object(legacy, "generate_gemini_web_image", side_effect=SystemExit("gemini-web 图片生成失败")):
                 legacy.cmd_generate_images(
                     type(
                         "Args",

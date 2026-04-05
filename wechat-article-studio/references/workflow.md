@@ -5,6 +5,7 @@
 0. `discover-topics`：用户无主题（或只说“开始 / 开启公众号创作”）时，先发现最近 12/24 小时热点选题（默认 RSS 优先，必要时 Tavily 回退）
 0. `hosted-run`：宿主 agent 生成 research / 标题 / 大纲 / 正文后，继续自动跑后链路
 1. `research`：收集主题、来源、信息缺口
+   - 默认同时读取 `account-strategy.json`，确认当前账号定位、目标读者、首要目标和最小证据要求
 2. `titles`：生成 3 个左右标题候选，并做标题准入评分
 3. `outline`：生成文章大纲与证据需求，并产出爆款策略蓝图 `viral_blueprint`
 4. `enhance`：在写作前补角度、细节、证据、边界与写作人格，产出 `content-enhancement.*`
@@ -21,6 +22,8 @@
 - `discover-topics` 产出的候选方向未经用户确认前，不进入正式正文生成
 - 标题与方向未确认前，不进入正式发布
 - `score` 未达阈值时，不进入正式发布；最多只允许 `--dry-run-publish` 做链路检查
+- 评论/案例类稿件未满足最小证据要求时，不进入正式 `render` 或正式发布
+- 标题在 `manifest.json`、`ideation.json`、标题报告和成稿之间不一致时，不进入正式发布
 - 未通过 `quality_gates`（含“情绪价值/刺痛/金句/去 AI 味/可信度”等硬门槛）时，不进入正式发布
 - “可信度与检索支撑”过低，或工作目录里仍存在 placeholder 回退结果时，不进入正式发布
 - 宿主导入的 `--article-file` 也必须先过 `enhance + generation-preflight + review + score`

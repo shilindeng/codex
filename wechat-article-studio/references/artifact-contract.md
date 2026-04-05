@@ -3,6 +3,7 @@
 ## 必备产物
 
 - `manifest.json`：状态机与路径索引
+- `account-strategy.json`：账号定位、目标读者、首要目标、标题/配图偏好与最小证据要求
 - `topic-discovery.json`：最近 12/24 小时热点选题发现结果
 - `topic-discovery.md`：面向人读的热点选题建议
 - `research.json`：调研输入、来源、证据摘录、信息缺口
@@ -50,6 +51,8 @@
 - `direction`
 - `audience`
 - `selected_title`
+- `account_strategy_path`
+- `account_strategy`
 - `title_report_path`
 - `title_decision_report_path`
 - `title_score`
@@ -75,6 +78,7 @@
 - `content_enhancement_path`
 - `editorial_anchor_plan_path`
 - `humanness_signals`
+- `research_requirements`
 - `publish_intent`
 - `content_mode`
 - `wechat_header_mode`
@@ -107,6 +111,10 @@
 - `passed`
 - `score_breakdown`
 - `quality_gates`
+- `title_integrity`
+- `evidence_readiness`
+- `opening_continue_read_risk`
+- `publish_blockers`
 - `humanness_signals`
 - `humanness_score`
 - `humanness_findings`

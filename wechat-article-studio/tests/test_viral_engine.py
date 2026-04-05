@@ -14,7 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 from core.viral import build_score_report, default_viral_blueprint, infer_article_archetype, normalize_outline_payload  # noqa: E402
-from core.workflow import collect_publish_blockers, _run_revision_loop  # noqa: E402
+from core.workflow import collect_publish_blockers, collect_render_blockers, _run_revision_loop  # noqa: E402
 import legacy_studio as legacy  # noqa: E402
 from providers.text.openai_compatible import placeholder_article, placeholder_outline  # noqa: E402
 
@@ -199,6 +199,63 @@ class ViralEngineTests(unittest.TestCase):
         smell_types = {item.get("type") for item in report.get("ai_smell_findings") or []}
         self.assertIn("author_phrase", smell_types)
         self.assertIn("author_starter", smell_types)
+
+    def test_score_report_flags_prompt_leak_and_low_interaction(self):
+        title = "AI 代码的维护成本为什么越来越像定时炸弹"
+        body = "\n\n".join(
+            [
+                "这类题目最怕的，不是信息不够，而是写法太像模板。围绕“这个主题”，更值得展开的是：场景切口。",
+                "最近很多团队都在加速上线 AI 功能，但真正让人心里发紧的，是后面没人敢接这堆代码。",
+                "很多项目看上去都跑起来了，直到第二个人接手，才发现每个模块都像有人碰过、又像没人真正负责。",
+                "## 成本会在什么时候一起冒出来",
+                "问题通常不是写得慢，而是坏代码复制得太快、返工来得太晚。",
+                "## 最后的判断",
+                "AI 让写代码更快，但真正贵的是以后谁还敢改。",
+            ]
+        )
+        report = build_score_report(
+            title,
+            body,
+            {"topic": title, "audience": "大众读者", "direction": "", "source_urls": ["https://news.google.com/rss/articles/demo"]},
+            threshold=70,
+        )
+        self.assertFalse(report.get("quality_gates", {}).get("prompt_leak_passed"))
+        self.assertFalse(report.get("quality_gates", {}).get("interaction_passed"))
+        smell_types = {item.get("type") for item in report.get("ai_smell_findings") or []}
+        self.assertIn("prompt_leak", smell_types)
+        self.assertLess(report.get("interaction_score") or 0, 6)
+
+    def test_collect_render_blockers_blocks_missing_evidence_and_title_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "最终标题",
+                        "topic": "最终标题",
+                        "audience": "大众读者",
+                        "article_path": "article.md",
+                        "score_passed": False,
+                        "research_requirements": {
+                            "requires_evidence": True,
+                            "passed": False,
+                            "reasons": ["来源不足：至少需要 2 条可回溯来源。"],
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("---\ntitle: 旧标题\nsummary: 摘要\n---\n\n正文。", encoding="utf-8")
+            (workspace / "ideation.json").write_text(json.dumps({"selected_title": "另一个标题"}, ensure_ascii=False, indent=2), encoding="utf-8")
+            (workspace / "score-report.json").write_text(
+                json.dumps({"passed": False, "quality_gates": {"credibility_passed": False}, "score_breakdown": [], "total_score": 60}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            blockers = collect_render_blockers(workspace, legacy.load_manifest(workspace))
+            self.assertTrue(any("调研门槛未通过" in item for item in blockers))
+            self.assertTrue(any("标题与当前真源不一致" in item for item in blockers))
 
     def test_score_report_does_not_mistake_normal_subject_and_last_judgment_for_template(self):
         title = "Claude Code源码风波，为什么Claude这么牛"

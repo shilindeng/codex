@@ -1700,6 +1700,10 @@ def rank_title_candidates(
     recent_titles: list[str] | None = None,
     recent_title_patterns: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    try:
+        from core.title_decision import title_integrity_report
+    except ImportError:
+        title_integrity_report = None
     scored: list[dict[str, Any]] = []
     seen: set[str] = set()
     candidates = list(titles or [])
@@ -1722,7 +1726,10 @@ def rank_title_candidates(
         if recent_titles and any(title.startswith(prefix[:10]) for prefix in recent_titles[:6] if len(prefix) >= 10):
             repeat_penalty += 3
         if template_key and template_key in recent_title_patterns:
-            repeat_penalty += 6
+            repeat_penalty += 10
+        integrity = title_integrity_report(title, topic=topic) if title_integrity_report else {"score": 10, "passed": True, "issues": []}
+        if not integrity.get("passed", True):
+            repeat_penalty += max(3, int(round(10 - float(integrity.get("score") or 0))))
         final_score = max(0, int(report["total_score"]) - repeat_penalty)
         scored.append(
             {
@@ -1734,6 +1741,7 @@ def rank_title_candidates(
                 "title_score_threshold": report["threshold"],
                 "title_template_key": template_key,
                 "title_repeat_penalty": repeat_penalty,
+                "title_integrity": integrity,
             }
         )
     scored.sort(key=lambda item: (item.get("title_gate_passed", False), item.get("title_score", 0)), reverse=True)
@@ -2110,6 +2118,18 @@ def cleanup_rewrite_text(text: str) -> str:
 def cleanup_rewrite_markdown(body: str) -> str:
     blocks = [block.strip() for block in re.split(r"\n\s*\n", body or "") if block and block.strip()]
     cleaned_blocks: list[str] = []
+    leak_markers = (
+        "这类题目最怕的",
+        "围绕“这个主题”",
+        "围绕这个主题",
+        "更值得展开的是",
+        "先把主判断立住",
+        "先给一个可代入的处境",
+        "先把比较对象和判断方向亮出来",
+        "正文由宿主 agent",
+        "editorial_blueprint",
+        "viral_blueprint",
+    )
     for block in blocks:
         # Avoid breaking markdown structure.
         if re.match(r"^#{1,6}\s+", block):
@@ -2120,6 +2140,8 @@ def cleanup_rewrite_markdown(body: str) -> str:
             continue
         if re.match(r"^[-*]\s+", block) or re.match(r"^\d+\.\s+", block):
             cleaned_blocks.append(block)
+            continue
+        if any(marker in block for marker in leak_markers):
             continue
         cleaned_blocks.append(cleanup_rewrite_text(block))
     return ("\n\n".join(cleaned_blocks).strip() + "\n") if cleaned_blocks else ""
@@ -2148,16 +2170,15 @@ def build_rewritten_intro(title: str, intro_blocks: list[str], suggestions: dict
     paragraphs = [hook]
     if "情绪共鸣" in low_dims:
         paragraphs.append("如果你也在被新工具推着跑、却又隐约担心自己会被替代，这种焦虑并不丢人，它恰恰说明你开始认真看待自己的长期价值了。")
-    if opening_directions:
-        paragraphs.append(f"这类题目最怕的，不是信息不够，而是写法太像模板。围绕“{direction}”，更值得展开的是：{opening_directions[0]}。")
-    else:
-        paragraphs.append(f"围绕“{direction}”，这篇文章更想把那些不那么显眼、却更影响结果的逻辑一层层翻出来。")
     if len(intro_blocks) > 1:
         tail = cleanup_rewrite_text(intro_blocks[1])
         if tail and tail not in paragraphs[-1]:
             paragraphs.append(tail)
     else:
-        paragraphs.append(f"如果这件事和 {audience} 的日常判断有关，那真正值得读下去的，不是标准答案，而是“{first_heading}”背后的那层分水岭。")
+        if opening_directions:
+            paragraphs.append(f"真正值得往下读的，不是再重复一遍结论，而是把“{opening_directions[0]}”这层现实处境写实。")
+        else:
+            paragraphs.append(f"如果这件事和 {audience} 的日常判断有关，那最该拆开的，不是表面热闹，而是“{first_heading}”背后的现实后果。")
     return paragraphs[:4]
 
 
@@ -3023,7 +3044,7 @@ def build_effective_image_controls(controls: dict[str, Any], strategy: dict[str,
 def visual_profile_for_item(controls: dict[str, Any], item: dict[str, Any]) -> dict[str, str]:
     style_mode = controls.get("style_mode") or "uniform"
     base_preset = (controls.get("preset") or "").strip()
-    base_preset_label = (controls.get("preset_label") or "").strip()
+    base_preset_label = IMAGE_STYLE_PRESETS.get(base_preset, {}).get("label", (controls.get("preset_label") or "").strip())
     base_theme = controls.get("theme", "") or "文章主题导向"
     base_style = controls.get("style", "") or "内容驱动视觉表达"
     base_mood = controls.get("mood", "") or "克制清晰"
@@ -3547,6 +3568,10 @@ def write_topic_discovery_artifacts(workspace: Path, payload: dict[str, Any]) ->
 def cmd_discover_topics(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    try:
+        from core.account_strategy import load_account_strategy
+    except ImportError:
+        load_account_strategy = None
     window_hours = int(args.window_hours or 24)
     limit = int(args.limit or DISCOVERY_TOPIC_LIMIT)
     provider = getattr(args, "provider", None)
@@ -3557,9 +3582,10 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     manifest["topic_discovery_path"] = "topic-discovery.json"
     manifest["topic_discovery_provider"] = payload.get("provider") or normalize_discovery_provider(provider)
     manifest["topic_discovery_focus"] = payload.get("focus") or focus
+    strategy = load_account_strategy(workspace, manifest, create_if_missing=True) if load_account_strategy else (manifest.get("account_strategy") or {})
     controls = dict(manifest.get("image_controls") or {})
     # 无主题启动仅保留安全的密度默认，不再隐式锁定风格、主题或图型。
-    controls.setdefault("density", "balanced")
+    controls.setdefault("density", str(strategy.get("image_density") or "minimal"))
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
     safe_print_json(payload)
@@ -4367,21 +4393,49 @@ def image_planning_diagnostics(sections: list[dict[str, Any]], inline_sections: 
 def cmd_plan_images(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    try:
+        from core.account_strategy import infer_visual_preset, load_account_strategy
+    except ImportError:
+        infer_visual_preset = None
+        load_account_strategy = None
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
         raise SystemExit(f"\u627e\u4e0d\u5230\u6587\u7ae0\u6587\u4ef6\uff1a{article_path}")
     meta, body = split_frontmatter(read_text(article_path))
     title = infer_title(manifest, meta, body)
     summary = manifest.get("summary") or meta.get("summary") or extract_summary(body)
+    account_strategy = load_account_strategy(workspace, manifest, create_if_missing=True) if load_account_strategy else (manifest.get("account_strategy") or {})
     controls = resolve_image_controls(manifest.get("image_controls"), args, title=title, summary=summary, body=body)
+    if infer_visual_preset and not _has_explicit_image_controls(args):
+        controls["density"] = str(account_strategy.get("image_density") or controls.get("density") or "minimal")
     manifest["image_controls"] = controls
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
     intro_blocks, sections = normalize_sections_for_images(body)
     article_strategy = infer_article_visual_strategy(title, summary, body, audience, controls, sections)
     effective_controls = build_effective_image_controls(controls, article_strategy)
     effective_controls["profile_key"] = article_strategy.get("profile_key", "")
+    if infer_visual_preset and not _has_explicit_image_controls(args):
+        preset = infer_visual_preset(title, summary, body, account_strategy)
+        blocked = {str(item).strip() for item in (account_strategy.get("blocked_image_presets") or []) if str(item).strip()}
+        if preset and preset not in blocked:
+            effective_controls["preset"] = preset
+            effective_controls["preset_label"] = IMAGE_STYLE_PRESETS.get(preset, {}).get("label", effective_controls.get("preset_label", ""))
+            effective_controls["preset_cover"] = preset
+            effective_controls["preset_inline"] = preset if preset != "professional-corporate" else "notion"
+            effective_controls["preset_infographic"] = "notion"
+            effective_controls["preset_cover_label"] = IMAGE_STYLE_PRESETS.get(effective_controls["preset_cover"], {}).get("label", "")
+            effective_controls["preset_inline_label"] = IMAGE_STYLE_PRESETS.get(effective_controls["preset_inline"], {}).get("label", "")
+            effective_controls["preset_infographic_label"] = IMAGE_STYLE_PRESETS.get(effective_controls["preset_infographic"], {}).get("label", "")
+    if not _has_explicit_image_controls(args):
+        preferred_layout = str(account_strategy.get("image_layout_family") or "").strip()
+        if preferred_layout and effective_controls.get("layout_family") not in {"process", "comparison"}:
+            effective_controls["layout_family"] = preferred_layout
     provider = image_provider_from_env(args.provider)
     inline_limit = estimate_inline_image_count(body, args.inline_count, effective_controls.get("density", "balanced"))
+    max_inline_images = int(account_strategy.get("max_inline_images") or 0) if isinstance(account_strategy, dict) else 0
+    structured_bonus = 1 if any(keyword in f"{title}\n{summary}\n{body}" for keyword in ["对比", "流程", "复盘", "框架"]) else 0
+    if max_inline_images:
+        inline_limit = min(inline_limit, max_inline_images + structured_bonus)
     inline_sections = select_sections_for_images(body, inline_limit, article_strategy=article_strategy)
     intro_char_count = sum(cjk_len(block) for block in intro_blocks)
     content_sections = [section for section in sections if not is_reference_heading(section.get("heading", ""))]
@@ -5308,7 +5362,7 @@ def verify_draft_publication(
 
 
 def derive_digest(meta: dict[str, str], manifest: dict[str, Any], body: str) -> str:
-    return meta.get("summary") or manifest.get("summary") or extract_summary(body)
+    return manifest.get("summary") or meta.get("summary") or extract_summary(body)
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
@@ -5323,7 +5377,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
             raise SystemExit(f"找不到待发布的 HTML 文件：{html_path}")
         meta, body = split_frontmatter(read_text(article_source))
         title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名文章"
-        digest_preview = meta.get("summary") or manifest.get("summary") or extract_summary(body)
+        digest_preview = manifest.get("summary") or meta.get("summary") or extract_summary(body)
         # Keep legacy publish path consistent with core renderer output.
         from core.layout import DEFAULT_ACCENT_COLOR, THEMES, analyze_content_signals, choose_accent_color, choose_layout_style, markdown_to_html
         from core.wechat_fragment import render_wechat_fragment

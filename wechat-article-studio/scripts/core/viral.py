@@ -14,6 +14,7 @@ from core.editorial_strategy import (
     opening_pattern_key,
     title_template_key,
 )
+from core.title_decision import title_integrity_report
 
 
 VIRAL_BLUEPRINT_FIELDS = [
@@ -62,6 +63,20 @@ KNOWN_TEMPLATE_PHRASES = [
     "别急着把",
     "说白了",
     "以后真正靠谱的 AI，可能不是",
+]
+
+PROMPT_LEAK_PATTERNS = [
+    "这类题目最怕的",
+    "围绕“这个主题”",
+    "围绕这个主题",
+    "更值得展开的是",
+    "先把主判断立住",
+    "先给一个可代入的处境",
+    "先把比较对象和判断方向亮出来",
+    "正文由宿主 agent",
+    "editorial_blueprint",
+    "viral_blueprint",
+    "写作要求",
 ]
 
 EMOTION_VALUE_MARKERS = [
@@ -260,6 +275,7 @@ SEVERE_AI_SMELL_TYPES = {
     "heading_monotony",
     "author_phrase",
     "author_starter",
+    "prompt_leak",
 }
 BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "article_archetype",
@@ -1334,6 +1350,16 @@ def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str
     }
 
 
+def _prompt_leak_findings(body: str) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for phrase in PROMPT_LEAK_PATTERNS:
+        hits = body.count(phrase)
+        if not hits:
+            continue
+        findings.append({"type": "prompt_leak", "pattern": phrase, "count": hits, "evidence": f"成稿里泄漏内部提示语：{phrase}"})
+    return findings
+
+
 def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for phrase in getattr(legacy, "AI_STYLE_PHRASES", []) or []:
@@ -1404,6 +1430,7 @@ def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> lis
         hits = sum(1 for item in paragraphs if _clean_block_text(item).startswith(compact))
         if hits:
             findings.append({"type": "author_starter", "pattern": compact, "count": hits, "evidence": f"作者记忆明确避开这种起手：{compact}"})
+    findings.extend(_prompt_leak_findings(body))
     return findings
 
 
@@ -1597,8 +1624,11 @@ def _heuristic_editorial_review(
 ) -> dict[str, Any]:
     intro = " ".join(_first_paragraphs(body, limit=2))
     depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
+    prompt_leaks = _prompt_leak_findings(body)
     reading_desire = "high" if ("？" in intro or any(word in intro for word in ["你可能", "最近", "刷到", "某天", "为什么"]) or depth.get("scene_paragraph_count", 0) >= 1) else "medium"
     if legacy.cjk_len(intro) < 40:
+        reading_desire = "low"
+    if prompt_leaks:
         reading_desire = "low"
     professional_tone = "high" if len(template_findings) <= 1 and not depth.get("outline_like") else "medium"
     novelty = "high" if any(word in body for word in ["误判", "分水岭", "真相", "被忽略", "拐点"]) and depth.get("counterpoint_paragraph_count", 0) >= 1 else "medium"
@@ -1609,12 +1639,13 @@ def _heuristic_editorial_review(
         or depth.get("repeated_starter_count", 0) >= 2
         or depth.get("repeated_sentence_opener_count", 0) >= 2
         or depth.get("heading_monotony")
+        or bool(prompt_leaks)
         else "medium" if template_findings else "low"
     )
     citation_restraint = "high" if citation.get("raw_url_count", 0) == 0 else "low"
     ending = " ".join(legacy.list_paragraphs(body)[-2:])
     ending_naturalness = "high" if ending and not re.search(r"最后给你一个可执行清单|如果你只想记住一句话", ending) else "low"
-    interaction_naturalness = "high" if review.get("viral_analysis", {}).get("comment_triggers") and review.get("viral_analysis", {}).get("share_triggers") else "medium"
+    interaction_naturalness = "high" if re.search(r"(如果是你|你会怎么|你更认同|欢迎留言|评论区)", ending) else "low"
     return {
         "reading_desire": reading_desire,
         "professional_tone": professional_tone,
@@ -2040,15 +2071,23 @@ def _score_interaction_design(review: dict[str, Any], body: str) -> tuple[int, s
     controversy = _normalize_list(analysis.get("controversy_anchors"))
     peak = str(analysis.get("peak_moment") or "").strip()
     ending = str(analysis.get("ending_interaction_design") or "").strip()
-    score = 2
-    score += min(2, max(0, len(like_triggers) - 1))
-    score += min(2, len(comment_triggers))
-    score += min(2, max(0, len(share_triggers) + len(social_currency) - 1) // 2)
-    score += 1 if identity_labels else 0
-    score += 1 if controversy else 0
-    score += 2 if peak and ending else 0
-    if re.search(r"[？?]", body):
-        score += 1
+    ending_text = " ".join(legacy.list_paragraphs(body)[-2:])
+    comment_prompt_hits = len(re.findall(r"(如果是你|你会怎么|你更认同|你遇到过|欢迎留言|评论区|你最想|你会先)", ending_text))
+    ending_question = len(re.findall(r"[？?]", ending_text))
+    identity_hits = len(re.findall(r"(普通人|团队|老板|创业者|开发者|从业者|管理者)", body))
+    quote_count = len(review.get("viral_analysis", {}).get("signature_lines") or [])
+    score = 1
+    score += min(2, quote_count // 2)
+    score += 2 if len(like_triggers) >= 2 and quote_count >= 1 else 0
+    score += min(3, comment_prompt_hits + min(1, ending_question))
+    score += 1 if share_triggers and social_currency and quote_count >= 1 else 0
+    score += 1 if identity_labels and identity_hits >= 2 else 0
+    score += 1 if controversy and re.search(r"(争议|站队|到底|谁更|该不该)", ending_text + body) else 0
+    score += 1 if peak and ending and (comment_prompt_hits or ending_question) else 0
+    if not comment_prompt_hits and not ending_question:
+        score = min(score, 4)
+    if not share_triggers and not social_currency:
+        score = min(score, 5)
     return min(10, score), "高互动内容要同时具备点赞共鸣、评论触发、转发谈资，以及峰终体验。"
 
 
@@ -2133,6 +2172,44 @@ def _score_credibility(body: str, manifest: dict[str, Any], review: dict[str, An
     return score, "事实型内容必须经得起回溯，正文里不要裸贴链接；系统保留来源记录用于校验和回看。"
 
 
+def _evidence_readiness(manifest: dict[str, Any], body: str, review: dict[str, Any]) -> dict[str, Any]:
+    existing = manifest.get("research_requirements")
+    if isinstance(existing, dict) and existing:
+        return existing
+    refs = _references_summary(manifest)
+    depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
+    source_count = len(manifest.get("source_urls") or [])
+    evidence_count = max(refs.get("reference_count", 0), int(depth.get("evidence_paragraph_count") or 0))
+    requires_evidence = str((manifest.get("viral_blueprint") or {}).get("article_archetype") or manifest.get("article_archetype") or "commentary").lower() != "tutorial"
+    reasons: list[str] = []
+    if requires_evidence and source_count < 2:
+        reasons.append("可回溯来源不足 2 条")
+    if requires_evidence and evidence_count < 1:
+        reasons.append("还没有可落进正文的证据卡")
+    return {
+        "requires_evidence": requires_evidence,
+        "source_count": source_count,
+        "evidence_count": evidence_count,
+        "passed": not reasons,
+        "reasons": reasons,
+    }
+
+
+def _image_fit_expectation(title: str, body: str, manifest: dict[str, Any]) -> dict[str, Any]:
+    strategy = manifest.get("account_strategy") or {}
+    blocked = [str(item).strip() for item in (strategy.get("blocked_image_presets") or []) if str(item).strip()]
+    density = str(strategy.get("image_density") or "minimal").strip() or "minimal"
+    max_inline = int(strategy.get("max_inline_images") or 2)
+    pressure_keywords = ["成本", "岗位", "风险", "算力", "危机", "封杀", "银行", "租赁费", "H100"]
+    pressure = any(keyword in f"{title}\n{body}" for keyword in pressure_keywords)
+    return {
+        "preferred_density": density,
+        "max_inline_images": max_inline,
+        "blocked_presets": blocked,
+        "visual_focus": "贴题解释优先" if pressure else "解释和承接优先",
+    }
+
+
 def _build_quality_gates(
     review: dict[str, Any],
     blueprint: dict[str, Any],
@@ -2142,15 +2219,21 @@ def _build_quality_gates(
     template_penalty_hits: int,
     similarity_findings: dict[str, Any],
     citation_findings: dict[str, Any],
+    evidence_readiness: dict[str, Any],
+    title_integrity: dict[str, Any],
 ) -> dict[str, bool]:
     ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     editorial = review.get("editorial_review") or {}
     depth = review.get("depth_signals") or {}
+    prompt_leak_hits = [item for item in (review.get("ai_smell_findings") or []) if str(item.get("type") or "") == "prompt_leak"]
     return {
         "viral_blueprint_complete": blueprint_complete(blueprint),
         "interaction_passed": interaction_score >= 6,
         "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD,
         "credibility_passed": credibility_score >= 5,
+        "title_integrity_passed": bool(title_integrity.get("passed")),
+        "evidence_minimum_passed": bool(evidence_readiness.get("passed", True)),
+        "prompt_leak_passed": not prompt_leak_hits,
         "depth_passed": bool(
             depth.get("scene_paragraph_count", 0) >= 1
             and depth.get("evidence_paragraph_count", 0) >= 1
@@ -2166,7 +2249,7 @@ def _build_quality_gates(
         "template_penalty_passed": template_penalty_hits <= 1,
         "similarity_passed": bool(similarity_findings.get("similarity_passed", True)),
         "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
-        "editorial_review_passed": editorial.get("reading_desire") != "low" and editorial.get("template_risk") != "high",
+        "editorial_review_passed": editorial.get("reading_desire") != "low" and editorial.get("template_risk") != "high" and editorial.get("interaction_naturalness") != "low",
     }
 
 
@@ -2192,6 +2275,7 @@ def build_score_report(
         },
     )
     review = review or build_heuristic_review(title, body, manifest, blueprint=blueprint)
+    title_integrity = title_integrity_report(title, topic=manifest.get("topic") or title, account_strategy=manifest.get("account_strategy") or {})
     hot_intro, hot_intro_note = _score_hot_intro(title, body, review)
     viewpoint_score, viewpoint_note = _score_viewpoints(review)
     argument_score, argument_note = _score_argument_diversity(review)
@@ -2220,6 +2304,8 @@ def build_score_report(
     humanness_signals = review.get("humanness_signals") or build_humanness_signals(body, manifest, {"depth_signals": depth_signals})
     humanness_score, derived_humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
     humanness_findings = _dedupe(_normalize_list(review.get("humanness_findings")) + derived_humanness_findings)
+    evidence_readiness = _evidence_readiness(manifest, body, review | {"depth_signals": depth_signals})
+    image_fit_expectation = _image_fit_expectation(title, body, manifest)
     template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
         similarity_findings.get("repeated_phrases") or []
     )
@@ -2246,6 +2332,8 @@ def build_score_report(
         template_penalty_hits=template_penalty_hits,
         similarity_findings=similarity_findings,
         citation_findings=citation_findings,
+        evidence_readiness=evidence_readiness,
+        title_integrity=title_integrity,
     )
     strengths = []
     weaknesses = []
@@ -2262,6 +2350,9 @@ def build_score_report(
             "补互动设计：显式安排点赞共鸣点、评论问题和可转发谈资。" if interaction_score < 7 else "",
             "继续清理模板腔，压低 AI 痕迹。" if not quality_gates["de_ai_passed"] else "",
             "补来源、数据或官方依据，提升可信度。" if not quality_gates["credibility_passed"] else "",
+            "重写标题，先保证语义完整、句法顺和首屏可读。" if not quality_gates["title_integrity_passed"] else "",
+            "补足最小证据要求：至少 2 条来源、至少 1 条可写进正文的证据卡。" if not quality_gates["evidence_minimum_passed"] else "",
+            "删除成稿里泄漏的内部提示语、写作说明和蓝图口吻。" if not quality_gates["prompt_leak_passed"] else "",
             "补现场、案例和反方边界，让文章真正立起来。" if not quality_gates["depth_passed"] else "",
             "打散段落起手和小标题模式，避免整篇像同一套模板复印。" if not quality_gates["structure_passed"] else "",
             "重写篇章结构和句法节奏，压低模板惩罚。" if not quality_gates["template_penalty_passed"] else "",
@@ -2271,6 +2362,18 @@ def build_score_report(
             "先把阅读欲望、专业感和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
         ]
         + list(review.get("revision_priorities") or [])
+    )
+    opening_continue_read_risk = (
+        "high"
+        if editorial_review.get("reading_desire") == "low" or hot_intro <= 5
+        else "medium"
+        if hot_intro <= 7
+        else "low"
+    )
+    publish_blockers = _dedupe(
+        list(title_integrity.get("issues") or [])
+        + list(evidence_readiness.get("reasons") or [])
+        + [f"质量门槛未通过：{name}" for name in failed_gates]
     )
     suggestions = {
         "opening_directions": _dedupe(
@@ -2321,6 +2424,11 @@ def build_score_report(
         "suggestions": suggestions,
         "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
         "quality_gates": quality_gates,
+        "title_integrity": title_integrity,
+        "evidence_readiness": evidence_readiness,
+        "image_fit_expectation": image_fit_expectation,
+        "opening_continue_read_risk": opening_continue_read_risk,
+        "publish_blockers": publish_blockers,
         "viral_blueprint": blueprint,
         "viral_analysis": review.get("viral_analysis") or {},
         "editorial_review": editorial_review,

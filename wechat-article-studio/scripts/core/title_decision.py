@@ -8,6 +8,23 @@ from core.editorial_strategy import title_template_key
 
 
 ABSOLUTE_TITLE_WORDS = ("唯一", "彻底", "一定", "所有", "必然", "100%", "永远")
+HIGH_RISK_TITLE_FRAGMENTS = (
+    "这次真正的信号",
+    "真正值得聊的",
+    "真正的分水岭在这里",
+    "别急着下结论",
+    "先别急着站队",
+    "很多人看热闹",
+    "最容易被忽略的那一步",
+    "不是表面答案",
+    "更深一层",
+)
+BROKEN_CONNECTOR_PATTERNS = (
+    r"不是(?:这次真正的信号|真正值得聊的|别急着下结论|先别急着站队|很多人看热闹|最容易被忽略的那一步)",
+    r"而真正(?:值得聊的|的分水岭)",
+    r"(?:这次真正的信号|真正值得聊的).+(?:这次真正的信号|真正值得聊的)",
+)
+RISKY_TITLE_ENDINGS = ("这里", "那一步", "这一层")
 
 
 def _normalize_text(value: str) -> str:
@@ -126,6 +143,57 @@ def _trust_score(title: str, research: dict[str, Any], candidate: dict[str, Any]
     return round(max(0.0, min(score, 10.0)), 2), notes
 
 
+def title_integrity_report(title: str, *, topic: str = "", account_strategy: dict[str, Any] | None = None) -> dict[str, Any]:
+    strategy = account_strategy or {}
+    issues: list[str] = []
+    score = 10.0
+    normalized = _normalize_text(title)
+    blocked_patterns = {str(item).strip() for item in (strategy.get("blocked_title_patterns") or []) if str(item).strip()}
+    blocked_fragments = {
+        str(item).strip()
+        for item in [*HIGH_RISK_TITLE_FRAGMENTS, *(strategy.get("blocked_title_fragments") or [])]
+        if str(item).strip()
+    }
+    fragment_hits = [fragment for fragment in blocked_fragments if fragment in title]
+    if len(fragment_hits) >= 2:
+        score -= 4.0
+        issues.append("标题同时叠了两层以上熟套路，像模板拼接。")
+    for pattern in BROKEN_CONNECTOR_PATTERNS:
+        if re.search(pattern, title):
+            score -= 5.0
+            issues.append("标题里的连接词前后不通顺，存在残句或硬拼接。")
+            break
+    if any(title.endswith(ending) for ending in RISKY_TITLE_ENDINGS):
+        score -= 2.0
+        issues.append("标题收在空泛尾巴上，读者读完还不知道具体在说什么。")
+    if title.count("真正") >= 3:
+        score -= 1.5
+        issues.append("“真正”重复过多，明显像模板腔。")
+    if re.search(r"[，,:：]{2,}", title) or re.search(r"[，,:：]\s*[，,:：]", title):
+        score -= 2.5
+        issues.append("标题标点异常，阅读不顺。")
+    if blocked_patterns and title_template_key(title) in blocked_patterns:
+        score -= 2.0
+        issues.append("标题路数撞上账号策略明确禁用的模板。")
+    if fragment_hits:
+        score -= min(2.5, len(fragment_hits) * 0.8)
+        issues.append(f"标题命中高风险碎片：{'、'.join(fragment_hits[:3])}")
+    if len(normalized) > 34:
+        score -= 1.0
+        issues.append("标题过长，首屏不利于快速抓住读者。")
+    if topic and normalized and normalized == _normalize_text(topic) and len(fragment_hits) >= 1:
+        score -= 1.5
+        issues.append("原始主题本身已经像标题模板，不能直接拿来发。")
+    passed = score >= 6.0 and not any("残句" in item or "硬拼接" in item for item in issues)
+    notes = [] if issues else ["标题语义完整，句法顺，读起来不像拼出来的。"]
+    return {
+        "score": round(max(0.0, min(score, 10.0)), 2),
+        "passed": passed,
+        "issues": issues[:5],
+        "notes": notes,
+    }
+
+
 def build_title_decision_report(
     *,
     topic: str,
@@ -136,9 +204,11 @@ def build_title_decision_report(
     research: dict[str, Any] | None = None,
     editorial_blueprint: dict[str, Any] | None = None,
     selected_title: str = "",
+    account_strategy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     research = research or {}
     editorial_blueprint = editorial_blueprint or {}
+    account_strategy = account_strategy or {}
     recent_titles = [str(item or "").strip() for item in (manifest.get("recent_article_titles") or []) if str(item or "").strip()]
     recent_patterns = list((manifest.get("recent_corpus_summary") or {}).get("overused_title_patterns") or [])
     recent_title_patterns = {str(item.get("key") or "").strip() for item in recent_patterns if str(item.get("key") or "").strip()}
@@ -188,13 +258,16 @@ def build_title_decision_report(
         differentiation_score = round(max(1.0, min(differentiation_score, 10.0)), 2)
         author_fit_score, author_notes = _author_fit_score(title, author_memory, editorial_blueprint, writing_persona if isinstance(writing_persona, dict) else {})
         trust_score, trust_notes = _trust_score(title, research, item)
+        integrity = title_integrity_report(title, topic=topic, account_strategy=account_strategy)
+        integrity_score = float(integrity.get("score") or 0)
         total_score = round(
             (
-                propagation_score * 0.30
-                + novelty_score * 0.25
-                + differentiation_score * 0.20
-                + author_fit_score * 0.15
+                propagation_score * 0.24
+                + novelty_score * 0.20
+                + differentiation_score * 0.18
+                + author_fit_score * 0.13
                 + trust_score * 0.10
+                + integrity_score * 0.15
             )
             * 10
         )
@@ -203,6 +276,7 @@ def build_title_decision_report(
             and propagation_score >= 5.0
             and novelty_score >= 5.0
             and differentiation_score >= 5.0
+            and integrity.get("passed")
         )
         decision_notes = []
         if novelty_score >= 7.0:
@@ -213,6 +287,8 @@ def build_title_decision_report(
             decision_notes.append("传播钩子和清晰度足够")
         if author_fit_score >= 7.0:
             decision_notes.append("更像这个号会用的标题气质")
+        if integrity.get("passed"):
+            decision_notes.append("语义完整，读起来不像拼接残句")
         decision_notes.extend(author_notes[:2])
         decision_notes.extend(trust_notes[:2])
         rejection_reason = []
@@ -224,6 +300,7 @@ def build_title_decision_report(
             rejection_reason.append("传播性不够")
         if trust_score < 5.0:
             rejection_reason.append("可信度风险偏高")
+        rejection_reason.extend(integrity.get("issues") or [])
 
         normalized_candidates.append(
             {
@@ -241,10 +318,12 @@ def build_title_decision_report(
                     "差异度": differentiation_score,
                     "作者匹配度": author_fit_score,
                     "可信度": trust_score,
+                    "完整性": integrity_score,
                 },
                 "decision_notes": decision_notes[:5],
-                "rejection_reason": rejection_reason[:3],
+                "rejection_reason": rejection_reason[:5],
                 "recent_title_overlap": round(max_overlap, 3),
+                "title_integrity": integrity,
             }
         )
 
@@ -252,6 +331,7 @@ def build_title_decision_report(
         key=lambda item: (
             bool(item.get("title_gate_passed")),
             float(item.get("title_score") or 0),
+            float((item.get("decision_breakdown") or {}).get("完整性") or 0),
             float((item.get("decision_breakdown") or {}).get("新鲜度") or 0),
             float((item.get("decision_breakdown") or {}).get("差异度") or 0),
         ),
@@ -292,7 +372,7 @@ def markdown_title_decision_report(payload: dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"- 总分：{candidate.get('title_score', 0)}｜{'通过' if candidate.get('title_gate_passed') else '未通过'}")
         lines.append(
-            f"- 五项判断：传播 {breakdown.get('传播潜力', 0)} / 新鲜 {breakdown.get('新鲜度', 0)} / 差异 {breakdown.get('差异度', 0)} / 作者匹配 {breakdown.get('作者匹配度', 0)} / 可信度 {breakdown.get('可信度', 0)}"
+            f"- 六项判断：传播 {breakdown.get('传播潜力', 0)} / 新鲜 {breakdown.get('新鲜度', 0)} / 差异 {breakdown.get('差异度', 0)} / 作者匹配 {breakdown.get('作者匹配度', 0)} / 可信度 {breakdown.get('可信度', 0)} / 完整性 {breakdown.get('完整性', 0)}"
         )
         for note in candidate.get("decision_notes") or []:
             lines.append(f"- 亮点：{note}")

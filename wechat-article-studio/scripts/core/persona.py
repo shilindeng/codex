@@ -102,10 +102,17 @@ def choose_writing_persona(context: dict[str, Any]) -> dict[str, Any]:
     content_mode = _normalize_key(str(context.get("content_mode") or ""))
     audience = _normalize_text(str(context.get("audience") or ""))
     author_memory = context.get("author_memory") or {}
+    strategy = context.get("account_strategy") or {}
+    target_reader = _normalize_key(str(strategy.get("target_reader") or ""))
+    primary_goal = _normalize_key(str(strategy.get("primary_goal") or ""))
+    preferred_persona = _normalize_key(str(strategy.get("preferred_persona") or ""))
 
     explicit = _normalize_key(str(context.get("writing_persona") or context.get("persona") or ""))
     if explicit in WRITING_PERSONA_LIBRARY:
         return _deepcopy(WRITING_PERSONA_LIBRARY[explicit])
+    if preferred_persona in WRITING_PERSONA_LIBRARY and content_mode != "tech-credible":
+        if target_reader == "general-tech" and primary_goal == "open-and-read" and archetype in {"commentary", "case-study", "comparison"}:
+            return _deepcopy(WRITING_PERSONA_LIBRARY[preferred_persona])
 
     preferred = _author_preferred_persona(author_memory if isinstance(author_memory, dict) else {})
     if preferred in WRITING_PERSONA_LIBRARY and archetype not in {"narrative"}:
@@ -120,11 +127,15 @@ def choose_writing_persona(context: dict[str, Any]) -> dict[str, Any]:
     if content_mode == "tech-credible":
         return _deepcopy(WRITING_PERSONA_LIBRARY["cold-analyst"])
     if archetype == "case-study":
+        if target_reader == "general-tech" and primary_goal == "open-and-read":
+            return _deepcopy(WRITING_PERSONA_LIBRARY["warm-editor"])
         return _deepcopy(WRITING_PERSONA_LIBRARY["industry-observer"])
     if content_mode == "viral" and archetype in {"commentary", "case-study"}:
         return _deepcopy(WRITING_PERSONA_LIBRARY["sharp-journalist"])
     if any(word in audience for word in ["研究", "咨询", "投资", "企业负责人", "管理者"]):
         return _deepcopy(WRITING_PERSONA_LIBRARY["cold-analyst"])
+    if target_reader == "general-tech" and primary_goal == "open-and-read":
+        return _deepcopy(WRITING_PERSONA_LIBRARY["warm-editor"])
     return _deepcopy(WRITING_PERSONA_LIBRARY["industry-observer"])
 
 

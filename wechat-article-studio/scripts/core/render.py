@@ -193,7 +193,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     preview_html = apply_callout_blocks(content_html)
     safe_preview_html = sanitize_html_fragment(preview_html)
     summary_source = body if fmt == "md" else plain_text_from_html(safe_preview_html)
-    summary = meta.get("summary") or manifest.get("summary") or extract_summary(summary_source)
+    summary = manifest.get("summary") or meta.get("summary") or extract_summary(summary_source)
     layout_plan = manifest.get("layout_plan") or {}
     hero_module = str(layout_plan.get("hero_module") or "hero-judgment")
     layout_archetype = str(layout_plan.get("layout_archetype") or (manifest.get("viral_blueprint") or {}).get("article_archetype") or "commentary")

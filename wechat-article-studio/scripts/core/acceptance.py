@@ -26,6 +26,25 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(union)
 
 
+def _selected_title_issues(workspace: Path, manifest: dict[str, Any], body_title: str) -> list[str]:
+    expected = str(manifest.get("selected_title") or body_title or "").strip()
+    if not expected:
+        return []
+    normalized_expected = _normalize_text(expected)
+    sources = {
+        "manifest.json": manifest.get("selected_title"),
+        "ideation.json": (legacy.read_json(workspace / "ideation.json", default={}) or {}).get("selected_title"),
+        "title-report.json": (legacy.read_json(workspace / "title-report.json", default={}) or {}).get("selected_title"),
+        "title-decision-report.json": (legacy.read_json(workspace / "title-decision-report.json", default={}) or {}).get("selected_title"),
+    }
+    issues: list[str] = []
+    for source_name, raw in sources.items():
+        value = str(raw or "").strip()
+        if value and _normalize_text(value) != normalized_expected:
+            issues.append(f"{source_name} 的标题和当前真源不一致")
+    return issues
+
+
 def build_acceptance_report(
     workspace: Path,
     manifest: dict[str, Any],
@@ -63,9 +82,17 @@ def build_acceptance_report(
     summary_tokens = list(_tokens(summary))
     summary_keyword_hit = any(token in _normalize_text(body).lower() for token in summary_tokens[:4])
     summary_length_ok = 10 <= len(_normalize_text(summary)) <= 90
+    research_requirements = (
+        manifest.get("research_requirements")
+        or (legacy.read_json(workspace / "research.json", default={}) or {}).get("minimum_requirements")
+        or {}
+    )
+    title_consistency_issues = _selected_title_issues(workspace, manifest, title)
     gates = {
         "score_passed": bool(score_report.get("passed")),
         "title_novelty_passed": bool(collisions.get("route_similarity_passed", True)),
+        "title_consistency_passed": not title_consistency_issues,
+        "evidence_minimum_passed": bool(research_requirements.get("passed", True)),
         "opening_scene_passed": int(depth.get("scene_paragraph_count") or 0) >= 1,
         "evidence_passed": int(depth.get("evidence_paragraph_count") or 0) >= 1 and bool(quality_gates.get("credibility_passed", True)),
         "boundary_passed": int(depth.get("counterpoint_paragraph_count") or 0) >= 1,
@@ -76,10 +103,18 @@ def build_acceptance_report(
         "wechat_render_passed": bool(wechat_html.strip()) and ("<h1" not in wechat_html if str(manifest.get("wechat_header_mode") or "drop-title") == "drop-title" else True),
         "reference_tail_passed": True,
     }
+    gates["publish_chain_ready"] = bool(
+        gates["score_passed"]
+        and gates["title_consistency_passed"]
+        and gates["evidence_minimum_passed"]
+        and gates["wechat_render_passed"]
+    )
     failed = [name for name, ok in gates.items() if not ok]
     highlights = []
     if gates["opening_scene_passed"]:
         highlights.append("首屏已经有具体场景或动作。")
+    if gates["title_consistency_passed"]:
+        highlights.append("标题真源已经统一到同一个结果。")
     if gates["evidence_passed"]:
         highlights.append("正文中段已经有事实或案例托底。")
     if gates["boundary_passed"]:
@@ -89,6 +124,10 @@ def build_acceptance_report(
     risks = []
     if not gates["title_novelty_passed"]:
         risks.append("和近期文章的路线仍然太近，容易像旧稿换皮。")
+    if not gates["title_consistency_passed"]:
+        risks.append("标题在多个产物之间不一致，后续容易出现选题、成稿和渲染错位。")
+    if not gates["evidence_minimum_passed"]:
+        risks.append("评论/案例类稿件还没满足最小证据门槛。")
     if not gates["summary_alignment_passed"]:
         risks.append("摘要和正文前半段不够贴合。")
     if not gates["wechat_render_passed"]:
@@ -104,6 +143,8 @@ def build_acceptance_report(
         "risks": risks[:5],
         "content_fingerprint": fingerprint,
         "fingerprint_findings": collisions,
+        "title_consistency_issues": title_consistency_issues,
+        "research_requirements": research_requirements,
         "layout_plan_overview": {
             "recommended_style": layout_plan.get("recommended_style") or "",
             "module_types": layout_plan.get("module_types") or [],

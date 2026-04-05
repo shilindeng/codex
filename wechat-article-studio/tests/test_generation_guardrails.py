@@ -79,6 +79,19 @@ class GenerationGuardrailTests(unittest.TestCase):
         self.assertTrue(any("来源材料" in item for item in report.get("missing_elements") or []))
         self.assertTrue(any("优先把这一条来源材料写进正文" in item for item in report.get("rewrite_focus") or []))
 
+    def test_generation_preflight_detects_prompt_leak(self):
+        manifest = {"audience": "大众读者", "direction": "", "source_urls": []}
+        body = "\n\n".join(
+            [
+                "这类题目最怕的，不是信息不够，而是写法太像模板。围绕“这个主题”，更值得展开的是：场景切口。",
+                "最近很多团队都在补 AI 功能，但真正让人发愁的是后面没人敢维护。",
+            ]
+        )
+        report = build_generation_preflight_report("测试标题", body, manifest, {})
+        severe_types = {item.get("type") for item in report.get("severe_findings") or []}
+        self.assertIn("prompt_leak", severe_types)
+        self.assertTrue(any("内部提示语" in item for item in report.get("rewrite_focus") or []))
+
     def test_harden_generated_article_body_runs_local_pre_fix(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

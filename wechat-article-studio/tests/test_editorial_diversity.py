@@ -58,6 +58,18 @@ class EditorialDiversityTests(unittest.TestCase):
         self.assertNotIn("myth-buster", keys)
         self.assertNotIn("not-but", keys)
 
+    def test_generate_diverse_title_variants_honors_account_strategy_fragments(self):
+        titles = generate_diverse_title_variants(
+            topic="银行业 AI 竞争突然提速",
+            audience="大众读者",
+            editorial_blueprint={"style_key": "signal-briefing", "style_label": "信号简报"},
+            recent_titles=[],
+            recent_corpus_summary={},
+            account_strategy={"blocked_title_fragments": ["更深一层", "真正值得聊的", "别急着下结论"]},
+        )
+        self.assertTrue(titles)
+        self.assertFalse(any("更深一层" in item["title"] or "真正值得聊的" in item["title"] for item in titles))
+
     def test_default_editorial_blueprint_penalizes_overused_templates(self):
         summary = {
             "overused_title_patterns": [
@@ -87,6 +99,27 @@ class EditorialDiversityTests(unittest.TestCase):
         )
         self.assertNotIn(blueprint["style_key"], {"myth-buster", "counterintuitive-column"})
 
+    def test_default_editorial_blueprint_respects_account_strategy_preferences(self):
+        blueprint = default_editorial_blueprint(
+            {
+                "topic": "银行业 AI 竞争突然提速",
+                "selected_title": "银行业 AI 竞争突然提速",
+                "article_archetype": "commentary",
+                "content_mode": "tech-balanced",
+                "recent_corpus_summary": {},
+                "account_strategy": {
+                    "target_reader": "general-tech",
+                    "primary_goal": "open-and-read",
+                    "preferred_editorial_styles": ["field-observation", "case-memo"],
+                    "preferred_opening_modes": ["场景切口"],
+                    "preferred_ending_modes": ["判断收束"],
+                },
+            }
+        )
+        self.assertIn(blueprint["style_key"], {"field-observation", "case-memo"})
+        self.assertEqual((blueprint.get("preferred_opening_modes") or [None])[0], "场景切口")
+        self.assertEqual((blueprint.get("preferred_ending_modes") or [None])[0], "判断收束")
+
     def test_normalize_editorial_blueprint_honors_explicit_style(self):
         payload = {"style_key": "open-letter"}
         blueprint = normalize_editorial_blueprint(
@@ -106,7 +139,7 @@ class EditorialDiversityTests(unittest.TestCase):
     def test_rank_title_candidates_penalizes_overused_patterns(self):
         candidates = [
             {"title": "为什么大多数人做不好企业AI转型？普通人一定要先想清这3件事", "strategy": "", "audience_fit": "", "risk_note": ""},
-            {"title": "企业AI转型真正值得聊的，不是表面答案，而是判断顺序", "strategy": "", "audience_fit": "", "risk_note": ""},
+            {"title": "企业AI转型越推越快，团队最后为什么反而更容易失控？", "strategy": "", "audience_fit": "", "risk_note": ""},
         ]
         ranked, selected = legacy.rank_title_candidates(
             candidates,
@@ -118,7 +151,7 @@ class EditorialDiversityTests(unittest.TestCase):
             recent_title_patterns=["why-think-clear"],
         )
         self.assertIsNotNone(selected)
-        self.assertEqual(selected["title"], "企业AI转型真正值得聊的，不是表面答案，而是判断顺序")
+        self.assertEqual(selected["title"], "企业AI转型越推越快，团队最后为什么反而更容易失控？")
         hot = next(item for item in ranked if "为什么大多数人" in item["title"])
         self.assertGreaterEqual(int(hot.get("title_repeat_penalty") or 0), 6)
 

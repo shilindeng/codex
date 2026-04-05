@@ -24,11 +24,13 @@ class AcceptanceReportTests(unittest.TestCase):
                 encoding="utf-8",
             )
             manifest = {
+                "selected_title": "企业 AI 转型真正要先讲清楚的，不是工具",
                 "wechat_html_path": "article.wechat.html",
                 "references_path": "references.json",
                 "wechat_header_mode": "drop-title",
                 "viral_blueprint": {"article_archetype": "commentary", "primary_interaction_goal": "comment/share", "secondary_interaction_goal": "like"},
                 "editorial_blueprint": {"style_key": "signal-briefing"},
+                "research_requirements": {"requires_evidence": True, "passed": True},
             }
             score_report = {
                 "passed": True,
@@ -67,6 +69,8 @@ class AcceptanceReportTests(unittest.TestCase):
             self.assertTrue(payload["gates"]["evidence_passed"])
             self.assertTrue(payload["gates"]["layout_plan_passed"])
             self.assertTrue(payload["gates"]["reference_tail_passed"])
+            self.assertTrue(payload["gates"]["title_consistency_passed"])
+            self.assertTrue(payload["gates"]["evidence_minimum_passed"])
 
 
 if __name__ == "__main__":

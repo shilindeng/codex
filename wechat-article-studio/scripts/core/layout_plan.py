@@ -165,6 +165,19 @@ def build_layout_plan(title: str, summary: str, outline_meta: dict[str, Any], ma
     sections = list(outline_meta.get("sections") or [])
     archetype = _normalize_key(str(blueprint.get("article_archetype") or outline_meta.get("article_archetype") or manifest.get("article_archetype") or "commentary"))
     profile = ARCHETYPE_LAYOUT_MAP.get(archetype, ARCHETYPE_LAYOUT_MAP["commentary"])
+    strategy = manifest.get("account_strategy") or {}
+    preferred_heroes = [str(item).strip() for item in (strategy.get("preferred_hero_modules") or []) if str(item).strip()]
+    hero_module = profile["hero_module"]
+    if archetype == "commentary":
+        if "hero-checkpoint" in preferred_heroes:
+            hero_module = "hero-checkpoint"
+        elif "hero-scene" in preferred_heroes:
+            hero_module = "hero-scene"
+    elif archetype in {"case-study", "narrative"}:
+        if "hero-scene" in preferred_heroes:
+            hero_module = "hero-scene"
+    elif archetype == "comparison" and "hero-compare" in preferred_heroes:
+        hero_module = "hero-compare"
 
     section_modules: list[dict[str, Any]] = []
     for index, section in enumerate(sections):
@@ -189,7 +202,7 @@ def build_layout_plan(title: str, summary: str, outline_meta: dict[str, Any], ma
         "title": title,
         "article_archetype": archetype,
         "layout_archetype": archetype,
-        "hero_module": profile["hero_module"],
+        "hero_module": hero_module,
         "closing_module": profile["closing_module"],
         "module_density": profile["module_density"],
         "spacing_profile": profile["spacing_profile"],

@@ -11,6 +11,21 @@ def _plain_text(value: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+def _hero_strap(summary: str, lead_text: str, hero_module: str) -> str:
+    lead = _plain_text(lead_text)
+    summary_text = _plain_text(summary)
+    candidate = lead if hero_module == "hero-scene" and lead else summary_text or lead
+    if not candidate:
+        return ""
+    candidate = re.split(r"[。！？!?]", candidate, maxsplit=1)[0].strip() or candidate
+    candidate = candidate.strip("“”\"")
+    if len(candidate) > 54:
+        candidate = re.split(r"[，,:：；;]", candidate, maxsplit=1)[0].strip() or candidate[:54]
+    if len(candidate) > 60:
+        candidate = candidate[:60].rstrip("，,:：；; ") + "…"
+    return candidate
+
+
 def build_header_module_html(
     *,
     title: str,
@@ -22,33 +37,19 @@ def build_header_module_html(
     normalized_hero = (hero_module or "hero-judgment").strip().lower()
     normalized_archetype = (archetype or "commentary").strip().lower()
     kicker_map = {
-        "commentary": "判断拆解",
+        "commentary": "行业判断",
         "tutorial": "实操卡点",
-        "case-study": "案例复盘",
+        "case-study": "案例拆解",
         "narrative": "场景观察",
         "comparison": "对比判断",
     }
     kicker = kicker_map.get(normalized_archetype, "内容编排")
-    strap = (summary or "").strip()
-    lead = _plain_text(lead_text)
-    if not strap and lead:
-        strap = lead
-    meta = ""
-    if normalized_hero == "hero-checkpoint":
-        meta = "这篇先帮读者看清问题卡点，再进入正文。"
-    elif normalized_hero == "hero-compare":
-        meta = "先把比较对象和判断方向亮出来，再看细节。"
-    elif normalized_hero == "hero-scene":
-        meta = "先给一个可代入的处境，再把判断慢慢托起来。"
-    else:
-        meta = "先把主判断立住，再往下展开证据和边界。"
+    strap = _hero_strap(summary, lead_text, normalized_hero)
     parts = [f'<section class="wx-header wx-hero" data-wx-role="{html.escape(normalized_hero, quote=True)}">']
     parts.append(f'<p class="wx-hero-kicker" data-wx-role="hero-kicker">{html.escape(kicker)}</p>')
     parts.append(f'<p class="wx-hero-title" data-wx-role="hero-title">{html.escape(title)}</p>')
     if strap:
         parts.append(f'<p class="wx-hero-strap" data-wx-role="hero-strap">{html.escape(strap)}</p>')
-    if meta:
-        parts.append(f'<p class="wx-hero-meta" data-wx-role="hero-meta">{html.escape(meta)}</p>')
     parts.append("</section>")
     return "".join(parts)
 

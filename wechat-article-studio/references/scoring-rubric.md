@@ -28,6 +28,9 @@
 - `total_score >= 86`
 - `interaction_score >= 6/10`
 - `可信度与检索支撑 >= 5/8`
+- `title_integrity_passed = true`
+- `evidence_minimum_passed = true`
+- `prompt_leak_passed = true`
 - `ai_smell_hits <= 1`
 - `template_penalty_hits <= 1`
 - `similarity_passed = true`
@@ -53,6 +56,7 @@
 
 现在评分会额外严查：
 
+- 标题是不是语义完整，有没有残句、硬拼接、多模板串接
 - 段落起手是否在同一篇里反复打转
 - 句子起手是否连续落回“很多人 / 如果你 / 说白了”这类熟套路
 - 小标题是否清一色问句、清一色编号句、清一色同一起手
@@ -60,4 +64,5 @@
 - 句长和段落节奏是否过于整齐
 - 副词密度是否偏高
 - 是否缺少场景锚、证据锚、反方锚
+- 是否把内部提示语、写作说明、蓝图口吻漏进了成稿
 - 导入宿主正文后，是否像提纲拼接而不是完整成稿
