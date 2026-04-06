@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from core.editorial_strategy import EDITORIAL_STYLE_LIBRARY, generate_diverse_title_variants, title_template_key
+from core.image_assembly import assemble_body
+from core.image_planning import ImagePlanConfig, build_plan_payload as _build_plan_payload, enrich_plan_items as _enrich_plan_items, image_planning_diagnostics as _image_planning_diagnostics
 from core.image_prompting import (
     ImagePromptingConfig,
     cleaned_image_signal_text as _cleaned_image_signal_text,
@@ -3165,6 +3167,21 @@ def _image_prompting_config() -> ImagePromptingConfig:
     )
 
 
+def _image_planning_config() -> ImagePlanConfig:
+    return ImagePlanConfig(
+        compose_prompt=compose_prompt,
+        resolve_image_text_policy=resolve_image_text_policy,
+        visual_profile_for_item=visual_profile_for_item,
+        candidate_keywords=_candidate_keywords,
+        extract_summary=extract_summary,
+        item_native_aspect_ratio=item_native_aspect_ratio,
+        item_safe_crop_policy=item_safe_crop_policy,
+        infer_article_category_label=infer_article_category_label,
+        cjk_len=cjk_len,
+        now_iso=now_iso,
+    )
+
+
 def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dict[str, Any], audience: str) -> str:
     return _compose_image_prompt(
         title,
@@ -4208,32 +4225,12 @@ def select_sections_for_images(body: str, inline_limit: int, article_strategy: d
 
 
 def image_planning_diagnostics(sections: list[dict[str, Any]], inline_sections: list[dict[str, Any]], requested_inline_count: int) -> dict[str, Any]:
-    skipped_sections: list[str] = []
-    forced_sections: list[str] = []
-    eligible_sections = 0
+    normalized_sections = []
     for section in sections:
-        if is_reference_heading(section.get("heading", "")):
-            continue
-        directives = section.get("image_directives") or {}
-        if directives.get("skip"):
-            skipped_sections.append(section.get("heading", ""))
-            continue
-        eligible_sections += 1
-        if directives.get("force") or directives.get("count", 0) > 0:
-            forced_sections.append(section.get("heading", ""))
-    planned_count = len(inline_sections)
-    reasons: list[str] = []
-    if planned_count < requested_inline_count:
-        reasons.append("当前密度规划已请求更多正文图，但可用章节和长章节复用次数有限。")
-    if skipped_sections:
-        reasons.append(f"有 {len(skipped_sections)} 个章节被显式标记为 skip。")
-    if eligible_sections < requested_inline_count:
-        reasons.append(f"可配图章节只有 {eligible_sections} 个。")
-    return {
-        "skipped_sections": skipped_sections,
-        "forced_sections": forced_sections,
-        "planning_shortfall_reason": " ".join(reasons).strip(),
-    }
+        item = dict(section)
+        item["is_reference_section"] = is_reference_heading(section.get("heading", ""))
+        normalized_sections.append(item)
+    return _image_planning_diagnostics(normalized_sections, inline_sections, requested_inline_count)
 
 def cmd_plan_images(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
@@ -4372,75 +4369,37 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         )
         type_occurrence[image_type] = occurrence_index + 1
 
-    for item in items:
-        item["provider"] = provider
-        item["article_visual_strategy"] = {
-            "visual_direction": article_strategy.get("visual_direction", ""),
-            "style_family": article_strategy.get("style_family", ""),
-            "content_mode": article_strategy.get("content_mode", ""),
-            "type_bias": article_strategy.get("type_bias", {}),
-        }
-        item.update(visual_profile_for_item(effective_controls, item))
-        item["style_reason"] = item.get("style_reason") or "按文章视觉策略自动决定。"
-        item["semantic_focus"] = extract_summary(f"{item.get('section_heading') or ''} {item.get('section_excerpt') or ''}", 64)
-        item["keyword_glossary"] = _candidate_keywords(
-            " ".join(
-                [
-                    title,
-                    summary,
-                    str(item.get("section_heading") or ""),
-                    str(item.get("section_excerpt") or ""),
-                    str(item.get("anchor_block_excerpt") or ""),
-                ]
-            )
-        )
-        item["native_aspect_ratio"] = item_native_aspect_ratio(item)
-        item["safe_crop_policy"] = item_safe_crop_policy(item)
-        text_policy = resolve_image_text_policy(effective_controls, item)
-        item["text_policy"] = text_policy["mode"]
-        item["text_policy_label"] = text_policy["label"]
-        item["text_policy_reason"] = text_policy["reason"]
-        item["label_language"] = text_policy["label_language"]
-        item["label_strategy"] = text_policy["label_strategy"]
-        item["text_budget"] = text_policy["text_budget"]
-        item["visual_reason"] = f"{item.get('type_reason', '')} {item.get('style_reason', '')}".strip()
-        item["prompt"] = compose_prompt(title, summary, effective_controls, item, audience)
-        item["revised_prompt"] = item["prompt"]
-        item["asset_path"] = None
-        item["source_meta"] = {}
+    items = _enrich_plan_items(
+        items,
+        title=title,
+        summary=summary,
+        body=body,
+        provider=provider,
+        article_strategy=article_strategy,
+        effective_controls=effective_controls,
+        audience=audience,
+        cfg=_image_planning_config(),
+    )
 
     decision_source = "explicit" if article_strategy.get("explicit_overrides") else "auto"
     article_category = infer_article_category_label(title, summary, body)
     auto_reason = "；".join(article_strategy.get("decision_reasoning") or []) or f"按文章内容自动判定为 {article_category}。"
-    plan = {
-        "title": title,
-        "provider": provider,
-        "strategy": "mixed-section-density",
-        "decision_source": decision_source,
-        "article_category": article_category,
-        "auto_reason": auto_reason,
-        "article_char_count": cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
-        "planned_inline_count": len(inline_sections),
-        "requested_inline_count": inline_limit,
-        "density_mode": effective_controls.get("density", "balanced"),
-        "layout_family": effective_controls.get("layout_family", ""),
-        "planning_shortfall_reason": diagnostics["planning_shortfall_reason"],
-        "skipped_sections": diagnostics["skipped_sections"],
-        "forced_sections": diagnostics["forced_sections"],
-        "image_controls": effective_controls,
-        "user_image_controls": controls,
-        "article_visual_strategy": {
-            "visual_direction": article_strategy.get("visual_direction", ""),
-            "style_family": article_strategy.get("style_family", ""),
-            "content_mode": article_strategy.get("content_mode", ""),
-            "style_mode": article_strategy.get("style_mode", ""),
-            "type_bias": article_strategy.get("type_bias", {}),
-            "decision_reasoning": article_strategy.get("decision_reasoning", []),
-            "explicit_overrides": article_strategy.get("explicit_overrides", []),
-        },
-        "items": items,
-        "generated_at": now_iso(),
-    }
+    plan = _build_plan_payload(
+        title=title,
+        body=body,
+        provider=provider,
+        decision_source=decision_source,
+        auto_reason=auto_reason,
+        inline_sections=inline_sections,
+        requested_inline_count=inline_limit,
+        diagnostics=diagnostics,
+        effective_controls=effective_controls,
+        user_controls=controls,
+        article_strategy=article_strategy,
+        items=items,
+        cfg=_image_planning_config(),
+    )
+    article_category = plan["article_category"]
     write_json(workspace / "image-plan.json", plan)
     write_json(workspace / "image-strategy.json", plan["article_visual_strategy"])
     write_image_outline_artifacts(workspace, title, audience, effective_controls, plan)
@@ -4544,61 +4503,6 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
     return 0
 
 
-def insert_markdown_image(lines: list[str], index: int, alt: str, path_text: str) -> list[str]:
-    snippet = ["", f"![{alt}]({path_text})", ""]
-    return lines[:index] + snippet + lines[index:]
-
-
-def find_heading_index(lines: list[str], heading: str) -> int | None:
-    target = heading.strip()
-    for index, line in enumerate(lines):
-        if re.match(r"^#{2,4}\s+", line) and line.split(None, 1)[1].strip() == target:
-            return index + 1
-    return None
-
-
-def render_body_from_blocks(intro_blocks: list[str], sections: list[dict[str, Any]], intro_items: list[dict[str, Any]], section_items: dict[int, list[dict[str, Any]]]) -> str:
-    parts: list[str] = []
-    intro_insert_map: dict[int, list[dict[str, Any]]] = {}
-    for item in intro_items:
-        key = item.get("placement_block_index", 0)
-        intro_insert_map.setdefault(key, []).append(item)
-
-    if intro_blocks:
-        for index, block in enumerate(intro_blocks):
-            parts.append(block)
-            for item in intro_insert_map.get(index, []):
-                parts.append(f"![{item['alt']}]({item['asset_path']})")
-    elif intro_items:
-        for item in intro_items:
-            parts.append(f"![{item['alt']}]({item['asset_path']})")
-
-    for section_index, section in enumerate(sections):
-        heading_line = f"{'#' * section.get('level', 2)} {section.get('heading', '')}".strip()
-        parts.append(heading_line)
-        blocks = [block for block in section.get("blocks") or [] if block.strip()]
-        insert_map: dict[int, list[dict[str, Any]]] = {}
-        trailing_items: list[dict[str, Any]] = []
-        for item in section_items.get(section_index, []):
-            if not blocks:
-                trailing_items.append(item)
-                continue
-            block_index = item.get("placement_block_index", 0)
-            if block_index >= len(blocks):
-                trailing_items.append(item)
-            else:
-                insert_map.setdefault(block_index, []).append(item)
-
-        for block_index, block in enumerate(blocks):
-            parts.append(block)
-            for item in insert_map.get(block_index, []):
-                parts.append(f"![{item['alt']}]({item['asset_path']})")
-        for item in trailing_items:
-            parts.append(f"![{item['alt']}]({item['asset_path']})")
-
-    return "\n\n".join(part.strip() for part in parts if part and part.strip()) + "\n"
-
-
 def cmd_assemble(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -4610,26 +4514,7 @@ def cmd_assemble(args: argparse.Namespace) -> int:
         raise SystemExit("缺少 image-plan.json，请先运行 plan-images。")
     meta, body = split_frontmatter(read_text(article_path))
     intro_blocks, sections = normalize_sections_for_images(body)
-
-    intro_items: list[dict[str, Any]] = []
-    section_items: dict[int, list[dict[str, Any]]] = {}
-    inserted = []
-    for item in plan.get("items") or []:
-        asset_path = item.get("asset_path")
-        if not asset_path:
-            continue
-        if (item.get("source_meta") or {}).get("fallback_local_card"):
-            continue
-        if item.get("type") == "封面图" or item.get("insert_strategy") == "cover_only":
-            continue
-        inserted.append({"id": item["id"], "asset_path": asset_path, "type": item["type"]})
-        target_index = item.get("target_section_index", -1)
-        if target_index == -1:
-            intro_items.append(item)
-        else:
-            section_items.setdefault(target_index, []).append(item)
-
-    assembled_body = render_body_from_blocks(intro_blocks, sections, intro_items, section_items)
+    assembled_body, inserted = assemble_body(intro_blocks, sections, list(plan.get("items") or []))
     assembled_path = workspace / "assembled.md"
     write_text(assembled_path, join_frontmatter(meta, assembled_body.strip()))
     manifest["assembled_path"] = relative_posix(assembled_path, workspace)
