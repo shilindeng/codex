@@ -2000,13 +2000,14 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
-    article = _load_workspace_article(workspace, manifest)
+    runtime = _prepare_article_runtime(workspace, manifest)
+    article = runtime.article
     meta, body, title = article.meta, article.body, article.title
     blueprint = current_viral_blueprint(workspace, manifest)
-    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
-    content_enhancement = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    content_enhancement = runtime.content_enhancement
+    layout_plan = runtime.layout_plan
     manifest["content_enhancement"] = content_enhancement
-    writing_persona = current_writing_persona(workspace, manifest)
+    writing_persona = runtime.writing_persona
     provider = active_text_provider()
     if provider.configured():
         result = provider.review_article(
@@ -2143,10 +2144,11 @@ def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) ->
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
-    article = _load_workspace_article(workspace, manifest)
+    runtime = _prepare_article_runtime(workspace, manifest)
+    article = runtime.article
     meta, body, title = article.meta, article.body, article.title
-    manifest["writing_persona"] = current_writing_persona(workspace, manifest)
-    manifest["content_enhancement"] = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    manifest["writing_persona"] = runtime.writing_persona
+    manifest["content_enhancement"] = runtime.content_enhancement
     report = read_json(workspace / "score-report.json", default={}) or {}
     if not report:
         threshold = manifest.get("score_threshold") or legacy.DEFAULT_THRESHOLD
@@ -3162,13 +3164,14 @@ def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: 
 def cmd_score(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
-    article = _load_workspace_article(workspace, manifest, input_value=args.input)
+    runtime = _prepare_article_runtime(workspace, manifest, input_value=args.input)
+    article = runtime.article
     meta, body, title = article.meta, article.body, article.title
-    manifest["writing_persona"] = current_writing_persona(workspace, manifest)
-    manifest["content_enhancement"] = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
+    manifest["writing_persona"] = runtime.writing_persona
+    manifest["content_enhancement"] = runtime.content_enhancement
     threshold = args.threshold or manifest.get("score_threshold")
     review = read_json(workspace / "review-report.json", default={}) or {}
-    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    layout_plan = runtime.layout_plan
     if not review:
         blueprint = current_viral_blueprint(workspace, manifest)
         review = build_heuristic_review(title, body, manifest, blueprint=blueprint, revision_round=int(manifest.get("revision_round") or 1))
@@ -3278,6 +3281,42 @@ def _load_workspace_article(
         summary=summary,
         synced_meta=synced_meta,
         synced_body=synced_body,
+    )
+
+
+@dataclass(frozen=True)
+class PreparedArticleRuntime:
+    article: LoadedArticleContext
+    ideation: dict[str, Any]
+    content_enhancement: dict[str, Any]
+    writing_persona: dict[str, Any]
+    layout_plan: dict[str, Any]
+
+
+def _prepare_article_runtime(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    input_value: str | None = None,
+    enhancement_force: bool = False,
+) -> PreparedArticleRuntime:
+    article = _load_workspace_article(workspace, manifest, input_value=input_value)
+    ideation = load_ideation(workspace)
+    writing_persona = current_writing_persona(workspace, manifest, ideation)
+    content_enhancement = ensure_content_enhancement(
+        workspace,
+        manifest,
+        ideation,
+        selected_title=article.title,
+        force=enhancement_force,
+    )
+    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    return PreparedArticleRuntime(
+        article=article,
+        ideation=ideation,
+        content_enhancement=content_enhancement,
+        writing_persona=writing_persona,
+        layout_plan=layout_plan,
     )
 
 
