@@ -1512,6 +1512,200 @@ def select_scored_title(
     return ideation, selected
 
 
+def _resolve_selected_title(
+    manifest: dict[str, Any],
+    ideation: dict[str, Any] | None = None,
+    research: dict[str, Any] | None = None,
+    requested_title: str = "",
+    *,
+    fallback: str = "未命名标题",
+) -> str:
+    ideation = ideation or {}
+    research = research or {}
+    return requested_title or manifest.get("selected_title") or ideation.get("selected_title") or research.get("topic") or manifest.get("topic") or fallback
+
+
+def _build_outline_generation_contexts(
+    workspace: Path,
+    manifest: dict[str, Any],
+    ideation: dict[str, Any],
+    research: dict[str, Any],
+    selected_title: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+    writing_persona = current_writing_persona(workspace, manifest, ideation)
+    outline_context = {
+        "topic": manifest.get("topic") or research.get("topic") or "",
+        "selected_title": selected_title,
+        "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+        "direction": manifest.get("direction") or research.get("angle") or "",
+        "research": research,
+        "titles": ideation.get("titles") or [],
+        "style_samples": manifest.get("style_sample_paths") or [],
+        "style_signals": manifest.get("style_signals") or [],
+        "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
+        "recent_article_titles": manifest.get("recent_article_titles") or [],
+        "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+        "corpus_root": manifest.get("corpus_root") or "",
+        "content_mode": manifest.get("content_mode") or "tech-balanced",
+        "editorial_blueprint": editorial_blueprint,
+        "author_memory": manifest.get("author_memory") or {},
+        "writing_persona": writing_persona,
+        "account_strategy": manifest.get("account_strategy") or {},
+    }
+    normalize_context = {
+        "topic": manifest.get("topic") or research.get("topic") or selected_title,
+        "selected_title": selected_title,
+        "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+        "direction": manifest.get("direction") or research.get("angle") or "",
+        "research": research,
+        "style_signals": manifest.get("style_signals") or [],
+        "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+        "content_mode": manifest.get("content_mode") or "tech-balanced",
+        "editorial_blueprint": editorial_blueprint,
+        "author_memory": manifest.get("author_memory") or {},
+        "writing_persona": writing_persona,
+        "account_strategy": manifest.get("account_strategy") or {},
+    }
+    return outline_context, normalize_context, editorial_blueprint, writing_persona
+
+
+def _generate_outline_with_collision_retry(
+    provider: Any,
+    workspace: Path,
+    manifest: dict[str, Any],
+    selected_title: str,
+    outline_context: dict[str, Any],
+    normalize_context: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    result = provider.generate_outline(outline_context)
+    outline = normalize_outline_payload(dict(result.payload), normalize_context)
+    recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
+    outline_fingerprint = build_outline_fingerprint(selected_title, outline, manifest | {"viral_blueprint": outline.get("viral_blueprint") or {}})
+    fingerprint_findings = summarize_collisions(outline_fingerprint, recent_fingerprints, threshold=0.74)
+    if not fingerprint_findings.get("route_similarity_passed"):
+        retry_context = dict(outline_context)
+        retry_context["fingerprint_collision_notes"] = [
+            f"当前大纲和旧稿《{item.get('title') or '未命名'}》过近（{item.get('score') or 0}），请主动换开头路径、证据组织和结尾收束。"
+            for item in (fingerprint_findings.get("similar_items") or [])[:3]
+        ]
+        retry_result = provider.generate_outline(retry_context)
+        retry_outline = normalize_outline_payload(
+            dict(retry_result.payload),
+            normalize_context | {"fingerprint_collision_notes": retry_context["fingerprint_collision_notes"]},
+        )
+        retry_fingerprint = build_outline_fingerprint(
+            selected_title,
+            retry_outline,
+            manifest | {"viral_blueprint": retry_outline.get("viral_blueprint") or {}},
+        )
+        retry_findings = summarize_collisions(retry_fingerprint, recent_fingerprints, threshold=0.74)
+        if float(retry_findings.get("max_route_similarity") or 1) < float(fingerprint_findings.get("max_route_similarity") or 1):
+            outline = retry_outline
+            outline_fingerprint = retry_fingerprint
+            fingerprint_findings = retry_findings
+    return outline, outline_fingerprint, fingerprint_findings
+
+
+def _persist_outline_result(
+    workspace: Path,
+    manifest: dict[str, Any],
+    ideation: dict[str, Any],
+    research: dict[str, Any],
+    selected_title: str,
+    outline: dict[str, Any],
+    outline_fingerprint: dict[str, Any],
+    fingerprint_findings: dict[str, Any],
+    writing_persona: dict[str, Any],
+) -> None:
+    outline.setdefault("title", selected_title)
+    outline["content_fingerprint_preview"] = outline_fingerprint
+    outline["fingerprint_similarity_preview"] = fingerprint_findings
+    layout_plan = build_layout_plan(
+        selected_title,
+        extract_summary("\n".join(str(item.get("goal") or "") for item in (outline.get("sections") or []))),
+        outline,
+        manifest | {"viral_blueprint": outline.get("viral_blueprint") or {}},
+    )
+    write_json(workspace / "layout-plan.json", layout_plan)
+    write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
+    outline["layout_plan_path"] = "layout-plan.json"
+    ideation["selected_title"] = selected_title
+    ideation["outline"] = outline.get("sections") or []
+    ideation["outline_meta"] = outline
+    ideation["viral_blueprint"] = outline.get("viral_blueprint") or {}
+    ideation["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
+    ideation["writing_persona"] = normalize_writing_persona(
+        writing_persona,
+        {
+            "topic": manifest.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "article_archetype": (outline.get("viral_blueprint") or {}).get("article_archetype") or "",
+            "author_memory": manifest.get("author_memory") or {},
+        },
+    )
+    ideation["updated_at"] = now_iso()
+    write_json(workspace / "ideation.json", ideation)
+    manifest["selected_title"] = selected_title
+    manifest["outline"] = [item.get("heading", "") for item in outline.get("sections") or []]
+    manifest["viral_blueprint"] = outline.get("viral_blueprint") or {}
+    manifest["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
+    manifest["writing_persona"] = ideation.get("writing_persona") or writing_persona
+    manifest["layout_plan_path"] = "layout-plan.json"
+    update_stage(manifest, "outline", "outline_status")
+    save_manifest(workspace, manifest)
+
+
+def _normalize_write_outline_meta(
+    workspace: Path,
+    manifest: dict[str, Any],
+    ideation: dict[str, Any],
+    research: dict[str, Any],
+    selected_title: str,
+    outline_file: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    outline_meta = dict(ideation.get("outline_meta") or {})
+    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    if outline_file:
+        outline_lines = [line.strip("- ").strip() for line in read_input_file(outline_file).splitlines() if line.strip()]
+        outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
+    editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+    writing_persona = current_writing_persona(workspace, manifest, ideation)
+    outline_meta = normalize_outline_payload(
+        outline_meta,
+        {
+            "topic": manifest.get("topic") or research.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "research": research,
+            "style_signals": manifest.get("style_signals") or [],
+            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "editorial_blueprint": editorial_blueprint,
+            "author_memory": manifest.get("author_memory") or {},
+            "writing_persona": writing_persona,
+        },
+    )
+    ideation["outline_meta"] = outline_meta
+    ideation["writing_persona"] = normalize_writing_persona(
+        writing_persona,
+        {
+            "topic": manifest.get("topic") or research.get("topic") or selected_title,
+            "selected_title": selected_title,
+            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
+            "direction": manifest.get("direction") or research.get("angle") or "",
+            "content_mode": manifest.get("content_mode") or "tech-balanced",
+            "article_archetype": (outline_meta.get("viral_blueprint") or {}).get("article_archetype") or "",
+            "author_memory": manifest.get("author_memory") or {},
+        },
+    )
+    return outline_meta, layout_plan, editorial_blueprint, writing_persona
+
+
 def apply_research_credibility_boost(report: dict[str, Any], research: dict[str, Any]) -> dict[str, Any]:
     sources = normalize_string_list(research.get("sources"))
     evidence_items = normalize_string_list(research.get("evidence_items"))
@@ -1655,100 +1849,33 @@ def cmd_outline(args: argparse.Namespace) -> int:
     provider = require_live_text_provider("outline")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
-    selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
-    editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
-    writing_persona = current_writing_persona(workspace, manifest, ideation)
-    outline_context = {
-        "topic": manifest.get("topic") or research.get("topic") or "",
-        "selected_title": selected_title,
-        "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-        "direction": manifest.get("direction") or research.get("angle") or "",
-        "research": research,
-        "titles": ideation.get("titles") or [],
-        "style_samples": manifest.get("style_sample_paths") or [],
-        "style_signals": manifest.get("style_signals") or [],
-        "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
-        "recent_article_titles": manifest.get("recent_article_titles") or [],
-        "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
-        "corpus_root": manifest.get("corpus_root") or "",
-        "content_mode": manifest.get("content_mode") or "tech-balanced",
-        "editorial_blueprint": editorial_blueprint,
-        "author_memory": manifest.get("author_memory") or {},
-        "writing_persona": writing_persona,
-        "account_strategy": manifest.get("account_strategy") or {},
-    }
-    result = provider.generate_outline(outline_context)
-    normalize_context = {
-        "topic": manifest.get("topic") or research.get("topic") or selected_title,
-        "selected_title": selected_title,
-        "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-        "direction": manifest.get("direction") or research.get("angle") or "",
-        "research": research,
-        "style_signals": manifest.get("style_signals") or [],
-        "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
-        "content_mode": manifest.get("content_mode") or "tech-balanced",
-        "editorial_blueprint": editorial_blueprint,
-        "author_memory": manifest.get("author_memory") or {},
-        "writing_persona": writing_persona,
-        "account_strategy": manifest.get("account_strategy") or {},
-    }
-    outline = normalize_outline_payload(dict(result.payload), normalize_context)
-    recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
-    outline_fingerprint = build_outline_fingerprint(selected_title, outline, manifest | {"viral_blueprint": outline.get("viral_blueprint") or {}})
-    fingerprint_findings = summarize_collisions(outline_fingerprint, recent_fingerprints, threshold=0.74)
-    if not fingerprint_findings.get("route_similarity_passed"):
-        retry_context = dict(outline_context)
-        retry_context["fingerprint_collision_notes"] = [
-            f"当前大纲和旧稿《{item.get('title') or '未命名'}》过近（{item.get('score') or 0}），请主动换开头路数、证据组织和结尾收束。"
-            for item in (fingerprint_findings.get("similar_items") or [])[:3]
-        ]
-        retry_result = provider.generate_outline(retry_context)
-        retry_outline = normalize_outline_payload(dict(retry_result.payload), normalize_context | {"fingerprint_collision_notes": retry_context["fingerprint_collision_notes"]})
-        retry_fingerprint = build_outline_fingerprint(selected_title, retry_outline, manifest | {"viral_blueprint": retry_outline.get("viral_blueprint") or {}})
-        retry_findings = summarize_collisions(retry_fingerprint, recent_fingerprints, threshold=0.74)
-        if float(retry_findings.get("max_route_similarity") or 1) < float(fingerprint_findings.get("max_route_similarity") or 1):
-            outline = retry_outline
-            outline_fingerprint = retry_fingerprint
-            fingerprint_findings = retry_findings
-    outline.setdefault("title", selected_title)
-    outline["content_fingerprint_preview"] = outline_fingerprint
-    outline["fingerprint_similarity_preview"] = fingerprint_findings
-    layout_plan = build_layout_plan(
+    selected_title = _resolve_selected_title(manifest, ideation, research, args.title)
+    outline_context, normalize_context, _editorial_blueprint, writing_persona = _build_outline_generation_contexts(
+        workspace,
+        manifest,
+        ideation,
+        research,
         selected_title,
-        extract_summary("\n".join(str(item.get("goal") or "") for item in (outline.get("sections") or []))),
+    )
+    outline, outline_fingerprint, fingerprint_findings = _generate_outline_with_collision_retry(
+        provider,
+        workspace,
+        manifest,
+        selected_title,
+        outline_context,
+        normalize_context,
+    )
+    _persist_outline_result(
+        workspace,
+        manifest,
+        ideation,
+        research,
+        selected_title,
         outline,
-        manifest | {"viral_blueprint": outline.get("viral_blueprint") or {}},
-    )
-    write_json(workspace / "layout-plan.json", layout_plan)
-    write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
-    outline["layout_plan_path"] = "layout-plan.json"
-    ideation["selected_title"] = selected_title
-    ideation["outline"] = outline.get("sections") or []
-    ideation["outline_meta"] = outline
-    ideation["viral_blueprint"] = outline.get("viral_blueprint") or {}
-    ideation["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
-    ideation["writing_persona"] = normalize_writing_persona(
+        outline_fingerprint,
+        fingerprint_findings,
         writing_persona,
-        {
-            "topic": manifest.get("topic") or selected_title,
-            "selected_title": selected_title,
-            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-            "direction": manifest.get("direction") or research.get("angle") or "",
-            "content_mode": manifest.get("content_mode") or "tech-balanced",
-            "article_archetype": (outline.get("viral_blueprint") or {}).get("article_archetype") or "",
-            "author_memory": manifest.get("author_memory") or {},
-        },
     )
-    ideation["updated_at"] = now_iso()
-    write_json(workspace / "ideation.json", ideation)
-    manifest["selected_title"] = selected_title
-    manifest["outline"] = [item.get("heading", "") for item in outline.get("sections") or []]
-    manifest["viral_blueprint"] = outline.get("viral_blueprint") or {}
-    manifest["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
-    manifest["writing_persona"] = ideation.get("writing_persona") or writing_persona
-    manifest["layout_plan_path"] = "layout-plan.json"
-    update_stage(manifest, "outline", "outline_status")
-    save_manifest(workspace, manifest)
     print(json.dumps(outline, ensure_ascii=False, indent=2))
     return 0
 
@@ -1795,42 +1922,14 @@ def cmd_write(args: argparse.Namespace) -> int:
     provider = require_live_text_provider("write")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
-    outline_meta = dict(ideation.get("outline_meta") or {})
-    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
-    if args.outline_file:
-        outline_lines = [line.strip("- ").strip() for line in read_input_file(args.outline_file).splitlines() if line.strip()]
-        outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
-    selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
-    editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
-    writing_persona = current_writing_persona(workspace, manifest, ideation)
-    outline_meta = normalize_outline_payload(
-        outline_meta,
-        {
-            "topic": manifest.get("topic") or research.get("topic") or selected_title,
-            "selected_title": selected_title,
-            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-            "direction": manifest.get("direction") or research.get("angle") or "",
-            "research": research,
-            "style_signals": manifest.get("style_signals") or [],
-            "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
-            "content_mode": manifest.get("content_mode") or "tech-balanced",
-            "editorial_blueprint": editorial_blueprint,
-            "author_memory": manifest.get("author_memory") or {},
-            "writing_persona": writing_persona,
-        },
-    )
-    ideation["outline_meta"] = outline_meta
-    ideation["writing_persona"] = normalize_writing_persona(
-        writing_persona,
-        {
-            "topic": manifest.get("topic") or research.get("topic") or selected_title,
-            "selected_title": selected_title,
-            "audience": manifest.get("audience") or research.get("audience") or "大众读者",
-            "direction": manifest.get("direction") or research.get("angle") or "",
-            "content_mode": manifest.get("content_mode") or "tech-balanced",
-            "article_archetype": (outline_meta.get("viral_blueprint") or {}).get("article_archetype") or "",
-            "author_memory": manifest.get("author_memory") or {},
-        },
+    selected_title = _resolve_selected_title(manifest, ideation, research, args.title)
+    outline_meta, layout_plan, editorial_blueprint, writing_persona = _normalize_write_outline_meta(
+        workspace,
+        manifest,
+        ideation,
+        research,
+        selected_title,
+        args.outline_file,
     )
     write_json(workspace / "ideation.json", ideation)
     content_enhancement = ensure_content_enhancement(workspace, manifest, ideation, selected_title=selected_title, force=True)
