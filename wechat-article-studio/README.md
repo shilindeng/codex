@@ -19,6 +19,12 @@
 python -m pytest -q
 ```
 
+## 排版控制
+
+- 默认会根据文章类型、结构和正文信号自动选择排版框架与视觉皮肤。
+- 需要固定皮肤时，可在 `run`、`hosted-run`、`render`、`all` 上显式传入 `--layout-skin <auto|elegant|business|warm|sunrise|tech|chinese|magazine|forest|aurora|morandi|mint|neon>`。
+- 只想固定结构、不固定皮肤时，继续使用 `--layout-style`，皮肤仍会按当前文章自动重选。
+
 ## 本地安装位置
 
 ```text

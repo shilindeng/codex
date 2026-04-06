@@ -104,6 +104,7 @@
   - `--dry-run-images`
 - 常用排版参数：
   - `--layout-style auto|clean|cards|magazine|business|warm|poster|tech|blueprint`
+  - `--layout-skin auto|elegant|business|warm|sunrise|tech|chinese|magazine|forest|aurora|morandi|mint|neon`
   - `--input-format auto|md|html`
 
 ## `hosted-run`
@@ -121,6 +122,7 @@
   - `--dry-run-images`
 - 常用排版参数：
   - `--layout-style auto|clean|cards|magazine|business|warm|poster|tech|blueprint`
+  - `--layout-skin auto|elegant|business|warm|sunrise|tech|chinese|magazine|forest|aurora|morandi|mint|neon`
   - `--input-format auto|md|html`
 - 特殊行为：
   - 若 `--topic` 为空或为“开始”，会先走热点发现并输出选题建议

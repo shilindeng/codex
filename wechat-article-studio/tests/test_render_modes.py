@@ -15,7 +15,7 @@ if str(SCRIPTS) not in sys.path:
 import legacy_studio as legacy  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
 from core.layout_skin import choose_layout_skin  # noqa: E402
-from core.workflow import apply_reference_policy, normalize_publication_body  # noqa: E402
+from core.workflow import apply_reference_policy, build_parser, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
 from core.wechat_fragment import build_header_module_html  # noqa: E402
 
@@ -394,6 +394,111 @@ class RenderModeTests(unittest.TestCase):
             preview_html = (workspace / "article.html").read_text(encoding="utf-8")
             self.assertTrue(manifest.get("layout_skin"))
             self.assertIn('data-wx-skin="', preview_html)
+
+
+    def test_auto_skin_prefers_tech_for_tutorial_steps(self):
+        source = "## 步骤\n\n1. 第一步先配置环境\n2. 第二步跑起来\n3. 第三步检查结果\n\n`OPENAI_API_KEY` 要先准备好。"
+        signals = analyze_content_signals(source, "md")
+        decision = choose_layout_skin(
+            "auto",
+            "tech",
+            {"viral_blueprint": {"article_archetype": "tutorial"}, "selected_title": "AI 工作流上手指南"},
+            signals,
+            rich_blocks=["steps"],
+        )
+        self.assertEqual(decision.key, "tech")
+
+    def test_auto_skin_prefers_morandi_for_calm_editorial(self):
+        source = "> 这不是一句结论，而是一段复盘。\n\n> 真正值得看的，是长期边界。"
+        signals = analyze_content_signals(source, "md")
+        decision = choose_layout_skin(
+            "auto",
+            "magazine",
+            {"viral_blueprint": {"article_archetype": "commentary"}, "selected_title": "行业复盘：从热闹回到长期边界"},
+            signals,
+            rich_blocks=["quote"],
+        )
+        self.assertEqual(decision.key, "morandi")
+
+    def test_render_auto_skin_does_not_reuse_previous_resolved_skin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "一线对话：银行团队怎么真正把 AI 用进去了",
+                        "summary": "这是一篇偏叙事的文章。",
+                        "article_path": "article.md",
+                        "viral_blueprint": {"article_archetype": "narrative"},
+                        "layout_skin": "business",
+                        "layout_skin_reason": "stale_previous_render",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("> 第一段就是现场对话。\n\n那天我们在会议室里聊了很久。", encoding="utf-8")
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest.get("layout_skin"), "warm")
+            self.assertEqual(manifest.get("layout_skin_preference"), "auto")
+
+    def test_render_explicit_layout_skin_updates_preference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "测试摘要",
+                        "article_path": "article.md",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("正文内容", encoding="utf-8")
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    layout_skin="neon",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest.get("layout_skin"), "neon")
+            self.assertEqual(manifest.get("layout_skin_preference"), "neon")
+
+    def test_parser_accepts_layout_skin_for_main_commands(self):
+        parser = build_parser()
+        commands = [
+            ["run", "--workspace", "job", "--layout-skin", "neon"],
+            ["hosted-run", "--workspace", "job", "--layout-skin", "morandi"],
+            ["render", "--workspace", "job", "--layout-skin", "business"],
+            ["all", "--workspace", "job", "--layout-skin", "tech"],
+        ]
+        for argv in commands:
+            with self.subTest(argv=argv):
+                parsed = parser.parse_args(argv)
+                self.assertTrue(hasattr(parsed, "layout_skin"))
+                self.assertIsNotNone(parsed.layout_skin)
 
 
 if __name__ == "__main__":

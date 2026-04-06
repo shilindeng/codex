@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -53,10 +54,116 @@ _PRESET_SKIN_HINTS = {
     "fresh": ("mint", "elegant"),
 }
 
+_AUDIENCE_BUSINESS_KEYWORDS = (
+    "企业",
+    "商业",
+    "老板",
+    "创业",
+    "管理",
+    "组织",
+    "效率",
+    "增长",
+    "运营",
+    "品牌",
+    "银行",
+    "金融",
+    "b端",
+    "b2b",
+    "to b",
+    "to-b",
+)
+_COMPARISON_HINTS = (
+    "对比",
+    "比较",
+    "差异",
+    "竞争",
+    "拐点",
+    "趋势",
+    "判断",
+    "谁会",
+    "窗口",
+    "signal",
+    "signals",
+    "vs",
+)
+_PRACTICAL_HINTS = (
+    "教程",
+    "指南",
+    "步骤",
+    "方法",
+    "流程",
+    "清单",
+    "上手",
+    "实操",
+    "模板",
+    "避坑",
+    "sop",
+    "playbook",
+)
+_NARRATIVE_HINTS = (
+    "故事",
+    "人物",
+    "一线",
+    "现场",
+    "经历",
+    "记录",
+    "那一天",
+    "我在",
+    "对话",
+    "采访",
+)
+_EDITORIAL_HINTS = (
+    "观察",
+    "评论",
+    "为什么",
+    "背后",
+    "信号",
+    "启示",
+    "真问题",
+    "怎么看",
+    "深聊",
+)
+_CALM_EDITORIAL_HINTS = (
+    "复盘",
+    "拆解",
+    "回看",
+    "边界",
+    "误判",
+    "冷静",
+    "长期",
+    "耐心",
+)
+_CULTURAL_HINTS = (
+    "国风",
+    "东方",
+    "审美",
+    "历史",
+    "古典",
+    "文化",
+    "山水",
+    "诗意",
+)
+_DATA_HINTS = (
+    "数据",
+    "图表",
+    "样本",
+    "指标",
+    "测算",
+    "财报",
+    "统计",
+    "percent",
+    "benchmark",
+)
+
 
 def get_skin(key: str) -> LayoutSkin:
     normalized = (key or "").strip().lower()
     return SKINS.get(normalized, SKINS["elegant"])
+
+
+def normalize_layout_skin_request(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in LAYOUT_SKIN_CHOICES else "auto"
 
 
 def choose_layout_skin(
@@ -67,31 +174,76 @@ def choose_layout_skin(
     *,
     rich_blocks: Iterable[str] = (),
 ) -> LayoutSkinDecision:
-    req = (requested or "").strip().lower()
-    if req and req != "auto" and req in SKINS:
+    req = normalize_layout_skin_request(requested)
+    if req != "auto" and req in SKINS:
         return LayoutSkinDecision(key=req, reason="explicit_layout_skin")
 
-    archetype = str((manifest.get("layout_plan") or {}).get("layout_archetype") or (manifest.get("viral_blueprint") or {}).get("article_archetype") or "").strip().lower()
+    archetype = str(
+        (manifest.get("layout_plan") or {}).get("layout_archetype")
+        or (manifest.get("viral_blueprint") or {}).get("article_archetype")
+        or ""
+    ).strip().lower()
     normalized_rich_blocks = {str(item or "").strip().lower() for item in rich_blocks if str(item or "").strip()}
     image_controls = manifest.get("image_controls") or {}
     preset = str(image_controls.get("preset") or image_controls.get("preset_cover") or image_controls.get("preset_inline") or "").strip().lower()
+    text_blob = _manifest_hint_blob(manifest)
+    blockquote_count = int(getattr(content_signals, "blockquote_count", 0) or 0)
+    list_item_count = int(getattr(content_signals, "list_item_count", 0) or 0)
+    has_table = bool(getattr(content_signals, "has_table", False))
+    has_code_block = bool(getattr(content_signals, "has_code_block", False))
+    audience_business = _contains_any(str(manifest.get("audience") or ""), _AUDIENCE_BUSINESS_KEYWORDS)
+    comparison_like = bool(normalized_rich_blocks.intersection({"compare", "timeline"})) or archetype == "comparison" or _contains_any(text_blob, _COMPARISON_HINTS)
+    practical_like = "steps" in normalized_rich_blocks or archetype == "tutorial" or has_code_block or _contains_any(text_blob, _PRACTICAL_HINTS)
+    narrative_like = "dialogue" in normalized_rich_blocks or archetype == "narrative" or _contains_any(text_blob, _NARRATIVE_HINTS)
+    editorial_like = ("quote" in normalized_rich_blocks and chosen_style == "magazine") or (
+        archetype == "commentary" and blockquote_count >= 1
+    ) or _contains_any(text_blob, _EDITORIAL_HINTS)
+    calm_editorial = _contains_any(text_blob, _CALM_EDITORIAL_HINTS)
+    cultural_like = _contains_any(text_blob, _CULTURAL_HINTS)
+    data_like = has_table or "stats" in normalized_rich_blocks or _contains_any(text_blob, _DATA_HINTS)
 
-    if "compare" in normalized_rich_blocks or archetype == "comparison":
-        return LayoutSkinDecision(key="aurora" if chosen_style != "warm" else "morandi", reason="comparison_content")
-    if "steps" in normalized_rich_blocks or archetype == "tutorial":
-        return LayoutSkinDecision(key="tech" if chosen_style in {"tech", "business", "blueprint"} else "mint", reason="tutorial_content")
-    if "dialogue" in normalized_rich_blocks:
-        return LayoutSkinDecision(key="warm", reason="dialogue_content")
-    if "quote" in normalized_rich_blocks and chosen_style == "magazine":
-        return LayoutSkinDecision(key="magazine", reason="quote_heavy_magazine")
-    if getattr(content_signals, "has_table", False):
-        return LayoutSkinDecision(key="business", reason="table_content")
-    if archetype == "narrative":
-        return LayoutSkinDecision(key="chinese" if getattr(content_signals, "blockquote_count", 0) else "warm", reason="narrative_archetype")
+    if comparison_like:
+        if has_table or audience_business or chosen_style == "business":
+            return LayoutSkinDecision(key="business", reason="comparison_business_content")
+        if chosen_style == "warm" or narrative_like:
+            return LayoutSkinDecision(key="morandi", reason="comparison_story_content")
+        return LayoutSkinDecision(key="aurora", reason="comparison_content")
+
+    if practical_like:
+        if audience_business and (data_like or chosen_style == "business"):
+            return LayoutSkinDecision(key="business", reason="tutorial_business_content")
+        if chosen_style in {"tech", "business", "blueprint"} or has_code_block:
+            return LayoutSkinDecision(key="tech", reason="tutorial_content")
+        return LayoutSkinDecision(key="mint", reason="tutorial_checklist_content")
+
+    if narrative_like:
+        if cultural_like or blockquote_count >= 2:
+            return LayoutSkinDecision(key="chinese", reason="narrative_cultural_content")
+        return LayoutSkinDecision(key="warm", reason="narrative_content")
+
+    if data_like:
+        if audience_business or archetype == "case-study":
+            return LayoutSkinDecision(key="business", reason="data_business_content")
+        return LayoutSkinDecision(key="aurora", reason="data_content")
+
+    if editorial_like:
+        if calm_editorial and blockquote_count >= 2:
+            return LayoutSkinDecision(key="morandi", reason="calm_editorial_content")
+        return LayoutSkinDecision(key="magazine", reason="editorial_content")
+
     if archetype == "case-study":
         return LayoutSkinDecision(key="business", reason="case_study_archetype")
+
+    if list_item_count >= 8:
+        return LayoutSkinDecision(key="mint", reason="dense_list_content")
+
     if preset in _PRESET_SKIN_HINTS:
-        return LayoutSkinDecision(key=_PRESET_SKIN_HINTS[preset][0], reason=f"image_preset({preset})")
+        primary, secondary = _PRESET_SKIN_HINTS[preset]
+        hinted = secondary if calm_editorial and secondary in SKINS else primary
+        return LayoutSkinDecision(key=hinted, reason=f"image_preset({preset})")
+
+    if cultural_like:
+        return LayoutSkinDecision(key="chinese", reason="cultural_content")
 
     style_defaults = {
         "clean": "elegant",
@@ -106,6 +258,30 @@ def choose_layout_skin(
         "blueprint": "aurora",
     }
     return LayoutSkinDecision(key=style_defaults.get(chosen_style, "elegant"), reason=f"layout_style({chosen_style})")
+
+
+def _manifest_hint_blob(manifest: dict[str, Any]) -> str:
+    layout_plan = manifest.get("layout_plan") or {}
+    viral_blueprint = manifest.get("viral_blueprint") or {}
+    parts = [
+        manifest.get("selected_title"),
+        manifest.get("summary"),
+        manifest.get("topic"),
+        manifest.get("angle"),
+        manifest.get("direction"),
+        manifest.get("audience"),
+        layout_plan.get("hero_module"),
+        layout_plan.get("layout_archetype"),
+        viral_blueprint.get("article_angle"),
+        viral_blueprint.get("article_archetype"),
+    ]
+    joined = " ".join(str(item or "") for item in parts if str(item or "").strip())
+    return re.sub(r"\s+", " ", joined).strip().lower()
+
+
+def _contains_any(text: str, keywords: Iterable[str]) -> bool:
+    haystack = (text or "").lower()
+    return any(keyword.lower() in haystack for keyword in keywords)
 
 
 def preview_skin_css(skin_key: str, theme: Any, accent: str) -> str:

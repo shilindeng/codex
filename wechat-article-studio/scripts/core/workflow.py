@@ -46,6 +46,7 @@ from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
 from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
+from core.layout_skin import LAYOUT_SKIN_CHOICES, normalize_layout_skin_request
 from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.persona import normalize_writing_persona
@@ -111,11 +112,24 @@ def normalize_wechat_header_mode(value: str | None) -> str:
     return normalized if normalized in WECHAT_HEADER_MODE_CHOICES else "drop-title"
 
 
+def normalize_layout_style_preference(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in LAYOUT_STYLE_CHOICES else "auto"
+
+
 def persist_runtime_preferences(manifest: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     manifest["content_mode"] = normalize_content_mode(getattr(args, "content_mode", None) or manifest.get("content_mode"))
     manifest["wechat_header_mode"] = normalize_wechat_header_mode(
         getattr(args, "wechat_header_mode", None) or manifest.get("wechat_header_mode")
     )
+    requested_style = getattr(args, "layout_style", None)
+    if requested_style is None:
+        requested_style = manifest.get("layout_style_preference")
+    manifest["layout_style_preference"] = normalize_layout_style_preference(requested_style)
+    requested_skin = getattr(args, "layout_skin", None)
+    if requested_skin is None:
+        requested_skin = manifest.get("layout_skin_preference")
+    manifest["layout_skin_preference"] = normalize_layout_skin_request(requested_skin)
     return manifest
 
 
@@ -3147,7 +3161,8 @@ def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: 
             input=None,
             output="article.html",
             accent_color=args.accent_color,
-            layout_style=getattr(args, "layout_style", "auto"),
+            layout_style=getattr(args, "layout_style", None),
+            layout_skin=getattr(args, "layout_skin", None),
             input_format=getattr(args, "input_format", "auto"),
             wechat_header_mode=getattr(args, "wechat_header_mode", "drop-title"),
         )
@@ -3557,7 +3572,8 @@ def cmd_all(args: argparse.Namespace) -> int:
             gemini_model=args.gemini_model,
             openai_model=args.openai_model,
             accent_color=args.accent_color,
-            layout_style=getattr(args, "layout_style", "auto"),
+            layout_style=getattr(args, "layout_style", None),
+            layout_skin=getattr(args, "layout_skin", None),
             input_format=getattr(args, "input_format", "auto"),
             to="publish" if args.publish else "render",
         )
@@ -3653,7 +3669,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     run.add_argument("--openai-model", default="gpt-image-1")
     run.add_argument("--accent-color", default="#0F766E")
-    run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES)
+    run.add_argument("--layout-skin", choices=LAYOUT_SKIN_CHOICES, default=None)
     run.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     run.set_defaults(func=cmd_run)
 
@@ -3731,7 +3748,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     hosted_run.add_argument("--openai-model", default="gpt-image-1")
     hosted_run.add_argument("--accent-color", default="#0F766E")
-    hosted_run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    hosted_run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES)
+    hosted_run.add_argument("--layout-skin", choices=LAYOUT_SKIN_CHOICES, default=None)
     hosted_run.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     hosted_run.set_defaults(func=cmd_hosted_run)
 
@@ -3816,7 +3834,8 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--input")
     render.add_argument("--output", default="article.html")
     render.add_argument("--accent-color", default="#0F766E")
-    render.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    render.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES)
+    render.add_argument("--layout-skin", choices=LAYOUT_SKIN_CHOICES, default=None)
     render.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     render.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
     render.set_defaults(func=legacy_render)
@@ -3873,7 +3892,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     all_cmd.add_argument("--openai-model", default="gpt-image-1")
     all_cmd.add_argument("--accent-color", default="#0F766E")
-    all_cmd.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES, default="auto")
+    all_cmd.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES)
+    all_cmd.add_argument("--layout-skin", choices=LAYOUT_SKIN_CHOICES, default=None)
     all_cmd.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     all_cmd.set_defaults(func=cmd_all)
 
