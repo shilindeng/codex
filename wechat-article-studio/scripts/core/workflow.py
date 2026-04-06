@@ -5,6 +5,7 @@ import copy
 import json
 import re
 from collections import Counter
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -1900,16 +1901,8 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
-    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
-    article_path = workspace / (manifest.get("article_path") or "article.md")
-    if not article_path.exists():
-        raise SystemExit(f"找不到待评审文章：{article_path}")
-    meta, body = split_frontmatter(read_text(article_path))
-    if synced_body:
-        meta.update({key: value for key, value in synced_meta.items() if value})
-        body = synced_body
-    body = legacy.strip_image_directives(body)
-    title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
+    article = _load_workspace_article(workspace, manifest)
+    meta, body, title = article.meta, article.body, article.title
     blueprint = current_viral_blueprint(workspace, manifest)
     layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
     content_enhancement = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
@@ -1922,7 +1915,7 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "title": title,
                 "audience": manifest.get("audience") or "大众读者",
                 "direction": manifest.get("direction") or "",
-                "summary": meta.get("summary") or manifest.get("summary") or extract_summary(body),
+                "summary": article.summary,
                 "article_body": body,
                 "viral_blueprint": blueprint,
                 "editorial_blueprint": current_editorial_blueprint(workspace, manifest),
@@ -2051,16 +2044,8 @@ def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) ->
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
-    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
-    article_path = workspace / (manifest.get("article_path") or "article.md")
-    if not article_path.exists():
-        raise SystemExit(f"找不到待改写文章：{article_path}")
-    meta, body = split_frontmatter(read_text(article_path))
-    if synced_body:
-        meta.update({key: value for key, value in synced_meta.items() if value})
-        body = synced_body
-    body = legacy.strip_image_directives(body)
-    title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
+    article = _load_workspace_article(workspace, manifest)
+    meta, body, title = article.meta, article.body, article.title
     manifest["writing_persona"] = current_writing_persona(workspace, manifest)
     manifest["content_enhancement"] = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     report = read_json(workspace / "score-report.json", default={}) or {}
@@ -3078,16 +3063,8 @@ def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: 
 def cmd_score(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
-    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
-    article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
-    if not article_path.exists():
-        raise SystemExit(f"找不到待评分文章：{article_path}")
-    meta, body = split_frontmatter(read_text(article_path))
-    if synced_body:
-        meta.update({key: value for key, value in synced_meta.items() if value})
-        body = synced_body
-    body = legacy.strip_image_directives(body)
-    title = legacy.infer_title(manifest, meta, body)
+    article = _load_workspace_article(workspace, manifest, input_value=args.input)
+    meta, body, title = article.meta, article.body, article.title
     manifest["writing_persona"] = current_writing_persona(workspace, manifest)
     manifest["content_enhancement"] = ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=False)
     threshold = args.threshold or manifest.get("score_threshold")
@@ -3163,6 +3140,46 @@ def _run_score_only(workspace: Path, *, threshold: int | None = None, style_samp
 def _run_review_only(workspace: Path, *, style_sample: list[str] | None = None) -> dict[str, Any]:
     cmd_review(argparse.Namespace(workspace=str(workspace), style_sample=style_sample or []))
     return read_json(workspace / "review-report.json", default={}) or {}
+
+
+@dataclass(frozen=True)
+class LoadedArticleContext:
+    article_path: Path
+    meta: dict[str, Any]
+    body: str
+    title: str
+    summary: str
+    synced_meta: dict[str, str]
+    synced_body: str
+
+
+def _load_workspace_article(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    input_value: str | None = None,
+) -> LoadedArticleContext:
+    synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
+    article_rel = input_value or str(manifest.get("article_path") or "article.md")
+    article_path = workspace / article_rel
+    if not article_path.exists():
+        raise SystemExit(f"找不到待处理文章：{article_path}")
+    meta, body = split_frontmatter(read_text(article_path))
+    if synced_body:
+        meta.update({key: value for key, value in synced_meta.items() if value})
+        body = synced_body
+    body = legacy.strip_image_directives(body)
+    title = legacy.infer_title(manifest, meta, body)
+    summary = meta.get("summary") or manifest.get("summary") or extract_summary(body)
+    return LoadedArticleContext(
+        article_path=article_path,
+        meta=meta,
+        body=body,
+        title=title,
+        summary=summary,
+        synced_meta=synced_meta,
+        synced_body=synced_body,
+    )
 
 
 def _prepare_content_manifest(
