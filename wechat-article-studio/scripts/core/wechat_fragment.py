@@ -153,6 +153,7 @@ def render_wechat_fragment(
     theme: Theme,
     accent: str,
     chosen_style: str,
+    skin_key: str = "elegant",
     header_mode: str = "keep",
     hero_module: str = "hero-judgment",
     layout_archetype: str = "commentary",
@@ -160,7 +161,7 @@ def render_wechat_fragment(
 ) -> str:
     """Render a WeChat-compatible HTML fragment with full inline styles."""
     content_html = apply_callout_blocks(content_html)
-    styled_body = sanitize_and_style_for_wechat(content_html, theme=theme, accent=accent)
+    styled_body = sanitize_and_style_for_wechat(content_html, theme=theme, accent=accent, skin_key=skin_key)
 
     normalized_header_mode = (header_mode or "keep").strip().lower()
     outer_style, inner_style, header_shell_style = _container_styles(theme, chosen_style, accent)
@@ -174,7 +175,7 @@ def render_wechat_fragment(
             lead_text=lead_text,
             show_summary=normalized_header_mode != "drop-title-summary",
         )
-        header = sanitize_and_style_for_wechat(header_html, theme=theme, accent=accent)
+        header = sanitize_and_style_for_wechat(header_html, theme=theme, accent=accent, skin_key=skin_key)
     else:
         title_style = _title_style(theme, chosen_style)
         summary_style = _summary_style(theme, chosen_style)

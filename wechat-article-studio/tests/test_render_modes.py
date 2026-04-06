@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 import legacy_studio as legacy  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
+from core.layout_skin import choose_layout_skin  # noqa: E402
 from core.workflow import apply_reference_policy, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
 from core.wechat_fragment import build_header_module_html  # noqa: E402
@@ -354,6 +355,45 @@ class RenderModeTests(unittest.TestCase):
             wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
             self.assertIn("娴嬭瘯鏍囬", wechat_html)
             self.assertNotIn("杩欐槸涓€娈垫憳瑕?", wechat_html)
+
+
+    def test_auto_skin_prefers_comparison_family(self):
+        signals = analyze_content_signals("A 和 B 的差异越来越明显。", "md")
+        decision = choose_layout_skin("auto", "business", {"viral_blueprint": {"article_archetype": "comparison"}}, signals, rich_blocks=["compare"])
+        self.assertIn(decision.key, {"aurora", "business", "morandi"})
+
+    def test_render_persists_layout_skin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "这是一段摘要。",
+                        "article_path": "article.md",
+                        "viral_blueprint": {"article_archetype": "comparison"},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("## 对比\n\nA 和 B 的差异很明显。", encoding="utf-8")
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))
+            preview_html = (workspace / "article.html").read_text(encoding="utf-8")
+            self.assertTrue(manifest.get("layout_skin"))
+            self.assertIn('data-wx-skin="', preview_html)
 
 
 if __name__ == "__main__":

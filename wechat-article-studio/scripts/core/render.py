@@ -22,6 +22,7 @@ from core.layout import (
     preview_css,
     sanitize_html_fragment,
 )
+from core.layout_skin import choose_layout_skin
 from core.manifest import ensure_workspace, load_manifest, relative_posix, save_manifest, workspace_path
 from core.wechat_fragment import build_header_module_html, render_wechat_fragment
 
@@ -185,6 +186,13 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     accent_arg = getattr(args, "accent_color", DEFAULT_ACCENT_COLOR) or DEFAULT_ACCENT_COLOR
     accent_decision = choose_accent_color(chosen_style, str(accent_arg), manifest)
+    skin_decision = choose_layout_skin(
+        str(getattr(args, "layout_skin", "") or manifest.get("layout_skin") or "auto"),
+        chosen_style,
+        manifest,
+        signals,
+        rich_blocks=rich_blocks,
+    )
 
     theme = THEMES.get(chosen_style, THEMES["clean"])
 
@@ -211,7 +219,7 @@ def cmd_render(args: argparse.Namespace) -> int:
     skill_dir = Path(__file__).resolve().parents[2]
     assets_dir = skill_dir / "assets"
     base_css = read_text(assets_dir / "wechat-style.css")
-    themed_css = base_css + "\n" + preview_css(chosen_style)
+    themed_css = base_css + "\n" + preview_css(chosen_style, skin_decision.key, accent_decision.accent)
     template = read_text(assets_dir / "wechat-template.html")
 
     theme_class = f"wx-theme-{chosen_style}"
@@ -228,6 +236,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         template.replace("{{title}}", html.escape(title))
         .replace("{{style}}", themed_css)
         .replace("{{theme_class}}", theme_class)
+        .replace("{{skin_key}}", html.escape(skin_decision.key, quote=True))
         .replace("{{article_style}}", article_style)
         .replace("{{header}}", textwrap.indent(header_html, "    ").strip())
         .replace("{{content}}", textwrap.indent(safe_preview_html, "      ").strip())
@@ -245,6 +254,7 @@ def cmd_render(args: argparse.Namespace) -> int:
         theme=theme,
         accent=accent_decision.accent,
         chosen_style=chosen_style,
+        skin_key=skin_decision.key,
         header_mode=wechat_header_mode,
         hero_module=hero_module,
         layout_archetype=layout_archetype,
@@ -258,6 +268,8 @@ def cmd_render(args: argparse.Namespace) -> int:
     manifest["wechat_html_path"] = relative_posix(wechat_output, workspace)
     manifest["layout_style"] = chosen_style
     manifest["layout_style_reason"] = layout_decision.reason
+    manifest["layout_skin"] = skin_decision.key
+    manifest["layout_skin_reason"] = skin_decision.reason
     manifest["layout_rich_blocks"] = rich_blocks
     manifest["accent_color"] = accent_decision.accent
     manifest["accent_color_reason"] = accent_decision.reason

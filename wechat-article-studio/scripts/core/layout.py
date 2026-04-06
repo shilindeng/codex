@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Iterable
 
+from core.layout_skin import choose_layout_skin, preview_skin_css, role_style_override, tag_style_override
+
 
 LAYOUT_STYLE_CHOICES = (
     "auto",
@@ -893,19 +895,20 @@ def sanitize_html_fragment(text: str) -> str:
     return parser.output()
 
 
-def sanitize_and_style_for_wechat(text: str, theme: Theme, accent: str) -> str:
-    parser = _Sanitizer(mode="wechat", theme=theme, accent=accent)
+def sanitize_and_style_for_wechat(text: str, theme: Theme, accent: str, skin_key: str = "elegant") -> str:
+    parser = _Sanitizer(mode="wechat", theme=theme, accent=accent, skin_key=skin_key)
     parser.feed(_strip_outer_html_body(text))
     parser.close()
     return parser.output()
 
 
 class _Sanitizer(HTMLParser):
-    def __init__(self, mode: str, theme: Theme | None = None, accent: str = "") -> None:
+    def __init__(self, mode: str, theme: Theme | None = None, accent: str = "", skin_key: str = "elegant") -> None:
         super().__init__(convert_charrefs=True)
         self._mode = mode
         self._theme = theme or THEMES["clean"]
         self._accent = accent or self._theme.accent
+        self._skin_key = skin_key or "elegant"
         self._out: list[str] = []
         self._stack: list[str | None] = []
         self._skip_depth = 0
@@ -1075,6 +1078,9 @@ class _Sanitizer(HTMLParser):
         role = (attrs.get("data-wx-role") or "").strip().lower()
         if not role:
             return None
+        skin_style = role_style_override(self._skin_key, tag, role, t, self._accent)
+        if skin_style is not None:
+            return skin_style
         accent_soft = _hex_to_rgba(self._accent, 0.12)
         accent_soft_strong = _hex_to_rgba(self._accent, 0.18)
         accent_tint = _hex_to_rgba(self._accent, 0.08)
@@ -1234,6 +1240,9 @@ class _Sanitizer(HTMLParser):
         role_style = self._style_for_wx_role(tag, attrs)
         if role_style is not None:
             return role_style
+        skin_style = tag_style_override(self._skin_key, tag, attrs, t, self._accent)
+        if skin_style is not None:
+            return skin_style
         if tag == "p":
             return f"margin:15px 0;line-height:1.92;font-size:16px;color:{t.text};letter-spacing:0.08px;"
         if tag in {"h2", "h3", "h4"}:
@@ -1333,9 +1342,10 @@ class _Sanitizer(HTMLParser):
         return ""
 
 
-def preview_css(style: str) -> str:
+def preview_css(style: str, skin_key: str = "elegant", accent: str | None = None) -> str:
     """Return CSS var overrides for preview page (article.html)."""
     theme = THEMES.get(style, THEMES["clean"])
+    accent_value = accent or theme.accent
     # Use CSS variables to keep theme changes compact and consistent with WeChat inline styles.
     return (
         f"body.wx-theme-{style},.wx-article.wx-theme-{style}{{"
@@ -1346,4 +1356,5 @@ def preview_css(style: str) -> str:
         f"--quote-bg:{theme.quote_bg};--quote-border:{theme.quote_border};"
         f"--radius:{theme.radius};--radius-sm:{theme.radius_sm};"
         "}"
+        + preview_skin_css(skin_key, theme, accent_value)
     )
