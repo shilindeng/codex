@@ -13,7 +13,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 import legacy_studio as legacy  # noqa: E402
-from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
+from core.layout import analyze_content_signals, choose_layout_style, preview_css  # noqa: E402
 from core.layout_skin import choose_layout_skin  # noqa: E402
 from core.workflow import apply_reference_policy, build_parser, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
@@ -362,6 +362,13 @@ class RenderModeTests(unittest.TestCase):
         decision = choose_layout_skin("auto", "business", {"viral_blueprint": {"article_archetype": "comparison"}}, signals, rich_blocks=["compare"])
         self.assertIn(decision.key, {"aurora", "business", "morandi"})
 
+    def test_preview_skin_css_covers_structured_modules(self):
+        css = preview_css("business", "business", "#0F766E")
+        self.assertIn('[data-wx-skin="business"] .wx-content table', css)
+        self.assertIn('[data-wx-role="compare-header"]', css)
+        self.assertIn('[data-wx-role="stat-card"]', css)
+        self.assertIn('[data-wx-role="reference-card"]', css)
+
     def test_render_persists_layout_skin(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -394,6 +401,50 @@ class RenderModeTests(unittest.TestCase):
             preview_html = (workspace / "article.html").read_text(encoding="utf-8")
             self.assertTrue(manifest.get("layout_skin"))
             self.assertIn('data-wx-skin="', preview_html)
+
+    def test_render_structured_modules_pick_up_skin_css(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "测试摘要",
+                        "article_path": "article.md",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text(
+                "\n".join(
+                    [
+                        "## 数据对比",
+                        "",
+                        "| 指标 | 数值 |",
+                        "| --- | --- |",
+                        "| 转化率 | 12% |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="business",
+                    layout_skin="business",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            preview_html = (workspace / "article.html").read_text(encoding="utf-8")
+            self.assertIn('data-wx-skin="business"', preview_html)
+            self.assertIn('.wx-article[data-wx-skin="business"] .wx-content table{', preview_html)
+            self.assertIn('.wx-article[data-wx-skin="business"] .wx-content th{', preview_html)
 
     def test_render_uses_auto_skin_preference_instead_of_old_resolved_skin(self):
         with tempfile.TemporaryDirectory() as tmp:

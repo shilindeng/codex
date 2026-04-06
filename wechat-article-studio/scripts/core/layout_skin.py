@@ -352,6 +352,23 @@ def preview_skin_css(skin_key: str, theme: Any, accent: str) -> str:
         f'.wx-article{theme_class} .wx-content ul{{{_ul_css(skin.key, theme, accent, secondary)}}}'
         f'.wx-article{theme_class} .wx-content ol{{{_ol_css(skin.key, theme, accent, secondary)}}}'
         f'.wx-article{theme_class} .wx-content li{{{_li_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content table{{{_table_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content th{{{_th_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content td{{{_td_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="compare-header"]{{{_compare_header_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="compare-row"]{{{_compare_row_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="compare-head-left"],.wx-article{theme_class} .wx-content [data-wx-role="compare-head-right"]{{{_compare_head_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="compare-left"]{{{_compare_left_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="compare-right"]{{{_compare_right_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="quote-card"]{{{_quote_card_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="quote-mark"]{{{_quote_mark_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="quote-text"]{{{_quote_text_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="quote-author"]{{{_quote_author_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="stat-card"]{{{_stat_card_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="stat-value"]{{{_stat_value_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="stat-label"]{{{_stat_label_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="reference-card"]{{{_reference_card_css(skin.key, theme, accent, secondary)}}}'
+        f'.wx-article{theme_class} .wx-content [data-wx-role="reference-link"]{{{_reference_link_css(skin.key, theme, accent, secondary)}}}'
     )
 
 
@@ -368,6 +385,34 @@ def role_style_override(skin_key: str, tag: str, role: str, theme: Any, accent: 
         return _hero_strap_css(skin.key, theme, accent, secondary)
     if tag in {"h2", "h3", "h4"} and role in {"section-break", "section-label"}:
         return _h2_css(skin.key, theme, accent, secondary) if tag == "h2" else _h3_css(skin.key, theme, accent, secondary)
+    if tag == "section" and role == "compare-header":
+        return _compare_header_css(skin.key, theme, accent, secondary)
+    if tag == "section" and role == "compare-row":
+        return _compare_row_css(skin.key, theme, accent, secondary)
+    if tag == "span" and role in {"compare-head-left", "compare-head-right"}:
+        return _compare_head_css(skin.key, theme, accent, secondary)
+    if tag == "span" and role == "compare-left":
+        return _compare_left_css(skin.key, theme, accent, secondary)
+    if tag == "span" and role == "compare-right":
+        return _compare_right_css(skin.key, theme, accent, secondary)
+    if tag == "section" and role == "quote-card":
+        return _quote_card_css(skin.key, theme, accent, secondary)
+    if tag == "p" and role == "quote-mark":
+        return _quote_mark_css(skin.key, theme, accent, secondary)
+    if tag == "p" and role == "quote-text":
+        return _quote_text_css(skin.key, theme, accent, secondary)
+    if tag == "p" and role == "quote-author":
+        return _quote_author_css(skin.key, theme, accent, secondary)
+    if tag == "section" and role == "stat-card":
+        return _stat_card_css(skin.key, theme, accent, secondary)
+    if tag == "p" and role == "stat-value":
+        return _stat_value_css(skin.key, theme, accent, secondary)
+    if tag == "p" and role == "stat-label":
+        return _stat_label_css(skin.key, theme, accent, secondary)
+    if tag == "section" and role == "reference-card":
+        return _reference_card_css(skin.key, theme, accent, secondary)
+    if tag == "a" and role == "reference-link":
+        return _reference_link_css(skin.key, theme, accent, secondary)
     return None
 
 
@@ -384,6 +429,12 @@ def tag_style_override(skin_key: str, tag: str, attrs: dict[str, str], theme: An
         return _ol_css(skin.key, theme, accent, secondary)
     if tag == "li":
         return _li_css(skin.key, theme, accent, secondary)
+    if tag == "table":
+        return _table_css(skin.key, theme, accent, secondary)
+    if tag == "th":
+        return _th_css(skin.key, theme, accent, secondary)
+    if tag == "td":
+        return _td_css(skin.key, theme, accent, secondary)
     return None
 
 
@@ -499,3 +550,150 @@ def _ol_css(key: str, theme: Any, accent: str, secondary: str) -> str:
 
 def _li_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     return f"margin:8px 0;line-height:2;color:{theme.text};"
+
+
+def _table_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    mapping = {
+        "elegant": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:{theme.radius};overflow:hidden;background:#ffffff;box-shadow:none;",
+        "business": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:0;overflow:hidden;background:#ffffff;box-shadow:none;",
+        "warm": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:{theme.radius};overflow:hidden;background:#fffdf8;box-shadow:none;",
+        "sunrise": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:{theme.radius};overflow:hidden;background:#ffffff;box-shadow:none;",
+        "tech": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:10px;overflow:hidden;background:#f8fcff;box-shadow:none;",
+        "chinese": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border-top:1px solid {secondary};border-bottom:1px solid {secondary};background:#ffffff;box-shadow:none;",
+        "magazine": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:20px 0;border-top:2px solid {accent};border-bottom:2px solid #000;background:#ffffff;box-shadow:none;",
+        "forest": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:{theme.radius};overflow:hidden;background:#fbfdfb;box-shadow:none;",
+        "aurora": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {accent};border-radius:0;overflow:hidden;background:#ffffff;box-shadow:inset 0 -4px 0 {secondary};",
+        "morandi": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};background:#ffffff;box-shadow:none;",
+        "mint": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {theme.line};border-radius:12px;overflow:hidden;background:#fbfffd;box-shadow:none;",
+        "neon": f"width:100%;border-collapse:separate;border-spacing:0;font-size:14px;margin:18px 0;border:1px solid {accent};border-radius:0;overflow:hidden;background:#ffffff;box-shadow:inset 0 -4px 0 {secondary};",
+    }
+    return mapping[key]
+
+
+def _th_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    mapping = {
+        "magazine": f"padding:11px 12px;border-bottom:1px solid #000;background:#ffffff;text-align:left;vertical-align:top;color:{theme.heading};font-size:13px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;",
+        "business": f"padding:11px 12px;border-bottom:1px solid {theme.line};background:{theme.soft2};text-align:left;vertical-align:top;color:{theme.heading};font-size:13px;font-weight:800;",
+        "tech": f"padding:11px 12px;border-bottom:1px solid {theme.line};background:{theme.soft};text-align:left;vertical-align:top;color:{accent};font-size:13px;font-weight:800;",
+        "aurora": f"padding:11px 12px;border-bottom:1px solid {accent};background:{theme.soft};text-align:left;vertical-align:top;color:{theme.heading};font-size:13px;font-weight:800;",
+        "warm": f"padding:11px 12px;border-bottom:1px solid {theme.line};background:{theme.soft};text-align:left;vertical-align:top;color:{accent};font-size:13px;font-weight:800;",
+        "chinese": f"padding:11px 12px;border-bottom:1px solid {secondary};background:#ffffff;text-align:left;vertical-align:top;color:{theme.heading};font-size:13px;font-weight:800;letter-spacing:0.12em;",
+        "morandi": f"padding:11px 12px;border-bottom:1px solid {theme.line};background:{theme.soft};text-align:left;vertical-align:top;color:{theme.muted};font-size:13px;font-weight:700;",
+        "neon": f"padding:11px 12px;border-bottom:1px solid {accent};background:{theme.soft};text-align:left;vertical-align:top;color:{accent};font-size:13px;font-weight:800;",
+    }
+    return mapping.get(
+        key,
+        f"padding:11px 12px;border-bottom:1px solid {theme.line};background:{theme.soft};text-align:left;vertical-align:top;color:{theme.heading};font-size:13px;font-weight:800;",
+    )
+
+
+def _td_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    border = secondary if key in {"aurora", "neon"} else theme.line
+    color = theme.muted if key == "morandi" else theme.text
+    return f"padding:11px 12px;border-bottom:1px solid {border};text-align:left;vertical-align:top;color:{color};line-height:1.72;background:#ffffff;"
+
+
+def _compare_header_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    mapping = {
+        "magazine": "display:flex;background:#111111;",
+        "business": f"display:flex;background:{theme.soft2};border-bottom:1px solid {theme.line};",
+        "tech": f"display:flex;background:{theme.soft};border-bottom:1px solid {theme.line};",
+        "aurora": f"display:flex;background:{theme.soft};border-bottom:1px solid {accent};",
+        "neon": f"display:flex;background:{theme.soft};border-bottom:1px solid {accent};",
+    }
+    return mapping.get(key, f"display:flex;background:{theme.soft2};")
+
+
+def _compare_row_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    border = secondary if key in {"aurora", "neon"} else theme.line
+    return f"display:flex;border-top:1px solid {border};"
+
+
+def _compare_head_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    color = "#ffffff" if key == "magazine" else (accent if key in {"tech", "neon"} else theme.heading)
+    return f"display:block;flex:1;padding:12px 14px;color:{color};line-height:1.5;font-size:13px;font-weight:800;letter-spacing:0.06em;"
+
+
+def _compare_left_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    background = theme.soft if key in {"business", "tech", "mint", "forest"} else "#ffffff"
+    return f"display:block;flex:1;padding:12px 14px;background:{background};color:{theme.muted};line-height:1.75;font-size:14px;font-weight:600;"
+
+
+def _compare_right_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    color = accent if key == "neon" else theme.text
+    return f"display:block;flex:1;padding:12px 14px;color:{color};line-height:1.75;font-size:14px;font-weight:700;"
+
+
+def _quote_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    mapping = {
+        "magazine": "margin:28px 0;padding:20px 0;border-top:3px solid #000;border-bottom:3px solid #000;background:transparent;border-left:none;border-right:none;border-radius:0;box-shadow:none;",
+        "business": f"margin:24px 0;padding:18px 20px;background:{theme.soft2};border-left:3px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;box-shadow:none;",
+        "warm": f"margin:24px 0;padding:20px 20px;background:{theme.soft};border-top:1px solid {accent};border-bottom:1px solid {accent};border-left:none;border-right:none;border-radius:0;box-shadow:none;text-align:center;",
+        "aurora": f"margin:24px 0;padding:18px 20px;background:#ffffff;border-bottom:2px solid {accent};box-shadow:inset 0 -5px 0 {secondary};border-radius:0;border-top:none;border-left:none;border-right:none;",
+        "morandi": f"margin:28px 0;padding:18px 0;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};background:transparent;border-radius:0;box-shadow:none;text-align:center;",
+        "neon": f"margin:24px 0;padding:18px 20px;background:#ffffff;border-bottom:2px solid {accent};box-shadow:inset 0 -5px 0 {secondary};border-radius:0;border-top:none;border-left:none;border-right:none;",
+    }
+    return mapping.get(
+        key,
+        f"margin:24px 0;padding:20px 20px;background:{theme.soft2};border-left:4px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:{theme.radius};box-shadow:none;",
+    )
+
+
+def _quote_mark_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    color = "#000000" if key == "magazine" else accent
+    return f"margin:0 0 8px;color:{color};font-size:28px;line-height:1;font-weight:800;"
+
+
+def _quote_text_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    center = "text-align:center;" if key in {"warm", "morandi"} else ""
+    color = accent if key == "neon" else theme.heading
+    weight = "900" if key == "magazine" else "700"
+    return f"margin:0;color:{color};font-size:17px;line-height:1.9;font-weight:{weight};letter-spacing:0.08px;{center}"
+
+
+def _quote_author_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    center = "text-align:center;" if key in {"warm", "morandi"} else ""
+    return f"margin:10px 0 0;color:{theme.muted};font-size:13px;line-height:1.6;{center}"
+
+
+def _stat_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    mapping = {
+        "business": f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-left:4px solid {accent};border-radius:0;background:#ffffff;border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};",
+        "tech": f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-left:1px solid {theme.line};",
+        "magazine": f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-top:2px solid #000;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;border-left:none;border-right:none;",
+        "aurora": f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;box-shadow:inset 0 -4px 0 {secondary};border-top:1px solid {theme.line};border-left:1px solid {theme.line};border-right:1px solid {theme.line};",
+        "morandi": f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};border-radius:0;background:#ffffff;border-left:none;border-right:none;",
+    }
+    return mapping.get(
+        key,
+        f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-radius:{theme.radius};background:{theme.soft};border:1px solid {theme.line};",
+    )
+
+
+def _stat_value_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    color = secondary if key == "magazine" else accent
+    return f"margin:0;color:{color};font-size:28px;line-height:1.15;font-weight:900;"
+
+
+def _stat_label_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    return f"margin:8px 0 0;color:{theme.muted};font-size:13px;line-height:1.7;"
+
+
+def _reference_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    mapping = {
+        "magazine": f"margin:16px 0 0;padding:16px 0 14px;border-top:1px solid #000;border-bottom:1px solid {theme.line};border-radius:0;background:transparent;border-left:none;border-right:none;box-shadow:none;",
+        "business": f"margin:14px 0 0;padding:16px 16px 14px;border-left:3px solid {accent};border-radius:0;background:#ffffff;border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};box-shadow:none;",
+        "tech": f"margin:14px 0 0;padding:16px 16px 14px;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-left:1px solid {theme.line};box-shadow:none;",
+        "aurora": f"margin:14px 0 0;padding:16px 16px 14px;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;box-shadow:inset 0 -4px 0 {secondary};border-top:1px solid {theme.line};border-left:1px solid {theme.line};border-right:1px solid {theme.line};",
+        "morandi": f"margin:16px 0 0;padding:16px 0 14px;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};border-radius:0;background:transparent;border-left:none;border-right:none;box-shadow:none;",
+    }
+    return mapping.get(
+        key,
+        f"margin:14px 0 0;padding:16px 16px 14px;border-radius:{theme.radius};background:{theme.soft};border:1px solid {theme.line};box-shadow:none;",
+    )
+
+
+def _reference_link_css(key: str, theme: Any, accent: str, secondary: str) -> str:
+    if key in {"magazine", "morandi", "chinese"}:
+        return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:10px 0;border-radius:0;background:transparent;color:{accent};text-align:left;font-size:14px;font-weight:800;text-decoration:none;border:none;"
+    return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:11px 14px;border-radius:999px;background:{theme.soft};color:{accent};text-align:center;font-size:14px;font-weight:800;text-decoration:none;border:1px solid {theme.line};"
