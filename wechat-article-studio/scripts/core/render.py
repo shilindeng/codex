@@ -25,6 +25,7 @@ from core.layout import (
 )
 from core.layout_skin import choose_layout_skin, normalize_layout_skin_request
 from core.manifest import ensure_workspace, load_manifest, relative_posix, save_manifest, workspace_path
+from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
 from core.wechat_fragment import build_header_module_html, render_wechat_fragment
 
 
@@ -140,9 +141,8 @@ def normalize_publication_markdown(title: str, body: str) -> str:
     normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
     normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
     normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
-    normalized = re.sub(r"(?mi)^\s*#{1,6}\s*(?:行业判断|事实/?依据|事实依据|边界/?误判|边界误判|误判/边界)\s*$\n?", "", normalized)
-    normalized = re.sub(r"(?mi)^(\s*(?:>\s*)?(?:[-*+]\s*)?)(?:行业判断|事实/?依据|事实依据|边界/?误判|边界误判|误判/边界)\s*[：:]\s*", r"\1", normalized)
-    normalized = re.sub(r"(?mi)^\s*(?:行业判断|事实/?依据|事实依据|边界/?误判|边界误判|误判/边界)\s*$\n?", "", normalized)
+    normalized = strip_ai_label_phrases(normalized)
+    normalized = expand_compact_markdown_lists(normalized)
     normalized = re.sub(
         r"(?ms)^\s*>\s*\[!(?:TIP|NOTE)\]\s*(?:参考资料|参考来源|参考与延伸).*?(?=^\s*(?:#|$)|\Z)",
         "",

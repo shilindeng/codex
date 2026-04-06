@@ -50,6 +50,7 @@ from core.layout_skin import LAYOUT_SKIN_CHOICES, normalize_layout_skin_request
 from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.persona import normalize_writing_persona
+from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
 from core.editorial_strategy import (
     generate_diverse_title_variants,
     normalize_editorial_blueprint,
@@ -89,7 +90,6 @@ KNOWN_TEMPLATE_PHRASES = [
     "说白了",
     "以后真正靠谱的 AI，可能不是",
 ]
-AI_LABEL_PHRASES = ("行业判断", "事实/依据", "事实依据", "边界/误判", "边界误判", "误判/边界")
 _CORPUS_CONTEXT_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
 _AUTHOR_MEMORY_CACHE: dict[
     tuple[
@@ -888,6 +888,7 @@ def normalize_publication_body(title: str, body: str) -> str:
     normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
     normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
     normalized = strip_ai_label_phrases(normalized)
+    normalized = expand_compact_markdown_lists(normalized)
 
     # Remove markdown callout reference blocks; the system will render a unified references section.
     normalized = re.sub(
@@ -899,18 +900,6 @@ def normalize_publication_body(title: str, body: str) -> str:
     intro_blocks, sections = legacy.split_sections(normalized)
     filtered_sections = [section for section in sections if not legacy.is_reference_heading(section.get("heading", ""))]
     normalized = legacy.reconstruct_body(intro_blocks, filtered_sections).strip() + "\n"
-    return normalized
-
-
-def strip_ai_label_phrases(text: str) -> str:
-    normalized = text or ""
-    label_alt = "|".join(re.escape(item) for item in AI_LABEL_PHRASES)
-    # Remove standalone headings made only of these labels.
-    normalized = re.sub(rf"(?mi)^\s*#{{1,6}}\s*(?:{label_alt})\s*$\n?", "", normalized)
-    # Remove paragraph/list/quote prefixes such as “行业判断：”.
-    normalized = re.sub(rf"(?mi)^(\s*(?:>\s*)?(?:[-*+]\s*)?)(?:{label_alt})\s*[：:]\s*", r"\1", normalized)
-    # Remove short standalone label lines that are not headings.
-    normalized = re.sub(rf"(?mi)^\s*(?:{label_alt})\s*$\n?", "", normalized)
     return normalized
 
 

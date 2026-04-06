@@ -13,8 +13,10 @@ if str(SCRIPTS) not in sys.path:
 
 
 import legacy_studio as legacy  # noqa: E402
+from core.editorial import enhance_content_html  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style, preview_css  # noqa: E402
 from core.layout_skin import choose_layout_skin  # noqa: E402
+from core.publication_cleanup import expand_compact_markdown_lists  # noqa: E402
 from core.workflow import apply_reference_policy, build_parser, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
 from core.wechat_fragment import build_header_module_html  # noqa: E402
@@ -257,6 +259,13 @@ class RenderModeTests(unittest.TestCase):
         self.assertIn("这里写真实内容，不要保留标签。", cleaned)
         self.assertIn("这里也应该只保留后面的内容。", cleaned)
 
+    def test_publication_cleanup_expands_compact_bullet_lists(self):
+        body = "- 第一条先说清楚。 - 第二条再补一句。 - 第三条最后收住。"
+        cleaned = normalize_publication_body("测试标题", body)
+        self.assertIn("- 第一条先说清楚。", cleaned)
+        self.assertIn("\n- 第二条再补一句。\n", cleaned)
+        self.assertIn("\n- 第三条最后收住。\n", cleaned)
+
     def test_header_module_avoids_industry_judgment_label(self):
         header = build_header_module_html(
             title="测试标题",
@@ -368,6 +377,24 @@ class RenderModeTests(unittest.TestCase):
         self.assertIn('[data-wx-role="compare-header"]', css)
         self.assertIn('[data-wx-role="stat-card"]', css)
         self.assertIn('[data-wx-role="reference-card"]', css)
+
+    def test_editorial_module_labels_avoid_aiish_terms(self):
+        enhanced_html, _ = enhance_content_html(
+            "<h2>第二部分</h2><p>这里是一段正文。</p>",
+            {
+                "layout_plan": {
+                    "section_modules": [
+                        {
+                            "module_type": "boundary-card",
+                            "heading_role": "section-label",
+                        }
+                    ]
+                }
+            },
+        )
+        self.assertNotIn("边界 / 误判", enhanced_html)
+        self.assertNotIn("事实 / 依据", enhanced_html)
+        self.assertIn("别急着下结论", enhanced_html)
 
     def test_render_persists_layout_skin(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -500,6 +527,66 @@ class RenderModeTests(unittest.TestCase):
             self.assertEqual(manifest.get("layout_skin"), "tech")
             self.assertNotEqual(manifest.get("layout_skin"), "magazine")
             self.assertIn('data-wx-skin="tech"', preview_html)
+
+    def test_compact_list_helper_supports_ordered_lists(self):
+        expanded = expand_compact_markdown_lists("1. 第一步先准备。 2. 第二步再执行。 3. 第三步做检查。")
+        self.assertIn("1. 第一步先准备。", expanded)
+        self.assertIn("\n2. 第二步再执行。\n", expanded)
+        self.assertIn("\n3. 第三步做检查。", expanded)
+
+    def test_render_expands_compact_lists_and_avoids_old_module_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "测试摘要",
+                        "article_path": "article.md",
+                        "layout_plan": {
+                            "section_modules": [
+                                {
+                                    "module_type": "boundary-card",
+                                    "heading_role": "section-label",
+                                }
+                            ]
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text(
+                "\n".join(
+                    [
+                        "## 第二部分",
+                        "",
+                        "这段正文先铺垫一下。",
+                        "",
+                        "- 第一条先说清楚。 - 第二条再补一句。 - 第三条最后收住。",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="business",
+                    layout_skin="business",
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            preview_html = (workspace / "article.html").read_text(encoding="utf-8")
+            self.assertNotIn("边界 / 误判", preview_html)
+            self.assertIn("别急着下结论", preview_html)
+            self.assertIn("<li>第一条先说清楚。</li>", preview_html)
+            self.assertIn("<li>第二条再补一句。</li>", preview_html)
+            self.assertIn("<li>第三条最后收住。</li>", preview_html)
 
 
     def test_auto_skin_prefers_tech_for_tutorial_steps(self):

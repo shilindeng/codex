@@ -345,13 +345,13 @@ def _apply_layout_plan(enhanced_blocks: list[str], manifest: dict[str, Any] | No
                         break
 
     label_text_map = {
-        "evidence-strip": "事实 / 依据",
-        "boundary-card": "边界 / 误判",
-        "scene-card": "场景片段",
-        "turning-point-card": "关键转折",
-        "pitfall-card": "易错点",
-        "fit-card": "适用场景",
-        "emotion-turn": "情绪转折",
+        "evidence-strip": "关键细节",
+        "boundary-card": "别急着下结论",
+        "scene-card": "先到现场",
+        "turning-point-card": "变化从这里开始",
+        "pitfall-card": "最容易踩坑的地方",
+        "fit-card": "更适合谁",
+        "emotion-turn": "情绪一下变了",
     }
 
     for index, section in enumerate(sections):
