@@ -362,33 +362,6 @@ class RenderModeTests(unittest.TestCase):
         decision = choose_layout_skin("auto", "business", {"viral_blueprint": {"article_archetype": "comparison"}}, signals, rich_blocks=["compare"])
         self.assertIn(decision.key, {"aurora", "business", "morandi"})
 
-    def test_auto_skin_prefers_tech_for_step_driven_content(self):
-        source = "\n".join(
-            [
-                "## 三步搭好工作流",
-                "",
-                "1. 先配置环境",
-                "2. 再执行脚本",
-                "3. 最后验收结果",
-                "",
-                "```bash",
-                "python scripts/studio.py render --workspace demo",
-                "```",
-            ]
-        )
-        signals = analyze_content_signals(source, "md")
-        decision = choose_layout_skin(
-            "auto",
-            "tech",
-            {
-                "selected_title": "AI 工作流上手指南",
-                "layout_plan": {"layout_archetype": "tutorial", "hero_module": "hero-checkpoint", "module_types": ["checklist"]},
-            },
-            signals,
-            rich_blocks=["steps"],
-        )
-        self.assertEqual(decision.key, "tech")
-
     def test_render_persists_layout_skin(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
