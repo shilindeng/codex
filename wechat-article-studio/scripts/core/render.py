@@ -12,6 +12,7 @@ from core.artifacts import extract_summary, read_json, read_text, split_frontmat
 from core.editorial import enhance_content_html
 from core.layout import (
     DEFAULT_ACCENT_COLOR,
+    LAYOUT_STYLE_CHOICES,
     THEMES,
     apply_callout_blocks,
     analyze_content_signals,
@@ -36,6 +37,11 @@ _TECH_TOKEN_PATTERNS = [
     re.compile(r"(?<!`)\b([a-z0-9]+(?:[._/-][a-z0-9]+){1,})\b"),
     re.compile(r"(?<!`)\b([A-Z][a-z0-9]+[A-Z][A-Za-z0-9]+|[a-z]+_[a-z0-9_]+)\b"),
 ]
+
+
+def _normalize_layout_style_request(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    return normalized if normalized in LAYOUT_STYLE_CHOICES else "auto"
 
 
 def _mask_technical_spans(text: str) -> tuple[str, list[str]]:
@@ -180,8 +186,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     content_html, rich_blocks = enhance_content_html(content_html, manifest)
 
     signals = analyze_content_signals(content_source if fmt == "md" else content_html, fmt)
-    layout_style_arg = getattr(args, "layout_style", "auto")
-    layout_decision = choose_layout_style(str(layout_style_arg), signals, manifest, rich_blocks=rich_blocks)
+    raw_layout_style = getattr(args, "layout_style", None)
+    requested_style = _normalize_layout_style_request(raw_layout_style)
+    if raw_layout_style is None and requested_style == "auto":
+        requested_style = _normalize_layout_style_request(manifest.get("layout_style_preference"))
+    layout_decision = choose_layout_style(requested_style, signals, manifest, rich_blocks=rich_blocks)
     chosen_style = layout_decision.style
 
     accent_arg = getattr(args, "accent_color", DEFAULT_ACCENT_COLOR) or DEFAULT_ACCENT_COLOR
@@ -264,6 +273,7 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     manifest["html_path"] = relative_posix(output_path, workspace)
     manifest["wechat_html_path"] = relative_posix(wechat_output, workspace)
+    manifest["layout_style_preference"] = requested_style
     manifest["layout_style"] = chosen_style
     manifest["layout_style_reason"] = layout_decision.reason
     manifest["layout_skin_preference"] = requested_skin

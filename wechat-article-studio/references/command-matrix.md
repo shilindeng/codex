@@ -130,9 +130,10 @@
 
 ## `render`
 
-- 输入：`--workspace [--input] [--output article.html] [--accent-color] [--layout-style] [--input-format]`
+- 输入：`--workspace [--input] [--output article.html] [--accent-color] [--layout-style] [--layout-skin] [--input-format]`
 - 说明：
   - `--layout-style auto` 会根据文章结构（代码/表格/列表等）与 `manifest.image_controls` 自动选型。
+  - `--layout-skin auto` 会根据小标题节奏、引用、步骤清单、对比结构和文章气质自动选皮肤；显式传入具体皮肤后会沿用该偏好。
   - `--input-format auto` 会按后缀或内容特征识别 Markdown/HTML；HTML 会抽取 `<body>` 后净化再套用主题。
   - 支持信息卡片标记（Markdown 引用块）：`> [!TIP]`、`> [!TAKEAWAY]`、`> [!WARNING]`、`> [!CHECKLIST]`、`> [!MYTHFACT]`。
 - 输出：

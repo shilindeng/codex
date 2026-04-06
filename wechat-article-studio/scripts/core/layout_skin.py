@@ -154,6 +154,21 @@ _DATA_HINTS = (
     "percent",
     "benchmark",
 )
+_HERO_MODULE_HINTS = {
+    "hero-compare": "comparison",
+    "hero-checkpoint": "practical",
+    "hero-scene": "narrative",
+    "hero-judgment": "editorial",
+}
+_STRUCTURE_MODULE_HINTS = {
+    "boundary-card": "comparison",
+    "compare-grid": "comparison",
+    "checklist": "practical",
+    "action-list": "practical",
+    "scene-open": "narrative",
+    "quote-wall": "editorial",
+    "summary-close": "editorial",
+}
 
 
 def get_skin(key: str) -> LayoutSkin:
@@ -178,11 +193,8 @@ def choose_layout_skin(
     if req != "auto" and req in SKINS:
         return LayoutSkinDecision(key=req, reason="explicit_layout_skin")
 
-    archetype = str(
-        (manifest.get("layout_plan") or {}).get("layout_archetype")
-        or (manifest.get("viral_blueprint") or {}).get("article_archetype")
-        or ""
-    ).strip().lower()
+    layout_plan = manifest.get("layout_plan") or {}
+    archetype = str(layout_plan.get("layout_archetype") or (manifest.get("viral_blueprint") or {}).get("article_archetype") or "").strip().lower()
     normalized_rich_blocks = {str(item or "").strip().lower() for item in rich_blocks if str(item or "").strip()}
     image_controls = manifest.get("image_controls") or {}
     preset = str(image_controls.get("preset") or image_controls.get("preset_cover") or image_controls.get("preset_inline") or "").strip().lower()
@@ -191,16 +203,45 @@ def choose_layout_skin(
     list_item_count = int(getattr(content_signals, "list_item_count", 0) or 0)
     has_table = bool(getattr(content_signals, "has_table", False))
     has_code_block = bool(getattr(content_signals, "has_code_block", False))
+    hero_module = str(layout_plan.get("hero_module") or "").strip().lower()
+    structure_modules = {str(item or "").strip().lower() for item in (layout_plan.get("module_types") or []) if str(item or "").strip()}
     audience_business = _contains_any(str(manifest.get("audience") or ""), _AUDIENCE_BUSINESS_KEYWORDS)
-    comparison_like = bool(normalized_rich_blocks.intersection({"compare", "timeline"})) or archetype == "comparison" or _contains_any(text_blob, _COMPARISON_HINTS)
-    practical_like = "steps" in normalized_rich_blocks or archetype == "tutorial" or has_code_block or _contains_any(text_blob, _PRACTICAL_HINTS)
-    narrative_like = "dialogue" in normalized_rich_blocks or archetype == "narrative" or _contains_any(text_blob, _NARRATIVE_HINTS)
+    comparison_like = (
+        bool(normalized_rich_blocks.intersection({"compare", "timeline"}))
+        or archetype == "comparison"
+        or _HERO_MODULE_HINTS.get(hero_module) == "comparison"
+        or "comparison" in {_STRUCTURE_MODULE_HINTS.get(item) for item in structure_modules}
+        or _contains_any(text_blob, _COMPARISON_HINTS)
+    )
+    practical_like = (
+        "steps" in normalized_rich_blocks
+        or archetype == "tutorial"
+        or _HERO_MODULE_HINTS.get(hero_module) == "practical"
+        or "practical" in {_STRUCTURE_MODULE_HINTS.get(item) for item in structure_modules}
+        or has_code_block
+        or list_item_count >= 6
+        or _contains_any(text_blob, _PRACTICAL_HINTS)
+    )
+    narrative_like = (
+        "dialogue" in normalized_rich_blocks
+        or archetype == "narrative"
+        or _HERO_MODULE_HINTS.get(hero_module) == "narrative"
+        or "narrative" in {_STRUCTURE_MODULE_HINTS.get(item) for item in structure_modules}
+        or _contains_any(text_blob, _NARRATIVE_HINTS)
+    )
     editorial_like = ("quote" in normalized_rich_blocks and chosen_style == "magazine") or (
         archetype == "commentary" and blockquote_count >= 1
-    ) or _contains_any(text_blob, _EDITORIAL_HINTS)
+    ) or _HERO_MODULE_HINTS.get(hero_module) == "editorial" or "editorial" in {_STRUCTURE_MODULE_HINTS.get(item) for item in structure_modules} or _contains_any(text_blob, _EDITORIAL_HINTS)
     calm_editorial = _contains_any(text_blob, _CALM_EDITORIAL_HINTS)
     cultural_like = _contains_any(text_blob, _CULTURAL_HINTS)
     data_like = has_table or "stats" in normalized_rich_blocks or _contains_any(text_blob, _DATA_HINTS)
+
+    if blockquote_count >= 2 and not has_table and not practical_like:
+        if narrative_like or cultural_like:
+            return LayoutSkinDecision(key="chinese", reason="quote_heavy_narrative_content")
+        if calm_editorial:
+            return LayoutSkinDecision(key="morandi", reason="quote_heavy_calm_editorial")
+        return LayoutSkinDecision(key="magazine", reason="quote_heavy_editorial_content")
 
     if comparison_like:
         if has_table or audience_business or chosen_style == "business":

@@ -10,6 +10,7 @@
 - 代码入口：`scripts/studio.py`
 - 主流程：`scripts/core/workflow.py`
 - 图片链路：`scripts/legacy_studio.py`
+- 排版皮肤：`scripts/core/layout_skin.py`
 - Skill 说明：`SKILL.md`
 - UI 元数据：`agents/openai.yaml`
 

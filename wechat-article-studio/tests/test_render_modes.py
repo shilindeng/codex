@@ -362,6 +362,33 @@ class RenderModeTests(unittest.TestCase):
         decision = choose_layout_skin("auto", "business", {"viral_blueprint": {"article_archetype": "comparison"}}, signals, rich_blocks=["compare"])
         self.assertIn(decision.key, {"aurora", "business", "morandi"})
 
+    def test_auto_skin_prefers_tech_for_step_driven_content(self):
+        source = "\n".join(
+            [
+                "## 三步搭好工作流",
+                "",
+                "1. 先配置环境",
+                "2. 再执行脚本",
+                "3. 最后验收结果",
+                "",
+                "```bash",
+                "python scripts/studio.py render --workspace demo",
+                "```",
+            ]
+        )
+        signals = analyze_content_signals(source, "md")
+        decision = choose_layout_skin(
+            "auto",
+            "tech",
+            {
+                "selected_title": "AI 工作流上手指南",
+                "layout_plan": {"layout_archetype": "tutorial", "hero_module": "hero-checkpoint", "module_types": ["checklist"]},
+            },
+            signals,
+            rich_blocks=["steps"],
+        )
+        self.assertEqual(decision.key, "tech")
+
     def test_render_persists_layout_skin(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -394,6 +421,61 @@ class RenderModeTests(unittest.TestCase):
             preview_html = (workspace / "article.html").read_text(encoding="utf-8")
             self.assertTrue(manifest.get("layout_skin"))
             self.assertIn('data-wx-skin="', preview_html)
+
+    def test_render_uses_auto_skin_preference_instead_of_old_resolved_skin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "AI 工作流上手指南",
+                        "summary": "一篇偏实操的教程稿。",
+                        "article_path": "article.md",
+                        "layout_skin": "magazine",
+                        "layout_skin_preference": "auto",
+                        "layout_style_preference": "tech",
+                        "layout_plan": {"layout_archetype": "tutorial", "hero_module": "hero-checkpoint", "module_types": ["checklist"]},
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text(
+                "\n".join(
+                    [
+                        "## 三步搭好工作流",
+                        "",
+                        "1. 先配置环境",
+                        "2. 再执行脚本",
+                        "3. 最后验收结果",
+                        "",
+                        "```bash",
+                        "python scripts/studio.py render --workspace demo",
+                        "```",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style=None,
+                    layout_skin=None,
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))
+            preview_html = (workspace / "article.html").read_text(encoding="utf-8")
+            self.assertEqual(manifest.get("layout_style_preference"), "tech")
+            self.assertEqual(manifest.get("layout_skin_preference"), "auto")
+            self.assertEqual(manifest.get("layout_skin"), "tech")
+            self.assertNotEqual(manifest.get("layout_skin"), "magazine")
+            self.assertIn('data-wx-skin="tech"', preview_html)
 
 
     def test_auto_skin_prefers_tech_for_tutorial_steps(self):
