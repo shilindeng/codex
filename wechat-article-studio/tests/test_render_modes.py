@@ -16,6 +16,7 @@ import legacy_studio as legacy  # noqa: E402
 from core.layout import analyze_content_signals, choose_layout_style  # noqa: E402
 from core.workflow import apply_reference_policy, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
+from core.wechat_fragment import build_header_module_html  # noqa: E402
 
 
 class RenderModeTests(unittest.TestCase):
@@ -230,6 +231,40 @@ class RenderModeTests(unittest.TestCase):
         self.assertIn("当用户把决定权交给你", cleaned)
         self.assertNotIn("[!TIP] 参考资料", cleaned)
         self.assertNotIn("某来源：[1]", cleaned)
+
+    def test_publication_cleanup_strips_ai_label_phrases(self):
+        body = "\n".join(
+            [
+                "## 行业判断",
+                "",
+                "行业判断：这段正文应该直接进入内容。",
+                "",
+                "### 事实/依据",
+                "",
+                "事实/依据：这里写真实内容，不要保留标签。",
+                "",
+                "边界/误判：这里也应该只保留后面的内容。",
+            ]
+        )
+        cleaned = normalize_publication_body("测试标题", body)
+        self.assertNotIn("## 行业判断", cleaned)
+        self.assertNotIn("### 事实/依据", cleaned)
+        self.assertNotIn("行业判断：", cleaned)
+        self.assertNotIn("事实/依据：", cleaned)
+        self.assertNotIn("边界/误判：", cleaned)
+        self.assertIn("这段正文应该直接进入内容。", cleaned)
+        self.assertIn("这里写真实内容，不要保留标签。", cleaned)
+        self.assertIn("这里也应该只保留后面的内容。", cleaned)
+
+    def test_header_module_avoids_industry_judgment_label(self):
+        header = build_header_module_html(
+            title="测试标题",
+            summary="测试摘要",
+            hero_module="hero-judgment",
+            archetype="commentary",
+        )
+        self.assertNotIn("行业判断", header)
+        self.assertIn("深度观察", header)
 
     def test_render_strips_gold_quote_labels_and_manual_reference_blocks_from_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:

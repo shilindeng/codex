@@ -38,7 +38,7 @@ def build_header_module_html(
     normalized_hero = (hero_module or "hero-judgment").strip().lower()
     normalized_archetype = (archetype or "commentary").strip().lower()
     kicker_map = {
-        "commentary": "行业判断",
+        "commentary": "深度观察",
         "tutorial": "实操卡点",
         "case-study": "案例拆解",
         "narrative": "场景观察",

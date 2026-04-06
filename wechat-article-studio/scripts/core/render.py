@@ -133,6 +133,9 @@ def normalize_publication_markdown(title: str, body: str) -> str:
     normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
     normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
     normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
+    normalized = re.sub(r"(?mi)^\s*#{1,6}\s*(?:行业判断|事实/?依据|事实依据|边界/?误判|边界误判|误判/边界)\s*$\n?", "", normalized)
+    normalized = re.sub(r"(?mi)^(\s*(?:>\s*)?(?:[-*+]\s*)?)(?:行业判断|事实/?依据|事实依据|边界/?误判|边界误判|误判/边界)\s*[：:]\s*", r"\1", normalized)
+    normalized = re.sub(r"(?mi)^\s*(?:行业判断|事实/?依据|事实依据|边界/?误判|边界误判|误判/边界)\s*$\n?", "", normalized)
     normalized = re.sub(
         r"(?ms)^\s*>\s*\[!(?:TIP|NOTE)\]\s*(?:参考资料|参考来源|参考与延伸).*?(?=^\s*(?:#|$)|\Z)",
         "",
