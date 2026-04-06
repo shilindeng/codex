@@ -48,6 +48,16 @@ DEFAULT_ACCOUNT_STRATEGY: dict[str, Any] = {
         "pressure": "professional-corporate",
         "structured": "notion",
     },
+    "image_text_policy": {
+        "default": "auto",
+        "封面图": "none",
+        "正文插图": "none",
+        "分隔图": "none",
+        "流程图": "short-zh-numeric",
+        "信息图": "short-zh-numeric",
+        "对比图": "short-zh",
+        "label_language": "zh-CN",
+    },
     "blocked_image_presets": ["abstract-geometric", "cute", "warm", "illustrated-handdrawn"],
     "preferred_hero_modules": ["hero-scene", "hero-checkpoint"],
     "avoid_hero_meta": True,
@@ -133,6 +143,9 @@ def normalize_account_strategy(payload: Any) -> dict[str, Any]:
     presets = dict(DEFAULT_ACCOUNT_STRATEGY.get("preferred_image_presets") or {})
     presets.update({key: str(value).strip() for key, value in (strategy.get("preferred_image_presets") or {}).items() if str(value).strip()})
     strategy["preferred_image_presets"] = presets
+    text_policy = dict(DEFAULT_ACCOUNT_STRATEGY.get("image_text_policy") or {})
+    text_policy.update({key: str(value).strip() for key, value in (strategy.get("image_text_policy") or {}).items() if str(value).strip()})
+    strategy["image_text_policy"] = text_policy
     blocked_presets = _normalize_list(strategy.get("blocked_image_presets"))
     strategy["blocked_image_presets"] = blocked_presets or list(DEFAULT_ACCOUNT_STRATEGY["blocked_image_presets"])
     try:

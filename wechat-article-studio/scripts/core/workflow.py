@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -85,6 +87,16 @@ KNOWN_TEMPLATE_PHRASES = [
     "说白了",
     "以后真正靠谱的 AI，可能不是",
 ]
+_CORPUS_CONTEXT_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+_AUTHOR_MEMORY_CACHE: dict[
+    tuple[
+        str,
+        tuple[tuple[str, int], ...],
+        tuple[tuple[str, int], ...],
+        tuple[tuple[str, int], ...],
+    ],
+    dict[str, Any],
+] = {}
 
 
 def normalize_content_mode(value: str | None) -> str:
@@ -349,19 +361,50 @@ def _normalize_phrase(text: str) -> str:
     return compact
 
 
+def _existing_path_signature(paths: list[str]) -> tuple[tuple[str, int], ...]:
+    signature: list[tuple[str, int]] = []
+    for raw in paths:
+        path = Path(raw)
+        if not path.exists():
+            continue
+        try:
+            resolved = path.resolve()
+            signature.append((str(resolved), int(resolved.stat().st_mtime_ns)))
+        except OSError:
+            continue
+    return tuple(signature)
+
+
 def recent_article_paths(corpus_roots: list[Path], current_workspace: Path, limit: int = RECENT_CORPUS_LIMIT) -> list[Path]:
     if not corpus_roots:
         return []
-    current_workspace = current_workspace.resolve()
+    try:
+        current_workspace_key = str(current_workspace.resolve())
+    except OSError:
+        current_workspace_key = str(current_workspace)
+    roots_key: list[str] = []
+    for root in corpus_roots:
+        try:
+            roots_key.append(str(root.resolve()))
+        except OSError:
+            roots_key.append(str(root))
+    return [Path(item) for item in _recent_article_paths_cached(tuple(roots_key), current_workspace_key, int(limit))]
+
+
+@lru_cache(maxsize=8)
+def _recent_article_paths_cached(corpus_roots: tuple[str, ...], current_workspace: str, limit: int) -> tuple[str, ...]:
+    if not corpus_roots:
+        return ()
+    current_workspace_path = Path(current_workspace)
     articles: list[Path] = []
     seen: set[str] = set()
     for corpus_root in corpus_roots:
-        for path in corpus_root.rglob("article.md"):
+        for path in Path(corpus_root).rglob("article.md"):
             try:
                 resolved = path.resolve()
             except OSError:
                 continue
-            if current_workspace in resolved.parents:
+            if current_workspace_path in resolved.parents:
                 continue
             key = str(resolved)
             if key in seen:
@@ -369,7 +412,7 @@ def recent_article_paths(corpus_roots: list[Path], current_workspace: Path, limi
             seen.add(key)
             articles.append(resolved)
     articles.sort(key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)
-    return articles[:limit]
+    return tuple(str(item) for item in articles[:limit])
 
 
 def collect_recent_phrase_blacklist(paths: list[Path]) -> list[str]:
@@ -438,6 +481,13 @@ def attach_corpus_context(workspace: Path, manifest: dict[str, Any]) -> dict[str
         manifest["recent_article_titles"] = []
         manifest["recent_corpus_summary"] = {}
         return manifest
+    workspace_key = str(workspace.resolve())
+    roots_key = tuple(str(item.resolve()) for item in corpus_roots)
+    cache_key = (workspace_key, roots_key)
+    cached = _CORPUS_CONTEXT_CACHE.get(cache_key)
+    if cached:
+        manifest.update(copy.deepcopy(cached))
+        return manifest
     article_paths = recent_article_paths(corpus_roots, workspace)
     titles: list[str] = []
     for path in article_paths[:8]:
@@ -448,17 +498,30 @@ def attach_corpus_context(workspace: Path, manifest: dict[str, Any]) -> dict[str
         except OSError:
             title = path.parent.name
         titles.append(str(title))
-    corpus_summary = summarize_recent_corpus(article_paths)
-    manifest["corpus_root"] = str(corpus_roots[0])
-    manifest["corpus_roots"] = [str(item) for item in corpus_roots]
-    manifest["recent_phrase_blacklist"] = collect_recent_phrase_blacklist(article_paths)
-    manifest["recent_article_titles"] = titles
-    manifest["recent_corpus_summary"] = corpus_summary
+    payload = {
+        "corpus_root": str(corpus_roots[0]),
+        "corpus_roots": [str(item) for item in corpus_roots],
+        "recent_phrase_blacklist": collect_recent_phrase_blacklist(article_paths),
+        "recent_article_titles": titles,
+        "recent_corpus_summary": summarize_recent_corpus(article_paths),
+    }
+    _CORPUS_CONTEXT_CACHE[cache_key] = copy.deepcopy(payload)
+    manifest.update(payload)
     return manifest
 
 
 def attach_author_memory(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    bundle = build_author_memory_bundle(workspace, manifest)
+    workspace_key = str(workspace.resolve())
+    sample_paths = _existing_path_signature(list(manifest.get("style_sample_paths") or []))
+    playbook_paths = _existing_path_signature(list(manifest.get("author_playbook_paths") or []))
+    lesson_paths = _existing_path_signature(list(manifest.get("author_lesson_paths") or []))
+    cache_key = (workspace_key, sample_paths, playbook_paths, lesson_paths)
+    cached = _AUTHOR_MEMORY_CACHE.get(cache_key)
+    if cached:
+        bundle = copy.deepcopy(cached)
+    else:
+        bundle = build_author_memory_bundle(workspace, manifest)
+        _AUTHOR_MEMORY_CACHE[cache_key] = copy.deepcopy(bundle)
     manifest["author_memory"] = bundle
     manifest["author_playbook_paths"] = bundle.get("playbook_paths") or []
     manifest["author_lesson_paths"] = bundle.get("lesson_paths") or []
@@ -496,31 +559,59 @@ def write_content_fingerprint_artifact(
     return payload
 
 
+def ensure_layout_plan_artifacts(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    title: str = "",
+    summary: str = "",
+    ideation: dict[str, Any] | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    layout_plan_path = workspace / str(manifest.get("layout_plan_path") or "layout-plan.json")
+    existing = read_json(layout_plan_path, default={}) or {}
+    if existing and not force:
+        manifest["layout_plan_path"] = layout_plan_path.name
+        return existing
+    ideation = ideation or load_ideation(workspace)
+    outline_meta = dict(ideation.get("outline_meta") or {})
+    if not outline_meta.get("sections"):
+        return existing
+    title_value = title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
+    summary_value = summary
+    if not summary_value:
+        article_path = workspace / str(manifest.get("article_path") or "article.md")
+        if article_path.exists():
+            meta, body = split_frontmatter(read_text(article_path))
+            summary_value = meta.get("summary") or manifest.get("summary") or extract_summary(body)
+        else:
+            summary_value = manifest.get("summary") or extract_summary(
+                "\n".join(str(item.get("goal") or "") for item in (outline_meta.get("sections") or []))
+            )
+    layout_plan = build_layout_plan(
+        title_value,
+        summary_value,
+        outline_meta,
+        manifest | {"viral_blueprint": outline_meta.get("viral_blueprint") or manifest.get("viral_blueprint") or {}},
+    )
+    write_json(layout_plan_path, layout_plan)
+    write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
+    manifest["layout_plan_path"] = layout_plan_path.name
+    return layout_plan
+
+
 def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     article_path = workspace / str(manifest.get("article_path") or "article.md")
     if not article_path.exists():
         return {}
     score_report = read_json(workspace / "score-report.json", default={}) or {}
     review_report = read_json(workspace / "review-report.json", default={}) or {}
-    layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    layout_plan = ensure_layout_plan_artifacts(workspace, manifest, force=False)
     if not score_report:
         return {}
     meta, body = split_frontmatter(read_text(article_path))
     title = manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题"
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(body)
-    if not layout_plan:
-        ideation = load_ideation(workspace)
-        outline_meta = dict(ideation.get("outline_meta") or {})
-        if outline_meta.get("sections"):
-            layout_plan = build_layout_plan(
-                title,
-                summary,
-                outline_meta,
-                manifest | {"viral_blueprint": outline_meta.get("viral_blueprint") or manifest.get("viral_blueprint") or {}},
-            )
-            write_json(workspace / "layout-plan.json", layout_plan)
-            write_text(workspace / "layout-plan.md", markdown_layout_plan(layout_plan))
-            manifest["layout_plan_path"] = "layout-plan.json"
     write_content_fingerprint_artifact(workspace, title, body, manifest, review=review_report, layout_plan=layout_plan)
     recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
     payload = build_acceptance_report(
@@ -586,6 +677,23 @@ def topic_keyword_tokens(value: str) -> list[str]:
                 if len(output) >= 8:
                     return output[:8]
     return output[:8]
+
+
+@lru_cache(maxsize=64)
+def _load_json_payload_cached(path_value: str, mtime_ns: int) -> Any:
+    return read_json(Path(path_value), default={}) or {}
+
+
+def _load_json_payload(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        resolved = path.resolve()
+        mtime_ns = resolved.stat().st_mtime_ns
+    except OSError:
+        return read_json(path, default={}) or {}
+    payload = _load_json_payload_cached(str(resolved), mtime_ns)
+    return copy.deepcopy(payload) if isinstance(payload, dict) else {}
 
 
 def rerank_discovery_candidates(
@@ -940,11 +1048,11 @@ def extract_style_signals(sample_paths: list[str]) -> list[str]:
 
 
 def load_research(workspace: Path) -> dict[str, Any]:
-    return read_json(workspace / "research.json", default={}) or {}
+    return _load_json_payload(workspace / "research.json")
 
 
 def load_ideation(workspace: Path) -> dict[str, Any]:
-    return read_json(workspace / "ideation.json", default={}) or {}
+    return _load_json_payload(workspace / "ideation.json")
 
 
 def current_viral_blueprint(workspace: Path, manifest: dict[str, Any], ideation: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1477,10 +1585,7 @@ def cmd_research(args: argparse.Namespace) -> int:
 
 def cmd_titles(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace)
     provider = require_live_text_provider("titles")
     research = load_research(workspace)
     topic = manifest.get("topic") or research.get("topic") or "未命名主题"
@@ -1545,12 +1650,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
 
 def cmd_outline(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, args)
     provider = require_live_text_provider("outline")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -1654,12 +1754,7 @@ def cmd_outline(args: argparse.Namespace) -> int:
 
 def cmd_enhance(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, args)
     ideation = load_ideation(workspace)
     selected_title = args.title or manifest.get("selected_title") or ideation.get("selected_title") or manifest.get("topic") or "未命名标题"
     if not ideation.get("outline_meta"):
@@ -1695,12 +1790,7 @@ def cmd_enhance(args: argparse.Namespace) -> int:
 
 def cmd_write(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, args)
     provider = require_live_text_provider("write")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -1809,12 +1899,7 @@ def cmd_write(args: argparse.Namespace) -> int:
 
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, args)
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -1965,12 +2050,7 @@ def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) ->
 
 def cmd_revise(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, args)
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -2034,8 +2114,7 @@ def cmd_ideate(args: argparse.Namespace) -> int:
 
 def cmd_draft(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_corpus_context(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, include_corpus=True, include_author_memory=False)
     raw = read_input_file(args.input)
     meta, body = split_frontmatter(raw)
     title = args.selected_title or manifest.get("selected_title") or meta.get("title") or legacy.extract_title_from_body(body) or manifest.get("topic") or "未命名文章"
@@ -2925,6 +3004,7 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
     manifest["score_passed"] = score_report.get("passed")
     manifest["humanness_signals"] = score_report.get("humanness_signals") or {}
     manifest["stage"] = "score"
+    ensure_layout_plan_artifacts(workspace, manifest, title=title, force=True)
     review_payload = read_json(workspace / "review-report.json", default={}) or {}
     # Prefer the structured, real review if present; only fall back to score-derived review when missing.
     if not (isinstance(review_payload, dict) and review_payload.get("viral_analysis")):
@@ -2935,14 +3015,69 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
     return review_payload
 
 
+def _prepare_run_manifest(workspace: Path, args: argparse.Namespace) -> tuple[dict[str, Any], list[str]]:
+    manifest = _prepare_content_manifest(workspace, args, include_corpus=False, include_author_memory=True)
+    style_sample = list(manifest.get("style_sample_paths") or [])
+    save_manifest(workspace, manifest)
+    assert_publish_request_ready(args)
+    return manifest, style_sample
+
+
+def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    ensure_layout_plan_artifacts(workspace, manifest, force=True)
+    _sync_image_controls(workspace, args)
+    image_provider = _effective_image_provider(args)
+    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
+    manifest = load_manifest(workspace)
+    manifest["image_status"] = "planned"
+    save_manifest(workspace, manifest)
+    legacy_generate_images(
+        argparse.Namespace(
+            workspace=str(workspace),
+            provider=image_provider,
+            dry_run=args.dry_run_images,
+            gemini_model=args.gemini_model,
+            openai_model=args.openai_model,
+        )
+    )
+    legacy_assemble(argparse.Namespace(workspace=str(workspace)))
+    legacy_render(
+        argparse.Namespace(
+            workspace=str(workspace),
+            input=None,
+            output="article.html",
+            accent_color=args.accent_color,
+            layout_style=getattr(args, "layout_style", "auto"),
+            input_format=getattr(args, "input_format", "auto"),
+            wechat_header_mode=getattr(args, "wechat_header_mode", "drop-title"),
+        )
+    )
+    manifest = load_manifest(workspace)
+    manifest["image_status"] = "done"
+    manifest["render_status"] = "done"
+    manifest["stage"] = "render"
+    write_acceptance_artifacts(workspace, manifest)
+    save_manifest(workspace, manifest)
+    if args.to == "publish":
+        cmd_publish(
+            argparse.Namespace(
+                workspace=str(workspace),
+                input=None,
+                digest=None,
+                author=None,
+                cover=None,
+                dry_run=args.dry_run_publish,
+                confirmed_publish=args.confirmed_publish,
+            )
+        )
+        if not args.dry_run_publish:
+            cmd_verify_draft(argparse.Namespace(workspace=str(workspace), media_id=None))
+    return manifest
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
-    manifest = attach_corpus_context(workspace, manifest)
-    manifest = attach_author_memory(workspace, manifest)
+    manifest = _prepare_content_manifest(workspace, args)
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     article_path = workspace / (args.input or manifest.get("article_path") or "article.md")
     if not article_path.exists():
@@ -3030,6 +3165,25 @@ def _run_review_only(workspace: Path, *, style_sample: list[str] | None = None) 
     return read_json(workspace / "review-report.json", default={}) or {}
 
 
+def _prepare_content_manifest(
+    workspace: Path,
+    args: argparse.Namespace | None = None,
+    *,
+    include_corpus: bool = True,
+    include_author_memory: bool = True,
+) -> dict[str, Any]:
+    manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
+    if args is not None:
+        manifest = persist_runtime_preferences(manifest, args)
+        manifest = persist_style_samples(workspace, manifest, getattr(args, "style_sample", None))
+    if include_corpus:
+        manifest = attach_corpus_context(workspace, manifest)
+    if include_author_memory:
+        manifest = attach_author_memory(workspace, manifest)
+    return manifest
+
+
 def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[str] | None = None) -> dict[str, Any]:
     max_rounds = max(1, int(max_rounds or 1))
     manifest = load_manifest(workspace)
@@ -3115,14 +3269,7 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
 
 def cmd_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    style_sample = list(getattr(args, "style_sample", []) or [])
-    manifest = persist_style_samples(workspace, manifest, style_sample)
-    manifest = attach_author_memory(workspace, manifest)
-    save_manifest(workspace, manifest)
-    assert_publish_request_ready(args)
+    manifest, style_sample = _prepare_run_manifest(workspace, args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
         return cmd_discover_topics(
@@ -3152,9 +3299,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     ideation = load_ideation(workspace)
     if not ideation.get("outline"):
         cmd_outline(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), style_sample=style_sample))
-    cmd_enhance(argparse.Namespace(workspace=str(workspace), title=args.title or load_ideation(workspace).get("selected_title"), style_sample=style_sample, content_mode=manifest.get("content_mode") or "tech-balanced", wechat_header_mode=manifest.get("wechat_header_mode") or "drop-title"))
+        ideation = load_ideation(workspace)
+    current_title = args.title or ideation.get("selected_title")
+    cmd_enhance(argparse.Namespace(workspace=str(workspace), title=current_title, style_sample=style_sample, content_mode=manifest.get("content_mode") or "tech-balanced", wechat_header_mode=manifest.get("wechat_header_mode") or "drop-title"))
     if not (workspace / "article.md").exists():
-        cmd_write(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), outline_file=None, style_sample=style_sample))
+        cmd_write(argparse.Namespace(workspace=str(workspace), title=current_title, outline_file=None, style_sample=style_sample))
     score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
     manifest = load_manifest(workspace)
     _finalize_after_score(workspace, manifest, manifest.get("selected_title") or topic, score_report)
@@ -3162,66 +3311,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     if render_blockers:
         detail = "\n".join(f"- {item}" for item in render_blockers)
         raise SystemExit(f"当前稿件不满足 render 前置条件：\n{detail}")
-    _sync_image_controls(workspace, args)
-    image_provider = _effective_image_provider(args)
-    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
-    manifest = load_manifest(workspace)
-    manifest["image_status"] = "planned"
-    save_manifest(workspace, manifest)
-    legacy_generate_images(
-        argparse.Namespace(
-            workspace=str(workspace),
-            provider=image_provider,
-            dry_run=args.dry_run_images,
-            gemini_model=args.gemini_model,
-            openai_model=args.openai_model,
-        )
-    )
-    legacy_assemble(argparse.Namespace(workspace=str(workspace)))
-    legacy_render(
-        argparse.Namespace(
-            workspace=str(workspace),
-            input=None,
-            output="article.html",
-            accent_color=args.accent_color,
-            layout_style=getattr(args, "layout_style", "auto"),
-            input_format=getattr(args, "input_format", "auto"),
-            wechat_header_mode=getattr(args, "wechat_header_mode", "drop-title"),
-        )
-    )
-    manifest = load_manifest(workspace)
-    manifest["image_status"] = "done"
-    manifest["render_status"] = "done"
-    manifest["stage"] = "render"
-    write_acceptance_artifacts(workspace, manifest)
-    save_manifest(workspace, manifest)
-    if args.to == "publish":
-        cmd_publish(
-            argparse.Namespace(
-                workspace=str(workspace),
-                input=None,
-                digest=None,
-                author=None,
-                cover=None,
-                dry_run=args.dry_run_publish,
-                confirmed_publish=args.confirmed_publish,
-            )
-        )
-        if not args.dry_run_publish:
-            cmd_verify_draft(argparse.Namespace(workspace=str(workspace), media_id=None))
+    _run_image_render_pipeline(workspace, manifest, args)
     return 0
 
 
 def cmd_hosted_run(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    manifest = attach_account_strategy(workspace, manifest)
-    manifest = persist_runtime_preferences(manifest, args)
-    style_sample = list(getattr(args, "style_sample", []) or [])
-    manifest = persist_style_samples(workspace, manifest, style_sample)
-    manifest = attach_author_memory(workspace, manifest)
-    save_manifest(workspace, manifest)
-    assert_publish_request_ready(args)
+    manifest, style_sample = _prepare_run_manifest(workspace, args)
     raw_topic = (args.topic or manifest.get("topic") or "").strip()
     if raw_topic.lower() in legacy.START_TOPIC_TOKENS:
         return cmd_discover_topics(
@@ -3254,53 +3350,7 @@ def cmd_hosted_run(args: argparse.Namespace) -> int:
         detail = "\n".join(f"- {item}" for item in render_blockers)
         raise SystemExit(f"当前稿件不满足 render 前置条件：\n{detail}")
 
-    _sync_image_controls(workspace, args)
-    image_provider = _effective_image_provider(args)
-    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
-    manifest = load_manifest(workspace)
-    manifest["image_status"] = "planned"
-    save_manifest(workspace, manifest)
-    legacy_generate_images(
-        argparse.Namespace(
-            workspace=str(workspace),
-            provider=image_provider,
-            dry_run=args.dry_run_images,
-            gemini_model=args.gemini_model,
-            openai_model=args.openai_model,
-        )
-    )
-    legacy_assemble(argparse.Namespace(workspace=str(workspace)))
-    legacy_render(
-        argparse.Namespace(
-            workspace=str(workspace),
-            input=None,
-            output="article.html",
-            accent_color=args.accent_color,
-            layout_style=getattr(args, "layout_style", "auto"),
-            input_format=getattr(args, "input_format", "auto"),
-            wechat_header_mode=getattr(args, "wechat_header_mode", "drop-title"),
-        )
-    )
-    manifest = load_manifest(workspace)
-    manifest["image_status"] = "done"
-    manifest["render_status"] = "done"
-    manifest["stage"] = "render"
-    write_acceptance_artifacts(workspace, manifest)
-    save_manifest(workspace, manifest)
-    if args.to == "publish":
-        cmd_publish(
-            argparse.Namespace(
-                workspace=str(workspace),
-                input=None,
-                digest=None,
-                author=None,
-                cover=None,
-                dry_run=args.dry_run_publish,
-                confirmed_publish=args.confirmed_publish,
-            )
-        )
-        if not args.dry_run_publish:
-            cmd_verify_draft(argparse.Namespace(workspace=str(workspace), media_id=None))
+    _run_image_render_pipeline(workspace, manifest, args)
     return 0
 
 
@@ -3328,6 +3378,8 @@ def cmd_all(args: argparse.Namespace) -> int:
             image_style=args.image_style,
             image_type=args.image_type,
             image_mood=args.image_mood,
+            image_text_policy=getattr(args, "image_text_policy", None),
+            image_label_language=getattr(args, "image_label_language", None),
             custom_visual_brief=args.custom_visual_brief,
             inline_count=args.inline_count,
             dry_run_images=args.dry_run_images,
@@ -3422,6 +3474,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--image-style")
     run.add_argument("--image-type")
     run.add_argument("--image-mood")
+    run.add_argument("--image-text-policy", choices=legacy.IMAGE_TEXT_POLICY_CHOICES)
+    run.add_argument("--image-label-language", choices=legacy.IMAGE_LABEL_LANGUAGE_CHOICES)
     run.add_argument("--custom-visual-brief")
     run.add_argument("--inline-count", type=int, default=0)
     run.add_argument("--dry-run-images", action="store_true")
@@ -3498,6 +3552,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--image-style")
     hosted_run.add_argument("--image-type")
     hosted_run.add_argument("--image-mood")
+    hosted_run.add_argument("--image-text-policy", choices=legacy.IMAGE_TEXT_POLICY_CHOICES)
+    hosted_run.add_argument("--image-label-language", choices=legacy.IMAGE_LABEL_LANGUAGE_CHOICES)
     hosted_run.add_argument("--custom-visual-brief")
     hosted_run.add_argument("--inline-count", type=int, default=0)
     hosted_run.add_argument("--dry-run-images", action="store_true")
@@ -3568,6 +3624,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan_images.add_argument("--image-style")
     plan_images.add_argument("--image-type")
     plan_images.add_argument("--image-mood")
+    plan_images.add_argument("--image-text-policy", choices=legacy.IMAGE_TEXT_POLICY_CHOICES)
+    plan_images.add_argument("--image-label-language", choices=legacy.IMAGE_LABEL_LANGUAGE_CHOICES)
     plan_images.add_argument("--custom-visual-brief")
     plan_images.add_argument("--inline-count", type=int, default=0)
     plan_images.set_defaults(func=legacy_plan_images)
@@ -3632,6 +3690,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--image-style")
     all_cmd.add_argument("--image-type")
     all_cmd.add_argument("--image-mood")
+    all_cmd.add_argument("--image-text-policy", choices=legacy.IMAGE_TEXT_POLICY_CHOICES)
+    all_cmd.add_argument("--image-label-language", choices=legacy.IMAGE_LABEL_LANGUAGE_CHOICES)
     all_cmd.add_argument("--custom-visual-brief")
     all_cmd.add_argument("--inline-count", type=int, default=0)
     all_cmd.add_argument("--threshold", type=int)

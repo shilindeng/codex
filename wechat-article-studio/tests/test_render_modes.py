@@ -288,6 +288,38 @@ class RenderModeTests(unittest.TestCase):
             self.assertNotIn("提示</strong> 参考资料", wechat_html)
             self.assertNotIn("参考资料", wechat_html)
 
+    def test_render_drop_title_summary_hides_hero_strap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "娴嬭瘯鏍囬",
+                        "summary": "杩欐槸涓€娈垫憳瑕?锛岀敤鏉ユ祴璇曢灞忔憳瑕佹槸鍚︿細琚殣钘忋€?",
+                        "article_path": "article.md",
+                        "wechat_header_mode": "drop-title-summary",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("姝ｆ枃绗竴娈点€?", encoding="utf-8")
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    input_format="auto",
+                    wechat_header_mode="drop-title-summary",
+                )
+            )
+            wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
+            self.assertIn("娴嬭瘯鏍囬", wechat_html)
+            self.assertNotIn("杩欐槸涓€娈垫憳瑕?", wechat_html)
+
 
 if __name__ == "__main__":
     unittest.main()

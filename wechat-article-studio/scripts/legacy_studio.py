@@ -453,9 +453,9 @@ IMAGE_CONTENT_MODE_MODULES: dict[str, str] = {
 }
 IMAGE_TYPE_PROMPT_MODULES: dict[str, str] = {
     "封面图": "Create a high-recognition hero image for WeChat: one dominant focal idea, strong atmosphere, strong crop safety, and no headline baked into the image.",
-    "信息图": "Compress the key structure into a scan-friendly visual summary. Favor modular grouping, icon logic, and one clear reading path.",
-    "流程图": "Show a real sequence or operational path with just enough direction cues to be understood. Avoid sterile flowchart defaults if a more visual sequence can carry the idea.",
-    "对比图": "Make the contrast obvious at first glance through composition, grouping, and opposing cues. Show the difference through objects, position, color, and metaphor instead of readable words.",
+    "信息图": "Compress the key structure into a scan-friendly visual summary. Favor modular grouping, icon logic, and one clear reading path before adding any short labels.",
+    "流程图": "Show a real sequence or operational path with just enough direction cues to be understood. Use arrows, nodes, and spacing first; only add very short labels when the flow would otherwise become unclear.",
+    "对比图": "Make the contrast obvious at first glance through composition, grouping, and opposing cues. Let objects, position, color, and metaphor do most of the work, and use only very short labels if they truly help the comparison.",
     "分隔图": "Reset the reading rhythm with a thematic visual pause that still belongs to the article's visual world.",
     "正文插图": "Support the nearby paragraph through metaphor, objects, scenes, or conceptual framing. Do not fall back to a generic diagram unless the text truly demands structure.",
 }
@@ -472,6 +472,24 @@ IMAGE_DIFFERENTIATION_MODULES = [
     "Vary the composition, camera distance, focal object strategy, and negative space pattern from image to image.",
     "If one image is structural, let neighboring images lean metaphorical or scenic unless the text explicitly requires repeated structure diagrams.",
 ]
+IMAGE_TEXT_POLICY_CHOICES = ("auto", "none", "short-zh", "short-zh-numeric", "short-any")
+IMAGE_TEXT_POLICY_DEFAULTS: dict[str, str] = {
+    "封面图": "none",
+    "正文插图": "none",
+    "分隔图": "none",
+    "流程图": "short-zh-numeric",
+    "信息图": "short-zh-numeric",
+    "对比图": "short-zh",
+}
+IMAGE_TEXT_POLICY_LABELS: dict[str, str] = {
+    "auto": "按图片类型自动决定",
+    "none": "无可读文字",
+    "short-zh": "极少中文短标签",
+    "short-zh-numeric": "极少中文短标签或数字",
+    "short-any": "极少短标签",
+}
+IMAGE_LABEL_LANGUAGE_CHOICES = ("zh-CN", "any")
+IMAGE_LABEL_BAD_PREFIXES = ("如果", "看到", "不过", "这里", "真正", "因为", "不是", "而是", "所以", "这个", "那个")
 ARTICLE_VISUAL_HINT_WORDS: dict[str, tuple[str, ...]] = {
     "narrative": ("故事", "人物", "经历", "日常", "生活", "感受", "情绪", "焦虑", "治愈", "成长", "关系", "亲密", "家庭"),
     "business": ("商业", "增长", "市场", "变现", "策略", "决策", "竞争", "订阅", "广告", "公司", "收入", "利润", "品牌"),
@@ -2799,14 +2817,14 @@ def gemini_web_prompt_variants(prompt: str) -> list[tuple[str, str]]:
         "Style:",
         "Mood:",
         "Visual brief:",
-        "Content summary:",
         "Section focus:",
-        "Anchor excerpt:",
         "Section excerpt:",
         "Layout variant:",
         "Composition rule:",
-        "Type decision reason:",
-        "Style decision reason:",
+        "Text budget:",
+        "Text policy:",
+        "Preferred label language:",
+        "Allowed labels:",
     ]
 
     def field(name: str) -> str:
@@ -2819,31 +2837,35 @@ def gemini_web_prompt_variants(prompt: str) -> list[tuple[str, str]]:
     style = field("Style:")
     mood = field("Mood:")
     visual_brief = field("Visual brief:")
-    summary = field("Content summary:")
     section_focus = field("Section focus:")
-    anchor_excerpt = field("Anchor excerpt:")
     section_excerpt = field("Section excerpt:")
+    text_budget = field("Text budget:")
+    text_policy = field("Text policy:")
+    label_language = field("Preferred label language:")
+    allowed_labels = field("Allowed labels:")
 
-    subject = section_excerpt or anchor_excerpt or summary or section_focus or title
+    subject = section_excerpt or section_focus or title
     subject = re.sub(r"\s+", " ", subject).strip()
+    text_instruction = image_text_policy_variant_instruction(text_policy, label_language, allowed_labels)
 
     compact_prompt = (
         f"Create one polished editorial illustration for a Chinese WeChat article. "
-        f"No text in image. Purpose: {purpose or 'inline illustration'}. "
+        f"Purpose: {purpose or 'inline illustration'}. "
         f"Theme: {theme or 'editorial storytelling'}. Style: {style or 'editorial illustration'}. "
         f"Mood: {mood or 'calm and sharp'}. "
-        f"Article title: {title or 'Untitled article'}. "
-        f"Section focus: {section_focus or title or 'core idea'}. "
-        f"Show this idea as one clear visual scene or metaphor: {subject}. "
-        f"Prefer people, objects, gesture, space, atmosphere, and storytelling. "
-        f"Avoid labels, charts, diagrams, tables, screenshots, UI text, watermarks, and logos."
+        f"Core focus: {section_focus or title or 'core idea'}. "
+        f"Show this idea as one clear visual scene or structure: {subject}. "
+        f"{text_instruction} "
+        f"Avoid copied article paragraphs, screenshots, UI text, watermarks, and logos."
     ).strip()
 
     minimal_prompt = (
-        f"Chinese editorial illustration, no text, no chart, no labels. "
-        f"Show {section_focus or title or 'the core idea'} as a single strong scene. "
+        f"Chinese editorial illustration for a WeChat article. "
+        f"Show {section_focus or title or 'the core idea'} as a single strong scene or compact structure. "
         f"Use {style or 'hand-drawn editorial'} style, {mood or 'human and restrained'} mood. "
         f"Key idea: {subject}. "
+        f"Text budget: {text_budget or 'minimal'}. "
+        f"{text_instruction} "
         f"{visual_brief or ''}"
     ).strip()
 
@@ -3114,24 +3136,21 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
     brief = item.get("visual_brief") or controls.get("custom_visual_brief") or "highlight the core insight without clutter"
     article_strategy = item.get("article_visual_strategy") or {}
     profile_key = controls.get("profile_key") or article_strategy.get("profile_key") or ""
-    style_family = article_strategy.get("style_family") or IMAGE_AUTO_STYLE_PROFILES.get(profile_key, {}).get("label", "")
     content_mode = article_strategy.get("content_mode") or "conceptual"
-    content_summary = cleaned_image_signal_text(summary, 140) or cleaned_image_signal_text(title, 80)
-    anchor_excerpt = image_anchor_excerpt(item, 110)
-    section_excerpt = image_section_excerpt(item, 120)
+    content_summary = cleaned_image_signal_text(summary, 96) or cleaned_image_signal_text(title, 72)
+    anchor_excerpt = image_anchor_excerpt(item, 72)
+    section_excerpt = image_section_excerpt(item, 84)
+    scene_hint = section_excerpt or anchor_excerpt or content_summary
+    text_policy = resolve_image_text_policy(controls, item)
     instructions = [
         "Create a polished visual for a Chinese WeChat Official Account article.",
         f"Article title: {title}",
-        f"Audience: {audience or 'general readers'}",
         f"Purpose: {item['type']}",
+        f"Audience: {audience or 'general readers'}",
         f"Theme: {theme}",
         f"Style: {style}",
         f"Mood: {mood}",
         f"Visual brief: {brief}",
-        f"Content summary: {content_summary}",
-        f"Article visual direction: {article_strategy.get('visual_direction') or title}",
-        f"Article style family: {style_family or 'content-driven auto'}",
-        f"Article content mode: {content_mode}",
     ]
     style_family_module = IMAGE_STYLE_FAMILY_MODULES.get(profile_key, "")
     if style_family_module:
@@ -3154,29 +3173,22 @@ def compose_prompt(title: str, summary: str, controls: dict[str, Any], item: dic
             instructions.append("Keep the same visual language across cover, infographic, and inline illustrations for this article.")
     if section:
         instructions.append(f"Section focus: {section}")
-    if anchor_excerpt:
-        instructions.append("Image will be inserted right after the following paragraph. Anchor excerpt: " + anchor_excerpt)
-    if section_excerpt:
-        instructions.append("Section excerpt: " + section_excerpt)
+    if scene_hint:
+        instructions.append("Section excerpt: " + scene_hint)
     if item.get("layout_variant_label"):
         instructions.append(f"Layout variant: {item['layout_variant_label']}")
     if item.get("layout_variant_instruction"):
         instructions.append(f"Composition rule: {item['layout_variant_instruction']}")
-    if item.get("type_reason"):
-        instructions.append("Type decision reason: " + str(item["type_reason"]))
-    if item.get("style_reason"):
-        instructions.append("Style decision reason: " + str(item["style_reason"]))
+    instructions.append(f"Text budget: {text_policy['text_budget']}")
+    instructions.append(f"Text policy: {text_policy['mode']}")
+    instructions.append(f"Preferred label language: {text_policy['label_language']}")
+    instructions.append("Allowed labels: " + (" / ".join(text_policy["label_strategy"]) if text_policy["label_strategy"] else "none"))
     instructions.append(IMAGE_TYPE_PROMPT_MODULES.get(item["type"], IMAGE_TYPE_PROMPT_MODULES["正文插图"]))
-    if item["type"] in {"封面图", "正文插图", "分隔图"}:
-        instructions.append("Use little to no embedded text. Prefer pure imagery, symbols, objects, and composition over words.")
-    else:
-        instructions.append("Keep embedded text extremely sparse. Use at most a few short labels, and prefer icons, arrows, grouping, and hierarchy over paragraphs.")
-    if item["type"] in {"封面图", "正文插图", "分隔图", "对比图"}:
-        instructions.append("Do not include any readable Chinese or English words, letters, numbers, UI text, or labels in the final image.")
+    instructions.extend(text_policy["prompt_lines"])
     instructions.append("Never render copied article paragraphs, generic section labels, or UI cards filled with body text.")
     instructions.extend(IMAGE_DIFFERENTIATION_MODULES)
     instructions.append("Avoid clutter, excessive small text, watermarks, and brand logos unless explicitly requested.")
-    return " ".join(instructions)
+    return "\n".join(line for line in instructions if line).strip()
 
 
 def image_position_label(item: dict[str, Any]) -> str:
@@ -3209,7 +3221,10 @@ def image_section_focus(item: dict[str, Any], limit: int = 64) -> str:
         str(item.get("anchor_block_excerpt") or item.get("section_excerpt") or item.get("semantic_focus") or ""),
         limit,
     )
-    focus = " ".join(part for part in [heading, excerpt] if part).strip()
+    heading_focus = cleaned_image_signal_text(heading, min(limit, 28)) if heading else ""
+    if heading_focus and cjk_len(heading_focus) >= 4:
+        return extract_summary(heading_focus, min(limit, 28))
+    focus = excerpt or heading_focus
     if focus:
         return extract_summary(focus, limit)
     return cleaned_image_signal_text(str(item.get("alt") or ""), limit) or "current section"
@@ -3279,19 +3294,125 @@ def image_label_strategy(item: dict[str, Any]) -> list[str]:
     image_type = item.get("type", "正文插图")
     if image_type in {"封面图", "正文插图", "分隔图"}:
         return []
-    labels = short_sentence_chunks(excerpt, limit=4, max_len=14)
+    labels = short_sentence_chunks(excerpt, limit=4, max_len=8)
     if image_type == "流程图" and not labels:
-        labels = [heading, "步骤1", "步骤2"]
+        labels = [heading, "步骤一", "步骤二"]
     elif image_type == "对比图" and len(labels) < 2:
-        labels = [heading, "方案A", "方案B"]
+        labels = [heading, "方案甲", "方案乙"]
     elif image_type == "信息图" and not labels:
         labels = [heading]
     normalized: list[str] = []
     for label in labels:
         compact = re.sub(r"^[一二三四五六七八九十0-9]+\W*", "", label).strip()
+        compact = compact.strip("，。；：:、- ")
+        if any(compact.startswith(prefix) for prefix in IMAGE_LABEL_BAD_PREFIXES):
+            continue
         if compact and compact not in normalized:
             normalized.append(compact)
+    if image_type == "流程图" and not normalized:
+        normalized = ["步骤一", "步骤二", "步骤三"]
+    elif image_type == "对比图" and len(normalized) < 2:
+        normalized = ["方案甲", "方案乙"]
+    elif image_type == "信息图" and not normalized and heading:
+        normalized = [extract_summary(str(heading), 8)]
     return normalized[:4]
+
+
+def _normalize_image_text_policy(value: str) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    alias_map = {
+        "": "auto",
+        "auto": "auto",
+        "none": "none",
+        "no-text": "none",
+        "no-readable-text": "none",
+        "short-zh": "short-zh",
+        "short-chinese": "short-zh",
+        "zh-short": "short-zh",
+        "short-zh-numeric": "short-zh-numeric",
+        "short-chinese-numeric": "short-zh-numeric",
+        "short-any": "short-any",
+        "minimal": "short-any",
+    }
+    return alias_map.get(normalized, "auto")
+
+
+def _normalize_label_language(value: str) -> str:
+    normalized = str(value or "").strip()
+    if normalized.lower() in {"any", "auto"}:
+        return "any"
+    return "zh-CN"
+
+
+def compact_label_strategy(values: Any, *, limit: int = 4, max_len: int = 6) -> list[str]:
+    candidates = values or []
+    if isinstance(candidates, str):
+        candidates = [part.strip() for part in re.split(r"[/,|]", candidates) if part.strip()]
+    output: list[str] = []
+    for raw in candidates:
+        compact = re.sub(r"\s+", "", str(raw or "")).strip("，。；：:、 ")
+        if not compact:
+            continue
+        if compact.lower() in {"none", "no-label", "无"}:
+            continue
+        if len(compact) > max_len:
+            compact = compact[:max_len]
+        if compact not in output:
+            output.append(compact)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def image_text_policy_variant_instruction(policy: str, label_language: str, allowed_labels: Any = None) -> str:
+    normalized = _normalize_image_text_policy(policy)
+    language = _normalize_label_language(label_language)
+    labels = compact_label_strategy(allowed_labels)
+    if normalized == "none":
+        return "Do not include any readable Chinese or English text, letters, numbers, UI copy, or labels in the final image."
+    if normalized == "short-zh":
+        base = "If labels are necessary, use only 2 to 4 very short Simplified Chinese labels."
+    elif normalized == "short-zh-numeric":
+        base = "If structure requires labels, use only a few very short Simplified Chinese labels or compact Arabic numerals."
+    else:
+        base = "If labels are necessary, keep them extremely short and sparse."
+        if language == "zh-CN":
+            base += " Prefer Simplified Chinese for this Chinese WeChat article."
+    if labels and normalized != "none":
+        base += " Prefer labels such as: " + " / ".join(labels) + "."
+    return base
+
+
+def resolve_image_text_policy(controls: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    image_type = str(item.get("type") or "正文插图").strip() or "正文插图"
+    strategy = dict(controls.get("text_policy_overrides") or {})
+    explicit_mode = _normalize_image_text_policy(str(item.get("text_policy") or controls.get("text_policy") or ""))
+    if explicit_mode != "auto":
+        mode = explicit_mode
+        reason = "图片文字策略来自显式配置。"
+    else:
+        configured_mode = _normalize_image_text_policy(str(strategy.get(image_type) or strategy.get("default") or "auto"))
+        mode = IMAGE_TEXT_POLICY_DEFAULTS.get(image_type, "none") if configured_mode == "auto" else configured_mode
+        reason = "图片文字策略按图片类型和账号策略自动决定。"
+    label_language = _normalize_label_language(str(item.get("label_language") or controls.get("label_language") or strategy.get("label_language") or "zh-CN"))
+    label_strategy = compact_label_strategy(item.get("label_strategy") or image_label_strategy(item))
+    text_budget = str(item.get("text_budget") or image_text_budget(item)).strip() or image_text_budget(item)
+    prompt_lines = [image_text_policy_variant_instruction(mode, label_language, label_strategy)]
+    if mode == "none":
+        prompt_lines.append("Prefer pure imagery, symbols, objects, and composition over words.")
+    elif mode in {"short-zh", "short-zh-numeric"}:
+        prompt_lines.append("No English labels, no copied paragraphs, and no dense text blocks inside the image.")
+    else:
+        prompt_lines.append("Do not turn the image into a slide, spreadsheet, or UI card filled with text.")
+    return {
+        "mode": mode,
+        "label": IMAGE_TEXT_POLICY_LABELS.get(mode, IMAGE_TEXT_POLICY_LABELS["auto"]),
+        "reason": reason,
+        "label_language": label_language,
+        "label_strategy": label_strategy,
+        "text_budget": text_budget,
+        "prompt_lines": prompt_lines,
+    }
 
 
 def image_visual_elements(item: dict[str, Any]) -> list[str]:
@@ -3343,8 +3464,9 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
     prompt = item.get("prompt") or ""
     layout_spec = image_layout_spec(item)
     visual_elements = image_visual_elements(item)
-    label_strategy = image_label_strategy(item)
-    text_budget = image_text_budget(item)
+    text_policy = resolve_image_text_policy(controls, item)
+    label_strategy = text_policy["label_strategy"]
+    text_budget = text_policy["text_budget"]
     aspect_policy = image_aspect_policy(item)
     style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
     base_style_label = (item.get("base_preset_label") or controls.get("preset_label") or controls.get("style") or "").strip()
@@ -3405,6 +3527,8 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         "## 文字策略",
         "",
         f"- 文本预算：{text_budget}",
+        f"- 文字模式：{text_policy['label']}",
+        f"- 标签语言：{text_policy['label_language']}",
         f"- 允许标签：{' / '.join(label_strategy) if label_strategy else '尽量不使用嵌入文字'}",
         "",
         "## 比例策略",
@@ -3435,7 +3559,8 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         prompt_path = prompt_dir / f"{item['id']}.md"
         write_text(prompt_path, prompt_markdown(title, audience, controls, item))
         layout_spec = image_layout_spec(item)
-        label_strategy = image_label_strategy(item)
+        text_policy = resolve_image_text_policy(controls, item)
+        label_strategy = text_policy["label_strategy"]
         outline_items.append(
             {
                 "id": item["id"],
@@ -3453,7 +3578,10 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
                 "visual_content": image_visual_content(item),
                 "visual_elements": image_visual_elements(item),
                 "label_strategy": label_strategy,
-                "text_budget": image_text_budget(item),
+                "text_budget": text_policy["text_budget"],
+                "text_policy": text_policy["mode"],
+                "text_policy_label": text_policy["label"],
+                "label_language": text_policy["label_language"],
                 "aspect_policy": image_aspect_policy(item),
                 "decision_source": item.get("decision_source", ""),
                 "type_reason": item.get("type_reason", ""),
@@ -3520,6 +3648,8 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         lines.append(f"- 视觉内容：{item['visual_content']}")
         lines.append(f"- 视觉元素：{'；'.join(item['visual_elements'])}")
         lines.append(f"- 文字预算：{item['text_budget']}")
+        lines.append(f"- 文字模式：{item.get('text_policy_label') or IMAGE_TEXT_POLICY_LABELS.get(item.get('text_policy') or 'auto', IMAGE_TEXT_POLICY_LABELS['auto'])}")
+        lines.append(f"- 标签语言：{item.get('label_language') or 'zh-CN'}")
         lines.append(f"- 标签策略：{' / '.join(item['label_strategy']) if item['label_strategy'] else '尽量不用图中文字'}")
         lines.append(f"- 比例策略：{item['aspect_policy']}")
         lines.append(f"- Prompt 文件：`{item['prompt_path']}`")
@@ -3663,6 +3793,8 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
     preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
     density = getattr(args, "image_density", None) or current.get("density") or "balanced"
     layout_family = getattr(args, "image_layout_family", None) or current.get("layout_family") or ""
+    text_policy = getattr(args, "image_text_policy", None) or current.get("text_policy") or ""
+    label_language = getattr(args, "image_label_language", None) or current.get("label_language") or ""
 
     preset_cover = getattr(args, "image_preset_cover", None) or current.get("preset_cover") or ""
     preset_infographic = getattr(args, "image_preset_infographic", None) or current.get("preset_infographic") or ""
@@ -3680,9 +3812,12 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
             "custom_visual_brief": preset.get("custom_visual_brief", ""),
             "density": density,
             "layout_family": layout_family,
+            "text_policy": text_policy,
+            "label_language": label_language,
             "preset_cover": preset_cover,
             "preset_infographic": preset_infographic,
             "preset_inline": preset_inline,
+            "text_policy_overrides": dict(current.get("text_policy_overrides") or {}),
         }
     else:
         base = {
@@ -3696,9 +3831,12 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
             "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
             "density": density,
             "layout_family": layout_family,
+            "text_policy": text_policy,
+            "label_language": label_language or current.get("label_language") or "",
             "preset_cover": preset_cover,
             "preset_infographic": preset_infographic,
             "preset_inline": preset_inline,
+            "text_policy_overrides": dict(current.get("text_policy_overrides") or {}),
         }
 
     theme = getattr(args, "image_theme", None)
@@ -4406,6 +4544,9 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     summary = manifest.get("summary") or meta.get("summary") or extract_summary(body)
     account_strategy = load_account_strategy(workspace, manifest, create_if_missing=True) if load_account_strategy else (manifest.get("account_strategy") or {})
     controls = resolve_image_controls(manifest.get("image_controls"), args, title=title, summary=summary, body=body)
+    strategy_text_policy = dict((account_strategy.get("image_text_policy") or {})) if isinstance(account_strategy, dict) else {}
+    controls["text_policy_overrides"] = strategy_text_policy
+    controls["label_language"] = str(controls.get("label_language") or strategy_text_policy.get("label_language") or "zh-CN")
     if infer_visual_preset and not _has_explicit_image_controls(args):
         controls["density"] = str(account_strategy.get("image_density") or controls.get("density") or "minimal")
     manifest["image_controls"] = controls
@@ -4548,6 +4689,13 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         )
         item["native_aspect_ratio"] = item_native_aspect_ratio(item)
         item["safe_crop_policy"] = item_safe_crop_policy(item)
+        text_policy = resolve_image_text_policy(effective_controls, item)
+        item["text_policy"] = text_policy["mode"]
+        item["text_policy_label"] = text_policy["label"]
+        item["text_policy_reason"] = text_policy["reason"]
+        item["label_language"] = text_policy["label_language"]
+        item["label_strategy"] = text_policy["label_strategy"]
+        item["text_budget"] = text_policy["text_budget"]
         item["visual_reason"] = f"{item.get('type_reason', '')} {item.get('style_reason', '')}".strip()
         item["prompt"] = compose_prompt(title, summary, effective_controls, item, audience)
         item["revised_prompt"] = item["prompt"]

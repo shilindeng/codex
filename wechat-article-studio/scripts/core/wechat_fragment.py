@@ -33,6 +33,7 @@ def build_header_module_html(
     hero_module: str,
     archetype: str,
     lead_text: str = "",
+    show_summary: bool = True,
 ) -> str:
     normalized_hero = (hero_module or "hero-judgment").strip().lower()
     normalized_archetype = (archetype or "commentary").strip().lower()
@@ -44,7 +45,7 @@ def build_header_module_html(
         "comparison": "对比判断",
     }
     kicker = kicker_map.get(normalized_archetype, "内容编排")
-    strap = _hero_strap(summary, lead_text, normalized_hero)
+    strap = _hero_strap(summary, lead_text, normalized_hero) if show_summary else ""
     parts = [f'<section class="wx-header wx-hero" data-wx-role="{html.escape(normalized_hero, quote=True)}">']
     parts.append(f'<p class="wx-hero-kicker" data-wx-role="hero-kicker">{html.escape(kicker)}</p>')
     parts.append(f'<p class="wx-hero-title" data-wx-role="hero-title">{html.escape(title)}</p>')
@@ -164,20 +165,21 @@ def render_wechat_fragment(
     normalized_header_mode = (header_mode or "keep").strip().lower()
     outer_style, inner_style, header_shell_style = _container_styles(theme, chosen_style, accent)
     header = ""
-    if normalized_header_mode in {"keep", "drop-title"}:
+    if normalized_header_mode in {"keep", "drop-title", "drop-title-summary"}:
         header_html = build_header_module_html(
             title=title,
             summary=summary,
             hero_module=hero_module,
             archetype=layout_archetype,
             lead_text=lead_text,
+            show_summary=normalized_header_mode != "drop-title-summary",
         )
         header = sanitize_and_style_for_wechat(header_html, theme=theme, accent=accent)
-    elif normalized_header_mode == "keep":
+    else:
         title_style = _title_style(theme, chosen_style)
         summary_style = _summary_style(theme, chosen_style)
         header_parts: list[str] = [f'<h1 style="{title_style}">{html.escape(title)}</h1>']
-        if summary.strip():
+        if normalized_header_mode != "drop-title-summary" and summary.strip():
             header_parts.append(f'<p style="{summary_style}">{html.escape(summary)}</p>')
         header = f'<section style="{header_shell_style}">' + "".join(header_parts) + "</section>"
     return f'<section style="{outer_style}"><section style="{inner_style}">' + header + styled_body + "</section></section>"

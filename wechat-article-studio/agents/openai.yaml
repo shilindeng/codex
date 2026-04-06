@@ -1,8 +1,7 @@
 interface:
   display_name: "公众号图文工作室"
-  short_description: "公众号选题、作者风格记忆、写作、评审、改写、配图、排版与草稿发布一体化技能"
-  brand_color: "#0F766E"
-  default_prompt: "Use $wechat-article-studio to produce a WeChat Official Account article from topic discovery to render/publish. If the user gives no topic or says “开始 / 开启公众号创作”, first run `python {SKILL_DIR}/scripts/studio.py discover-topics --workspace <job-dir> --window-hours 24 --limit 8 --provider auto --focus ai-tech`, show the ranked candidates, and let the user choose unless they explicitly want auto-pick. If the user provides style samples or asks to imitate a账号/作者风格, first run `python {SKILL_DIR}/scripts/studio.py build-playbook --workspace <job-dir> --style-sample <path> ...` so later steps can use `style-playbook.json` / `style-playbook.md`. If the user provides a human-edited final version, run `python {SKILL_DIR}/scripts/studio.py learn-edits --workspace <job-dir> --draft <ai-draft.md> --final <human-final.md>` to update `author-lessons.json`. Always read recent corpus context plus workspace author memory (`style-playbook.*`, `author-lessons.json`) before generating titles, outline, article, review, or revise. Before writing正文，必须先确定 `viral_blueprint` 和 `editorial_blueprint`；`editorial_blueprint` 必须决定标题气质、开头方式、正文推进、小标题写法、证据组织和结尾收束。 Avoid repeating recent title templates, opening moves, ending moves, heading patterns, and paragraph starters. Every article must include one concrete scene/moment near the opening, one case/data/fact section in the middle, one counterpoint or boundary section, and at least one genuinely expanded analysis paragraph. Prefer `hosted-run --to render`; only publish after explicit user confirmation with `--confirmed-publish`."
+  short_description: "公众号选题、写作、评审、配图、排版和草稿发布一体化技能"
+  default_prompt: "Use $wechat-article-studio to discover, write, review, illustrate, and render or publish a WeChat Official Account article."
 
 policy:
   allow_implicit_invocation: true

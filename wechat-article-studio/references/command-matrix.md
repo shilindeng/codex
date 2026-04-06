@@ -1,5 +1,19 @@
 # 命令矩阵
 
+## 导航
+
+- `research`
+- `titles`
+- `outline`
+- `enhance`
+- `write`
+- `review`
+- `score`
+- `revise`
+- `run` / `hosted-run`
+- `plan-images` / `generate-images` / `assemble` / `render`
+- `publish` / `verify-draft`
+
 ## `research`
 
 - 输入：`--workspace --topic [--angle] [--audience] [--source-url ...]`
