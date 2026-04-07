@@ -8,6 +8,7 @@ from typing import Any
 import legacy_studio as legacy
 
 from core.artifacts import extract_summary, join_frontmatter, read_text, strip_leading_h1, write_json, write_text
+from core.humanizerai import HumanizerAIClient, HumanizerAIError, normalize_humanizerai_intensity
 from providers.text.gemini_web import GeminiWebTextProvider
 from providers.text.openai_compatible import OpenAICompatibleTextProvider
 
@@ -23,6 +24,10 @@ def _active_text_provider_for_rewrite():
     if provider_name not in {"openai-compatible", "openai_compatible", ""}:
         raise SystemExit(f"暂不支持的文本 provider：{provider_name}")
     return OpenAICompatibleTextProvider()
+
+
+def _humanizer_client_for_rewrite() -> HumanizerAIClient:
+    return HumanizerAIClient.from_env()
 
 
 def _low_dimensions(report: dict[str, Any]) -> list[str]:
@@ -126,6 +131,28 @@ def generate_revision_candidate(
     provider_name = ""
     provider_model = ""
     legacy_rewrite: dict[str, Any] | None = None
+    humanizerai_before: dict[str, Any] | None = None
+    humanizerai_after: dict[str, Any] | None = None
+    humanizerai_error = ""
+    humanizerai_applied = ""
+    humanizerai_seed_body = before_body
+    humanizer = _humanizer_client_for_rewrite()
+
+    if mode == "de-ai" and humanizer.configured():
+        try:
+            humanizerai_before = humanizer.detect(before_body)
+            requested_intensity = os.getenv("HUMANIZERAI_INTENSITY")
+            chosen_intensity = normalize_humanizerai_intensity(
+                requested_intensity,
+                score_overall=int(humanizerai_before.get("score_overall") or 0),
+            )
+            humanized = humanizer.humanize(before_body, chosen_intensity)
+            humanizerai_seed_body = strip_leading_h1(str(humanized.get("text") or ""), title).strip() + "\n"
+            humanizerai_applied = chosen_intensity
+            applied_actions.append(f"HumanizerAI：外部去味初改（{chosen_intensity}）")
+        except HumanizerAIError as exc:
+            humanizerai_error = str(exc)
+            applied_actions.append("HumanizerAI：调用失败，已回退当前去味链路")
 
     if provider.configured():
         if mode == "de-ai":
@@ -155,14 +182,15 @@ def generate_revision_candidate(
             )
             applied_actions.append("模型改写：按评分短板提分优化")
 
-        context = {
-            "mode": mode,
-            "title": title,
-            "audience": manifest.get("audience") or "公众号读者",
-            "direction": manifest.get("direction") or "",
-            "summary": meta.get("summary") or manifest.get("summary") or extract_summary(before_body),
-            "article_body": before_body,
-            "rewrite_goal": rewrite_goal,
+            context = {
+                "mode": mode,
+                "title": title,
+                "audience": manifest.get("audience") or "公众号读者",
+                "direction": manifest.get("direction") or "",
+                "summary": meta.get("summary") or manifest.get("summary") or extract_summary(before_body),
+                "article_body": humanizerai_seed_body if mode == "de-ai" else before_body,
+                "source_article_body": before_body,
+                "rewrite_goal": rewrite_goal,
             "mandatory_revisions": report.get("mandatory_revisions") or [],
             "weaknesses": report.get("weaknesses") or [],
             "suggestions": report.get("suggestions") or {},
@@ -180,19 +208,23 @@ def generate_revision_candidate(
             "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
-            "author_memory": manifest.get("author_memory") or {},
-            "writing_persona": manifest.get("writing_persona") or {},
-            "content_enhancement": legacy.read_json(workspace / "content-enhancement.json", default={}) or {},
-            "humanness_signals": report.get("humanness_signals") or {},
-        }
-        result = provider.revise_article(context)
+                "author_memory": manifest.get("author_memory") or {},
+                "writing_persona": manifest.get("writing_persona") or {},
+                "content_enhancement": legacy.read_json(workspace / "content-enhancement.json", default={}) or {},
+                "humanness_signals": report.get("humanness_signals") or {},
+                "humanizerai_detection": humanizerai_before or {},
+                "humanizerai_humanized_body": humanizerai_seed_body if humanizerai_applied else "",
+            }
+            result = provider.revise_article(context)
         provider_name = result.provider
         provider_model = result.model
         rewritten_body = strip_leading_h1(str(result.payload or ""), title).strip() + "\n"
     else:
         if mode == "de-ai":
-            rewritten_body = legacy.cleanup_rewrite_markdown(before_body) or before_body
-            applied_actions.append("规则清理：去模板连接词与口吻")
+            seed_for_cleanup = humanizerai_seed_body if humanizerai_applied else before_body
+            rewritten_body = legacy.cleanup_rewrite_markdown(seed_for_cleanup) or seed_for_cleanup
+            if not humanizerai_applied:
+                applied_actions.append("规则清理：去模板连接词与口吻")
             rewrite_meta = dict(meta)
             rewrite_meta["title"] = title
             rewrite_meta["summary"] = meta.get("summary") or manifest.get("summary") or extract_summary(rewritten_body)
@@ -210,11 +242,23 @@ def generate_revision_candidate(
     after_hits = _ai_style_hits(rewritten_body)
     after_sent = _sentence_stats(rewritten_body)
     after_paras = _paragraph_count(rewritten_body)
+    if mode == "de-ai" and humanizer.configured():
+        try:
+            humanizerai_after = humanizer.detect(rewritten_body)
+        except HumanizerAIError as exc:
+            humanizerai_error = humanizerai_error or str(exc)
     diff_metrics = {
         "ai_style_hits": {"before": before_hits, "after": after_hits, "delta": after_hits - before_hits},
         "sentence_len": {"before": before_sent, "after": after_sent},
         "paragraphs": {"before": before_paras, "after": after_paras},
     }
+    if humanizerai_before or humanizerai_after:
+        diff_metrics["humanizerai_score"] = {
+            "before": int((humanizerai_before or {}).get("score_overall") or 0),
+            "after": int((humanizerai_after or {}).get("score_overall") or 0),
+            "delta": int((humanizerai_after or {}).get("score_overall") or 0)
+            - int((humanizerai_before or {}).get("score_overall") or 0),
+        }
 
     _write_rewrite_report(
         report_path,
@@ -246,6 +290,14 @@ def generate_revision_candidate(
         # Preserve legacy evidence metadata on the rule-based improve-score path.
         rewrite_payload["evidence_report_path"] = legacy_rewrite.get("evidence_report_path")
         rewrite_payload["evidence_used_count"] = legacy_rewrite.get("evidence_used_count", 0)
+    if humanizerai_before or humanizerai_after or humanizerai_error:
+        rewrite_payload["humanizerai"] = {
+            "enabled": humanizer.configured(),
+            "applied_intensity": humanizerai_applied,
+            "before": humanizerai_before or {},
+            "after": humanizerai_after or {},
+            "error": humanizerai_error,
+        }
 
     write_json(output_path.with_suffix(".rewrite.json"), rewrite_payload)
     return rewrite_payload

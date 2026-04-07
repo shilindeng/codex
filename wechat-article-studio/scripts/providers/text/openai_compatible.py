@@ -444,6 +444,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "9. 如果原稿缺少现场、案例或反向看法，请优先补这些内容，但不要写成“行业判断”“事实/依据”“边界/误判”这类标签。"
                     "10. 如果原稿段落过碎，请合并出一两段真正展开的分析段；如果多个段落起手一样，请重写起手。"
                     "11. 如果输入给了 humanness_signals，请针对其中的高风险项逐个修，不要泛泛地改腔调。"
+                    "12. 如果输入给了 humanizerai_detection 或 humanizerai_humanized_body，把它当外部去味参考稿，只借它的去味方向，不要照抄，也不要丢掉原文事实、Markdown 结构和账号风格。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

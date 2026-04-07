@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ if str(SCRIPTS) not in sys.path:
 
 import legacy_studio as legacy  # noqa: E402
 from core.rewrite import generate_revision_candidate  # noqa: E402
+from core.workflow import cmd_doctor  # noqa: E402
 
 
 class RewriteModeTests(unittest.TestCase):
@@ -111,6 +113,66 @@ class RewriteModeTests(unittest.TestCase):
             rewritten = (workspace / "article-rewrite.md").read_text(encoding="utf-8")
             self.assertNotIn("最后给你一个可执行清单", rewritten)
             self.assertNotIn("## 最后给你一个可执行清单", rewritten)
+
+    def test_de_ai_mode_uses_humanizerai_bridge_when_configured(self):
+        class FakeHumanizer:
+            def configured(self):
+                return True
+
+            def detect(self, text):
+                overall = 86 if "首先" in text else 42
+                return {"score_overall": overall, "score": {"overall": overall}}
+
+            def humanize(self, text, intensity):
+                return {
+                    "text": "昨晚我又把这篇稿子顺了一遍。\n\n这一版更像一个人在说话。\n",
+                    "intensity": intensity,
+                    "credits_remaining": 999,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            title = "测试标题"
+            meta = {"title": title, "summary": "摘要"}
+            body = "首先，我们来看看。其次，这很重要。最后，综上所述。"
+            manifest = {"source_urls": [], "audience": "大众读者", "direction": ""}
+            report = legacy.build_score_report(title, body, manifest, threshold=85)
+
+            with patch("core.rewrite._humanizer_client_for_rewrite", return_value=FakeHumanizer()):
+                rewrite = generate_revision_candidate(
+                    workspace,
+                    title,
+                    meta,
+                    body,
+                    report,
+                    manifest,
+                    output_name="article-rewrite.md",
+                    mode="de-ai",
+                )
+
+            payload = json.loads((workspace / "article-rewrite.rewrite.json").read_text(encoding="utf-8"))
+            self.assertEqual(rewrite.get("mode"), "de-ai")
+            self.assertEqual(payload.get("humanizerai", {}).get("applied_intensity"), "aggressive")
+            self.assertEqual(payload.get("humanizerai", {}).get("before", {}).get("score_overall"), 86)
+            self.assertEqual(payload.get("humanizerai", {}).get("after", {}).get("score_overall"), 42)
+            self.assertIn("HumanizerAI", "\n".join(payload.get("applied_actions") or []))
+            rewritten = (workspace / "article-rewrite.md").read_text(encoding="utf-8")
+            self.assertIn("更像一个人在说话", rewritten)
+
+    def test_doctor_reports_humanizerai_bridge_status(self):
+        class FakeHumanizer:
+            def doctor_status(self):
+                return {"configured": True, "base_url": "https://humanizerai.com/api/v1"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            with patch("core.workflow.HumanizerAIClient.from_env", return_value=FakeHumanizer()):
+                with patch("sys.stdout.write") as fake_write:
+                    cmd_doctor(type("Args", (), {"workspace": str(workspace)})())
+            combined = "".join(call.args[0] for call in fake_write.call_args_list)
+            self.assertIn('"de_ai_bridge"', combined)
+            self.assertIn('"humanizerai"', combined)
+            self.assertIn('"configured": true', combined.lower())
 
 
 if __name__ == "__main__":

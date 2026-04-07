@@ -85,6 +85,9 @@
 - 依赖：`article.md`，推荐先有 `score-report.json`
 - 输出：多轮回炉时会生成 `article-rewrite-rN.md`（并保持 `article-rewrite.md` 指向最新一版），同时生成对应的 `.report.md/.rewrite.json`
 - 失败条件：找不到文章
+- 补充说明：
+  - 当 `--mode de-ai` 且已配置 `HUMANIZERAI_API_KEY` 时，会先走一轮外部 AI 痕迹检测与去味初改，再回到当前 skill 的改稿链路。
+  - 外部去味只在 `de-ai` 模式下尝试，不会影响日常 `improve-score` 回炉。
 
 ## `run`
 

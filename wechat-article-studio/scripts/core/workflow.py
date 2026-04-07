@@ -46,6 +46,7 @@ from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
 from core.layout import INPUT_FORMAT_CHOICES, LAYOUT_STYLE_CHOICES
+from core.humanizerai import HumanizerAIClient
 from core.layout_skin import LAYOUT_SKIN_CHOICES, normalize_layout_skin_request
 from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
@@ -2267,6 +2268,7 @@ def cmd_verify_draft(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace).resolve() if args.workspace else Path.cwd().resolve()
     provider = active_text_provider()
+    humanizer = HumanizerAIClient.from_env()
     wechat_app_id, wechat_app_secret, _ = legacy.resolve_wechat_credentials(required=False)
     report = {
         "python": {"version": legacy.sys.version.split()[0], "ok": legacy.sys.version_info >= (3, 10)},
@@ -2291,6 +2293,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             "gemini-api": legacy.doctor_provider_status("gemini-api"),
             "openai-image": legacy.doctor_provider_status("openai-image"),
             "gemini-web": legacy.doctor_provider_status("gemini-web"),
+        },
+        "de_ai_bridge": {
+            "humanizerai": humanizer.doctor_status(),
         },
         "wechat": {
             "has_app_id": bool(wechat_app_id),
@@ -3844,7 +3849,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_draft.add_argument("--media-id")
     verify_draft.set_defaults(func=cmd_verify_draft)
 
-    doctor = subparsers.add_parser("doctor", help="检查 Python、文本 provider、图片 provider、微信凭证")
+    doctor = subparsers.add_parser("doctor", help="检查 Python、文本 provider、图片 provider、去 AI 外部桥接、微信凭证")
     doctor.add_argument("--workspace")
     doctor.set_defaults(func=cmd_doctor)
 
