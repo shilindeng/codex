@@ -84,10 +84,15 @@ class GeminiWebTextProvider(TextProvider):
     def generate_titles(self, context: dict[str, Any]) -> ProviderResult:
         prompt = (
             "你是微信公众号标题编辑。只输出 JSON 数组，不要解释。"
-            "每项字段必须是 title, strategy, audience_fit, risk_note。"
-            "必须同时给出不同气质的标题，不要 3 个标题只是同一模板换词。"
+            "每项字段必须是 title, strategy, audience_fit, risk_note, title_family, title_formula_components, title_emotion_mode。"
+            "标题目标是更强打开率，但不能回到老式标题党。默认情绪模式是‘共鸣+反差’，不是恐吓。"
+            "标题公式优先参考：核心欲望/痛点 + 真相/方法/规律 + 反常识或稀缺性。"
+            "默认产出 10 个候选，家族分布优先按：观点直述型 3、痛点真相型 2、反常识拆解型 2、代价后果型 2、方法规律型 1；如果不是教程稿，方法规律型可由观点直述型补位。"
+            "标题尽量 16 到 24 个中文字符，硬上限 28。最多只允许 1 个主分隔符，默认不用问号。"
+            "必须同时给出不同家族的标题，不要 10 个标题只是同一模板换词。"
             "如果输入里带有 editorial_blueprint，标题风格必须服从它；如果 recent_corpus_summary 显示某类标题模式已经高频出现，禁止继续复用。"
             "不要默认产出“为什么大多数人…”“真正危险的不是…而是…”“先想清 3 件事”这类熟模板。"
+            "每个候选都要能回答：为什么会想点开、痛点在哪、信息差在哪。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=True)

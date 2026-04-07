@@ -15,8 +15,8 @@
 - `topic-discovery.md`：面向人读的热点选题建议
 - `research.json`：调研输入、来源、证据摘录、信息缺口
 - `ideation.json`：标题候选、选中标题、大纲、创作意图
-- `title-report.json`：标题多维评分与准入结果
-- `title-decision-report.json`：标题五项联评与入选/淘汰原因
+- `title-report.json`：标题打开率评分、准入结果与候选摘要
+- `title-decision-report.json`：标题家族、公式拆解、打开率评分、回炉轮次与入选/淘汰原因
 - `title-report.md`：面向人读的标题评分摘要
 - `content-enhancement.json`：写前增强结果（角度、细节、证据、边界、章节硬要求）
 - `content-enhancement.md`：面向人读的写前增强摘要

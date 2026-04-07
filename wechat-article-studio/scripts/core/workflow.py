@@ -1443,6 +1443,30 @@ def write_title_decision_artifacts(workspace: Path, payload: dict[str, Any]) -> 
     write_text(workspace / "title-decision-report.md", markdown_title_decision_report(payload))
 
 
+def _title_rewrite_hints(candidates: list[dict[str, Any]]) -> list[str]:
+    counter: Counter[str] = Counter()
+    for item in candidates[:3]:
+        for detail in (item.get("title_score_breakdown") or []):
+            try:
+                score = float(detail.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            if score < 6:
+                counter[str(detail.get("dimension") or "").strip()] += 1
+    mapping = {
+        "普遍痛点": "加强普遍痛点",
+        "信息差": "加强信息差",
+        "反常识": "加强反常识",
+        "低门槛理解": "压缩标题长度",
+        "高预期": "加强高预期",
+        "情绪共鸣": "加强情绪共鸣",
+        "传播性": "加强传播性",
+        "可信度": "加强可信度",
+        "新鲜度": "避开旧模板",
+    }
+    return [mapping[key] for key, _count in counter.most_common(4) if key in mapping]
+
+
 def select_scored_title(
     workspace: Path,
     manifest: dict[str, Any],
@@ -1465,10 +1489,13 @@ def select_scored_title(
         editorial_blueprint=manifest.get("editorial_blueprint") or {},
         selected_title=selected_title,
         account_strategy=manifest.get("account_strategy") or {},
+        title_rewrite_round=0,
     )
     ranked_titles = list(decision_report.get("candidates") or [])
     selected = ranked_titles[0] if ranked_titles else None
-    if not selected or not selected.get("title_gate_passed", False):
+    top3 = ranked_titles[:3]
+    if not selected or (top3 and all(not item.get("title_gate_passed", False) for item in top3)):
+        weakness_hints = _title_rewrite_hints(ranked_titles)
         boosted_candidates = candidates + generate_diverse_title_variants(
             topic,
             angle,
@@ -1478,6 +1505,9 @@ def select_scored_title(
             recent_corpus_summary=recent_corpus_summary if isinstance(recent_corpus_summary, dict) else {},
             writing_persona=manifest.get("writing_persona") or {},
             account_strategy=manifest.get("account_strategy") or {},
+            count=10,
+            boost_round=1,
+            weakness_hints=weakness_hints,
         )
         decision_report = build_title_decision_report(
             topic=topic,
@@ -1489,6 +1519,7 @@ def select_scored_title(
             editorial_blueprint=manifest.get("editorial_blueprint") or {},
             selected_title=selected_title,
             account_strategy=manifest.get("account_strategy") or {},
+            title_rewrite_round=1,
         )
         ranked_titles = list(decision_report.get("candidates") or [])
         selected = ranked_titles[0] if ranked_titles else None
@@ -1803,7 +1834,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
     research = load_research(workspace)
     topic = manifest.get("topic") or research.get("topic") or "未命名主题"
     audience = manifest.get("audience") or research.get("audience") or "大众读者"
-    count = args.count or 3
+    count = args.count or 10
     writing_persona = current_writing_persona(workspace, manifest)
     result = provider.generate_titles(
         {
@@ -2794,7 +2825,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                     "topic": topic,
                     "audience": audience,
                     "angle": angle,
-                    "count": 4,
+                    "count": 10,
                     "research": research,
                     "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
                     "recent_article_titles": manifest.get("recent_article_titles") or [],
@@ -2806,9 +2837,9 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                 }
             )
             if isinstance(result.payload, list):
-                titles = result.payload[:4]
+                titles = result.payload[:10]
             elif isinstance(result.payload, dict):
-                titles = (result.payload.get("candidates") or result.payload.get("titles") or [])[:4]
+                titles = (result.payload.get("candidates") or result.payload.get("titles") or [])[:10]
             else:
                 titles = []
             ideation.update(
@@ -2835,6 +2866,7 @@ def _ensure_hosted_titles(workspace: Path, manifest: dict[str, Any], topic: str,
                         recent_corpus_summary=manifest.get("recent_corpus_summary") or {},
                         writing_persona=writing_persona,
                         account_strategy=manifest.get("account_strategy") or {},
+                        count=10,
                     ),
                     "updated_at": now_iso(),
                     "provider": "local-heuristic",
@@ -2887,7 +2919,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "topic": topic,
                 "audience": audience,
                 "angle": angle,
-                "count": 3,
+                "count": 10,
                 "research": research,
                 "recent_phrase_blacklist": manifest.get("recent_phrase_blacklist") or [],
                 "recent_article_titles": manifest.get("recent_article_titles") or [],
@@ -2899,9 +2931,9 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             }
         )
         if isinstance(title_result.payload, list):
-            titles = title_result.payload[:3]
+            titles = title_result.payload[:10]
         elif isinstance(title_result.payload, dict):
-            titles = (title_result.payload.get("candidates") or title_result.payload.get("titles") or [])[:3]
+            titles = (title_result.payload.get("candidates") or title_result.payload.get("titles") or [])[:10]
         else:
             titles = []
         ideation.update(
@@ -2915,6 +2947,7 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
                 "model": title_result.model,
             }
         )
+        ideation, _ = select_scored_title(workspace, manifest, ideation, topic, audience, angle, title)
         write_json(workspace / "ideation.json", ideation)
         manifest["selected_title"] = ideation.get("selected_title") or title
         manifest["writing_persona"] = writing_persona
@@ -3541,7 +3574,7 @@ def cmd_all(args: argparse.Namespace) -> int:
             audience=None,
             source_url=[],
             title=None,
-            title_count=3,
+            title_count=10,
             content_mode=args.content_mode,
             wechat_header_mode=args.wechat_header_mode,
             image_provider=args.provider,
@@ -3586,9 +3619,9 @@ def build_parser() -> argparse.ArgumentParser:
     research.add_argument("--source-url", action="append", default=[])
     research.set_defaults(func=cmd_research)
 
-    titles = subparsers.add_parser("titles", help="生成 3 个左右标题候选并写入 ideation.json")
+    titles = subparsers.add_parser("titles", help="生成 10 个左右标题候选并写入 ideation.json")
     titles.add_argument("--workspace", required=True)
-    titles.add_argument("--count", type=int, default=3)
+    titles.add_argument("--count", type=int, default=10)
     titles.add_argument("--selected-title")
     titles.set_defaults(func=cmd_titles)
 
@@ -3635,7 +3668,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--audience")
     run.add_argument("--source-url", action="append", default=[])
     run.add_argument("--title")
-    run.add_argument("--title-count", type=int, default=3)
+    run.add_argument("--title-count", type=int, default=10)
     run.add_argument("--content-mode", choices=CONTENT_MODE_CHOICES, default="tech-balanced")
     run.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
     run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")

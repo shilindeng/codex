@@ -40,6 +40,33 @@ class EditorialDiversityTests(unittest.TestCase):
         self.assertFalse(any("先想清" in item["title"] and "为什么大多数人" in item["title"] for item in titles))
         self.assertFalse(any(item["title"] == "企业 AI Agent 落地这次真正的信号，不在表面热闹，而在更深一层" for item in titles))
 
+    def test_generate_diverse_title_variants_returns_ten_candidates_and_families(self):
+        titles = generate_diverse_title_variants(
+            topic="银行业 AI 竞争突然提速",
+            angle="从投入数字、平台化信号和治理边界角度拆",
+            audience="管理者",
+            editorial_blueprint={"style_key": "signal-briefing", "style_label": "信号简报"},
+            count=10,
+        )
+        self.assertEqual(len(titles), 10)
+        families = [item.get("title_family") for item in titles]
+        self.assertGreaterEqual(families.count("viewpoint-direct"), 4)
+        self.assertEqual(families.count("pain-truth"), 2)
+        self.assertEqual(families.count("counterintuitive"), 2)
+        self.assertEqual(families.count("cost-consequence"), 2)
+        self.assertTrue(all(item.get("title_formula_components") for item in titles))
+
+    def test_generate_diverse_title_variants_for_tutorial_keeps_method_rule_family(self):
+        titles = generate_diverse_title_variants(
+            topic="RAG 工作流搭建",
+            angle="从上手步骤和关键顺序角度拆",
+            audience="开发者",
+            editorial_blueprint={"style_key": "practical-playbook", "style_label": "实操打法"},
+            count=10,
+        )
+        families = [item.get("title_family") for item in titles]
+        self.assertEqual(families.count("method-rule"), 1)
+
     def test_generate_diverse_title_variants_blocks_overused_pattern_even_same_style(self):
         titles = generate_diverse_title_variants(
             topic="企业 AI Agent 常见误区",

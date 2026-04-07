@@ -23,11 +23,14 @@
 
 ## `titles`
 
-- 输入：`--workspace [--count 3]`
+- 输入：`--workspace [--count 10]`
 - 依赖：`research.json` 推荐存在；缺失时用 manifest 信息兜底
 - 输出：更新 `ideation.json`、`title-report.json`、`title-report.md`
 - 失败条件：工作目录不可写
-- 说明：候选标题会做多维爆款评分，并优先选择通过阈值的标题作为 `selected_title`
+- 说明：
+  - 默认生成 10 个候选标题，再自动选择最优标题
+  - 候选会带 `title_family / title_formula_components / title_open_rate_score / title_gate_reason`
+  - 如果前 3 名都没过线，会自动触发一轮标题专用回炉，再重新决策 `selected_title`
 
 ## `outline`
 

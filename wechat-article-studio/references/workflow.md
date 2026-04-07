@@ -6,7 +6,7 @@
 0. `hosted-run`：宿主 agent 生成 research / 标题 / 大纲 / 正文后，继续自动跑后链路
 1. `research`：收集主题、来源、信息缺口
    - 默认同时读取 `account-strategy.json`，确认当前账号定位、目标读者、首要目标和最小证据要求
-2. `titles`：生成 3 个左右标题候选，并做标题准入评分
+2. `titles`：默认生成 10 个左右标题候选，并做打开率导向的标题决策；必要时自动触发一轮标题回炉
 3. `outline`：生成文章大纲与证据需求，并产出爆款策略蓝图 `viral_blueprint`
 4. `enhance`：在写作前补角度、细节、证据、边界与写作人格，产出 `content-enhancement.*`
 5. `write`：写出 `article.md`（必须消费 `viral_blueprint`、`writing_persona`、`content_enhancement`）

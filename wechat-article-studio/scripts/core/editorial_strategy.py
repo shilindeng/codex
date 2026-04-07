@@ -68,6 +68,16 @@ def title_template_key(title: str) -> str:
     text = _normalize_text(title)
     if not text:
         return "generic"
+    if re.search(r"(真正关键的是|更该看清|真正会拉开差距的|真正会带来代价的|真正要重估的)", text):
+        return "viewpoint-direct"
+    if re.search(r"(最容易卡住的|最容易让人卡住的|背后缺的其实是|总在后面失控的)", text):
+        return "pain-truth"
+    if re.search(r"(最反常识的一点|最容易被忽略的其实是|大家最容易看偏的)", text):
+        return "counterintuitive"
+    if re.search(r"(最先受影响的是|先被改写的是|会先吃亏的是|真正会带来代价的是)", text):
+        return "cost-consequence"
+    if re.search(r"(先抓住这条规律|真正有效的方法|少走弯路|先把这一步做对)", text):
+        return "method-rule"
     if re.search(r"为什么.*先想清.*[三3].*件事", text):
         return "why-think-clear"
     if "真正危险的不是" in text and "而是" in text:
@@ -149,6 +159,11 @@ def heading_pattern_key(text: str) -> str:
 
 
 TITLE_PATTERN_LABELS = {
+    "viewpoint-direct": "观点直述型",
+    "pain-truth": "痛点真相型",
+    "counterintuitive": "反常识拆解型",
+    "cost-consequence": "代价后果型",
+    "method-rule": "方法规律型",
     "why-think-clear": "“为什么 + 先想清几件事”",
     "danger-not-but": "“真正危险的不是…而是…”",
     "year-not-but": "“年份 + 不是…而是…”",
@@ -618,12 +633,243 @@ def normalize_editorial_blueprint(payload: Any, context: dict[str, Any]) -> dict
 
 
 def _short_focus(topic: str, angle: str = "") -> str:
-    source = _normalize_text(f"{topic} {angle}")
+    source = _normalize_text(topic or angle or "这个问题")
     source = re.sub(r"(这次真正的信号|真正值得聊的|真正的分水岭在这里|别急着下结论|先别急着站队|很多人看热闹|最容易被忽略的那一步|更深一层)", "", source)
+    source = re.sub(r"(真正该看的.*|真正值得看的.*|真正要看的.*|更该看清.*|别只盯着.*)$", "", source).strip("，,:：。！？? ")
     source = re.split(r"[，,:：。！？?]", source, maxsplit=1)[0].strip()
-    if not source:
+    compact = re.sub(r"\s+", "", source)
+    amount_match = re.search(
+        r"^(?P<subject>[\u4e00-\u9fffA-Za-z]{2,8})(?:20\d{2}年)?(?:金融科技|金融|科技)?投入(?:超|破|达|过|近)?(?P<num>\d+(?:\.\d+)?亿)",
+        compact,
+    )
+    if amount_match:
+        return f"{amount_match.group('subject')}一年砸下{amount_match.group('num')}"
+    compact = re.sub(r"20\d{2}年", "", compact)
+    compact = re.sub(r"(真正|其实|正在|一下子|突然)", "", compact)
+    compact = compact.strip("，,:：。！？? ")
+    if not compact:
         return "这个问题"
-    return source[:22]
+    if len(compact) <= 16:
+        return compact
+    return compact[:16]
+
+
+TITLE_FAMILY_LABELS = {
+    "viewpoint-direct": "观点直述型",
+    "pain-truth": "痛点真相型",
+    "counterintuitive": "反常识拆解型",
+    "cost-consequence": "代价后果型",
+    "method-rule": "方法规律型",
+}
+TITLE_EMOTION_MODE = "共鸣+反差"
+TITLE_COUNT_DEFAULT = 10
+TITLE_FAMILY_QUOTAS = {
+    "default": [("viewpoint-direct", 4), ("pain-truth", 2), ("counterintuitive", 2), ("cost-consequence", 2)],
+    "tutorial": [("viewpoint-direct", 3), ("pain-truth", 2), ("counterintuitive", 2), ("cost-consequence", 2), ("method-rule", 1)],
+}
+TITLE_ABSOLUTE_WORDS = ("唯一", "彻底", "一定", "所有", "必然", "永远", "稳赢", "100%")
+
+
+def _infer_title_archetype(topic: str, angle: str = "", editorial_blueprint: dict[str, Any] | None = None) -> str:
+    blueprint = editorial_blueprint or {}
+    style_key = _normalize_key(str(blueprint.get("style_key") or ""))
+    corpus = _normalize_text(f"{topic} {angle}")
+    if any(word in corpus for word in ["教程", "指南", "步骤", "怎么做", "如何", "方法", "实操", "SOP", "模板"]):
+        return "tutorial"
+    if any(word in corpus for word in ["案例", "复盘", "拆解", "公司", "团队", "项目"]):
+        return "case-study"
+    if any(word in corpus for word in ["现场", "一线", "对话", "故事", "经历", "写给", "那天", "后来"]):
+        return "narrative"
+    if style_key in {"practical-playbook"}:
+        return "tutorial"
+    if style_key in {"case-memo"}:
+        return "case-study"
+    if style_key in {"field-observation", "open-letter"}:
+        return "narrative"
+    return "commentary"
+
+
+def _pick_first_hit(source: str, mapping: list[tuple[tuple[str, ...], str]], fallback: str) -> str:
+    lowered = _normalize_text(source)
+    for keywords, phrase in mapping:
+        if any(keyword in lowered for keyword in keywords):
+            return phrase
+    return fallback
+
+
+def _title_surface_phrase(topic: str, angle: str, archetype: str) -> str:
+    return _pick_first_hit(
+        f"{topic} {angle}",
+        [
+            (("投入", "融资", "预算", "成本"), "花了多少钱"),
+            (("工具", "模型", "参数", "能力"), "工具和参数"),
+            (("场景", "应用", "功能"), "场景数量"),
+            (("流量", "热度", "发布", "消息"), "表面热闹"),
+            (("方法", "步骤", "流程"), "动作做得更多"),
+        ],
+        "表面结果" if archetype != "tutorial" else "动作做得更多",
+    )
+
+
+def _title_truth_phrase(topic: str, angle: str, archetype: str) -> str:
+    return _pick_first_hit(
+        f"{topic} {angle}",
+        [
+            (("交付", "交付链路", "上线", "落地链路"), "交付顺序"),
+            (("落地", "执行"), "落地顺序"),
+            (("边界", "治理", "责任", "问责"), "责任边界"),
+            (("顺序", "流程", "步骤", "优先级"), "判断顺序"),
+            (("方法", "规律", "打法", "模板"), "关键规律"),
+            (("代价", "成本", "后果", "影响"), "代价后果"),
+            (("平台", "底座", "底层"), "底层能力"),
+            (("趋势", "拐点", "信号", "风向"), "真正信号"),
+        ],
+        {
+            "tutorial": "关键顺序",
+            "case-study": "关键一步",
+            "narrative": "真实处境",
+        }.get(archetype, "真正信号"),
+    )
+
+
+def _title_pain_phrase(topic: str, angle: str, audience: str, archetype: str) -> str:
+    return _pick_first_hit(
+        f"{topic} {angle} {audience}",
+        [
+            (("焦虑", "疲惫", "混乱", "卡住"), "明明很努力却越来越累"),
+            (("打工人", "职场", "团队", "管理者"), "团队越忙越容易卡住"),
+            (("落地", "交付", "执行"), "总觉得会做却总做不顺"),
+            (("判断", "误判", "决策"), "多数人总在关键处看偏"),
+        ],
+        {
+            "tutorial": "总觉得会做却总做不顺",
+            "case-study": "项目一提速就容易失控",
+            "narrative": "明明在努力却越来越累",
+        }.get(archetype, "多数人总在关键处看偏"),
+    )
+
+
+def _title_consequence_phrase(topic: str, angle: str, archetype: str) -> str:
+    return _pick_first_hit(
+        f"{topic} {angle}",
+        [
+            (("边界", "责任", "治理"), "责任边界"),
+            (("交付", "执行", "流程"), "交付节奏"),
+            (("团队", "组织", "管理"), "组织流程"),
+            (("客户", "业务", "用户"), "业务结果"),
+            (("风控", "合规", "审计"), "风控链路"),
+        ],
+        {
+            "tutorial": "返工成本",
+            "case-study": "结果走向",
+            "narrative": "情绪判断",
+        }.get(archetype, "结果走向"),
+    )
+
+
+def _title_share_hook(topic: str, angle: str, archetype: str) -> str:
+    return _pick_first_hit(
+        f"{topic} {angle}",
+        [
+            (("误判", "看偏", "忽略"), "原来问题在这里"),
+            (("代价", "成本", "后果"), "太真实了"),
+            (("方法", "步骤", "规律"), "这一步太关键了"),
+            (("趋势", "拐点", "信号"), "这才是值得转发的判断"),
+        ],
+        "太真实了" if archetype != "tutorial" else "这一步太关键了",
+    )
+
+
+def _cleanup_title_text(title: str) -> str:
+    value = _normalize_text(title)
+    replacements = [
+        ("真正真正", "真正"),
+        ("其实其实", "其实"),
+        ("最容易让人卡住的", "最容易卡住的"),
+        ("真正有效的方法和规律", "真正有效的规律"),
+        ("真正的信号和判断", "真正的判断"),
+        ("真正的信号和拐点", "真正的拐点"),
+        ("判断顺序和关键一步", "关键顺序"),
+        ("影响路径和后果", "代价和后果"),
+        ("真正会拉开差距的，是", "拉开差距的，是"),
+        ("真正关键的是", "关键是"),
+    ]
+    for old, new in replacements:
+        value = value.replace(old, new)
+    value = re.sub(r"[，,:：]\s*[，,:：]", "，", value)
+    value = re.sub(r"\s+", "", value)
+    if value.count("：") + value.count("|") + value.count("｜") > 1:
+        value = value.replace("｜", "").replace("|", "")
+    return value.strip("，,:：。！？? ")
+
+
+def _trim_title_length(title: str) -> str:
+    value = _cleanup_title_text(title)
+    if len(value) <= 28:
+        return value
+    shorter = value.replace("真正", "").replace("其实", "").replace("最容易", "最易")
+    if len(shorter) <= 28:
+        return shorter
+    shorter = shorter.replace("更该看清", "看清").replace("真正会", "")
+    if len(shorter) <= 28:
+        return shorter
+    return ""
+
+
+def _build_title_entry(
+    *,
+    title: str,
+    family: str,
+    audience: str,
+    components: dict[str, str],
+    round_index: int,
+) -> dict[str, str]:
+    return {
+        "title": _trim_title_length(title),
+        "strategy": f"{TITLE_FAMILY_LABELS.get(family, family)}标题候选",
+        "audience_fit": audience or "大众读者",
+        "risk_note": "按爆款标题家族生成，并主动规避旧模板。",
+        "title_family": family,
+        "title_formula_components": components,
+        "title_emotion_mode": TITLE_EMOTION_MODE,
+        "title_generation_round": round_index,
+    }
+
+
+def _family_templates(family: str, focus: str, truth: str, pain: str, surface: str, consequence: str) -> list[str]:
+    mapping = {
+        "viewpoint-direct": [
+            f"{focus}，真正关键的是{truth}",
+            f"{focus}进入下一阶段，更该看清{truth}",
+            f"{focus}真正会拉开差距的，是{truth}",
+            f"{focus}别只盯着{surface}，更该看清{truth}",
+            f"{focus}真正要重估的，是{truth}",
+        ],
+        "pain-truth": [
+            f"{focus}最容易让人卡住的，往往是{truth}",
+            f"{pain}的人越来越多，背后缺的其实是{truth}",
+            f"{focus}最容易做反的，其实是{truth}",
+            f"{focus}看上去不难，真正难的是{truth}",
+        ],
+        "counterintuitive": [
+            f"关于{focus}，最反常识的一点是{truth}",
+            f"{focus}最容易被忽略的，其实是{truth}",
+            f"{focus}大家最容易看偏的，就是{truth}",
+            f"{focus}真正出人意料的，不是{surface}，而是{truth}",
+        ],
+        "cost-consequence": [
+            f"{focus}，最先吃亏的是{consequence}",
+            f"{focus}一旦继续放大，先受影响的是{consequence}",
+            f"{focus}看上去只是{surface}，先被改写的其实是{consequence}",
+            f"{focus}最该担心的，不是{surface}，而是{consequence}",
+        ],
+        "method-rule": [
+            f"{focus}想少走弯路，先抓住这条规律",
+            f"{focus}真正有效的方法，是先把这一步做对",
+            f"{focus}别再乱补动作，先把关键顺序做对",
+        ],
+    }
+    return mapping.get(family, [])
 
 
 def generate_diverse_title_variants(
@@ -636,129 +882,122 @@ def generate_diverse_title_variants(
     recent_corpus_summary: dict[str, Any] | None = None,
     writing_persona: dict[str, Any] | None = None,
     account_strategy: dict[str, Any] | None = None,
+    count: int = TITLE_COUNT_DEFAULT,
+    boost_round: int = 0,
+    weakness_hints: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    focus = _short_focus(topic, angle)
     blueprint = editorial_blueprint or {}
-    persona = writing_persona or {}
     strategy = account_strategy or {}
-    style_key = _normalize_key(str(blueprint.get("style_key") or ""))
-    persona_name = _normalize_key(str(persona.get("name") or ""))
-    recent_titles = recent_titles or []
+    recent_titles = [str(item or "").strip() for item in (recent_titles or []) if str(item or "").strip()]
     recent_summary = recent_corpus_summary or {}
-    blocked_patterns = {item.get("key") for item in (recent_summary.get("overused_title_patterns") or []) if item.get("key")}
-    blocked_patterns.update({str(item).strip() for item in (strategy.get("blocked_title_patterns") or []) if str(item).strip()})
-    blocked_fragments = {str(item).strip() for item in (strategy.get("blocked_title_fragments") or []) if str(item).strip()}
-    style_formulas: dict[str, list[str]] = {
-        "signal-briefing": [
-            "{focus}这件事别只看热闹，更该看它先改写了谁的处境",
-            "看懂{focus}，关键不是跟着站队，而是看清现实代价落在谁身上",
-            "关于{focus}，真正该盯住的不是表面结果，而是后面谁会先被影响",
-        ],
-        "counterintuitive-column": [
-            "大家都在聊{focus}，但最容易被低估的是它带来的现实后果",
-            "{focus}看上去像一条新闻，真正扎人的其实是它改写了日常判断",
-            "别把{focus}只当热度，更该看它会把哪些旧做法逼到墙角",
-        ],
-        "case-memo": [
-            "复盘{focus}：最值得拆开的，不是热闹，而是它为什么会先影响这群人",
-            "{focus}这件事，真正该拆的不是结果，而是中间那步判断怎么变了",
-            "{focus}看上去像条新闻，拆开更像一份现实代价清单",
-        ],
-        "field-observation": [
-            "我最近反复看到一种{focus}时刻，它比新闻本身更值得写",
-            "{focus}最刺人的地方，不在结论，而在那个普通人立刻能感到不对劲的瞬间",
-            "很多人谈{focus}只看结果，但真正该写的是那个现实细节",
-        ],
-        "myth-buster": [
-            "关于{focus}，这几个说法最容易把人带偏",
-            "别再把{focus}理解成一件事了，真正关键的是这三层",
-            "{focus}最常见的误会，不是不会做，而是理解错",
-        ],
-        "practical-playbook": [
-            "{focus}别上来就开干，先把顺序理清",
-            "想把{focus}做顺，先改掉这一步",
-            "{focus}真正有用的，不是清单更多，而是顺序更对",
-        ],
-        "open-letter": [
-            "如果你也正在被{focus}推着走，这篇想先说点不一样的",
-            "写给正在处理{focus}的人：别让自己被表面节奏带跑",
-            "关于{focus}，我更想提醒你看见没被说出的那层东西",
-        ],
-        "qa-cross-exam": [
-            "{focus}最该先回答的，不是能不能做，而是这几个问题",
-            "谈{focus}之前，我建议你先追问自己这 4 件事",
-            "如果要认真聊{focus}，这几个追问绕不过去",
-        ],
+    blocked_patterns = {
+        str(item.get("key") or "").strip()
+        for item in (recent_summary.get("overused_title_patterns") or [])
+        if str(item.get("key") or "").strip()
     }
-    if persona_name == "sharp-journalist":
-        style_formulas.setdefault(style_key or "generic", [])
-        style_formulas[style_key or "generic"] = [
-            f"{focus}这件事，真正的问题没那么复杂",
-            f"{focus}，真正的分水岭已经出现了",
-            f"别把{focus}看成热闹，它已经开始改结果了",
-        ] + style_formulas.get(style_key or "generic", [])
-    elif persona_name == "cold-analyst":
-        style_formulas.setdefault(style_key or "generic", [])
-        style_formulas[style_key or "generic"] = [
-            f"{focus}进入下一阶段，真正需要重估的是这条判断线",
-            f"看懂{focus}，先把影响路径和边界讲清楚",
-        ] + style_formulas.get(style_key or "generic", [])
-    fallback_pool = [
-        "{focus}这件事，最容易被低估的是它会先改变谁的现实处境",
-        "关于{focus}，先把代价、边界和误判讲清，再谈最后结论",
-        "{focus}看上去只是个新变化，更该看它会让哪些旧判断失效",
-    ]
-    formulas = list(style_formulas.get(style_key, [])) + fallback_pool
+    blocked_patterns.update({str(item).strip() for item in (strategy.get("blocked_title_patterns") or []) if str(item).strip()})
+    blocked_patterns.update({"why-think-clear", "danger-not-but"})
+    blocked_fragments = {str(item).strip() for item in (strategy.get("blocked_title_fragments") or []) if str(item).strip()}
+    blocked_fragments.update({"为什么大多数人", "普通人一定要先想清", "先想清 3 件事", "先想清3件事"})
+
+    archetype = _infer_title_archetype(topic, angle, blueprint)
+    focus = _short_focus(topic, angle)
+    truth = _title_truth_phrase(topic, angle, archetype)
+    surface = _title_surface_phrase(topic, angle, archetype)
+    pain = _title_pain_phrase(topic, angle, audience, archetype)
+    consequence = _title_consequence_phrase(topic, angle, archetype)
+    share_hook = _title_share_hook(topic, angle, archetype)
+    round_index = max(0, int(boost_round or 0))
+    quotas = TITLE_FAMILY_QUOTAS["tutorial" if archetype == "tutorial" else "default"]
+
+    if round_index >= 1:
+        truth = _trim_title_length(f"更深一层的{truth}").replace("更深一层的", "") or truth
+        consequence = consequence.replace("结果和", "").replace("真正", "")
+
     seen: set[str] = set()
     output: list[dict[str, str]] = []
-    for template in formulas:
-        title = template.format(focus=focus)
-        if _normalize_text(audience) and "写给" in template:
-            title = title.replace("正在处理", f"{audience}里正在处理")
-        compact = re.sub(r"\s+", "", title)
-        if compact in seen:
-            continue
-        seen.add(compact)
-        if title in recent_titles:
-            continue
-        pattern_key = title_template_key(title)
-        if blocked_patterns and pattern_key in blocked_patterns:
-            continue
-        if any(fragment in title for fragment in blocked_fragments):
-            continue
-        output.append(
-            {
-                "title": title,
-                "strategy": f"{blueprint.get('style_label') or '多风格'}标题变体",
-                "audience_fit": audience or "大众读者",
-                "risk_note": "基于当前语料去重后的多风格标题候选。",
-            }
-        )
-    if not output:
-        neutral_focus = re.sub(r"(误区|别再|为什么|不是|而是)", "", focus).strip(" ，,。；;：:")
-        if not neutral_focus:
-            neutral_focus = "这个议题"
-        rescue_templates = [
-            "{neutral_focus}这件事，真正拉开差距的是判断顺序",
-            "关于{neutral_focus}，先把边界拆清，再谈最终结论",
-            "{neutral_focus}最容易被忽略的，不是动作多少，而是判断先后",
-        ]
-        for template in rescue_templates:
-            title = template.format(neutral_focus=neutral_focus)
+    weakness_hints = [str(item or "").strip() for item in (weakness_hints or []) if str(item or "").strip()]
+    if "高预期" in weakness_hints and archetype != "tutorial":
+        quotas = [("viewpoint-direct", 5), ("pain-truth", 2), ("counterintuitive", 2), ("cost-consequence", 1)]
+
+    for family, quota in quotas:
+        components = {
+            "pain_point": pain,
+            "truth_or_rule": truth,
+            "counterintuitive_hook": surface,
+            "share_hook": share_hook,
+        }
+        variants = _family_templates(family, focus, truth, pain, surface, consequence)
+        if round_index >= 1:
+            variants = variants + [
+                f"{focus}这件事，最容易看偏的是{truth}",
+                f"{focus}越往后走，越要看清{truth}",
+            ]
+        picked = 0
+        for raw_title in variants:
+            title = _trim_title_length(raw_title)
             compact = re.sub(r"\s+", "", title)
-            if compact in seen or title in recent_titles:
+            if not title or compact in seen or title in recent_titles:
                 continue
-            if blocked_patterns and title_template_key(title) in blocked_patterns:
+            if any(word in title for word in TITLE_ABSOLUTE_WORDS):
+                continue
+            pattern_key = title_template_key(title)
+            if blocked_patterns and pattern_key in blocked_patterns:
                 continue
             if any(fragment in title for fragment in blocked_fragments):
                 continue
-            output.append(
-                {
-                    "title": title,
-                    "strategy": f"{blueprint.get('style_label') or '多风格'}标题兜底变体",
-                    "audience_fit": audience or "大众读者",
-                    "risk_note": "常规模板冲突后启用的兜底标题候选。",
-                }
-            )
+            if len(title) < 12 or len(title) > 28:
+                continue
+            if title.count("？") + title.count("?") > 1:
+                continue
+            if title.count("：") + title.count("｜") + title.count("|") > 1:
+                continue
             seen.add(compact)
-    return output[:6]
+            output.append(
+                _build_title_entry(
+                    title=title,
+                    family=family,
+                    audience=audience,
+                    components=components,
+                    round_index=round_index,
+                )
+            )
+            picked += 1
+            if picked >= quota:
+                break
+
+    if len(output) < count:
+        rescue_templates = [
+            f"{focus}，真正关键的是{truth}",
+            f"{focus}最容易被忽略的，其实是{truth}",
+            f"{focus}，最先吃亏的是{consequence}",
+            f"{focus}想少走弯路，先抓住{truth}",
+        ]
+        for raw_title in rescue_templates:
+            title = _trim_title_length(raw_title)
+            compact = re.sub(r"\s+", "", title)
+            if not title or compact in seen or title in recent_titles:
+                continue
+            pattern_key = title_template_key(title)
+            if blocked_patterns and pattern_key in blocked_patterns:
+                continue
+            if any(fragment in title for fragment in blocked_fragments):
+                continue
+            seen.add(compact)
+            output.append(
+                _build_title_entry(
+                    title=title,
+                    family="viewpoint-direct",
+                    audience=audience,
+                    components={
+                        "pain_point": pain,
+                        "truth_or_rule": truth,
+                        "counterintuitive_hook": surface,
+                        "share_hook": share_hook,
+                    },
+                    round_index=round_index,
+                )
+            )
+            if len(output) >= count:
+                break
+    return output[:count]

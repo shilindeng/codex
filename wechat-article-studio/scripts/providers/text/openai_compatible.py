@@ -36,13 +36,24 @@ def _extract_json_substring(text: str) -> str:
 
 def placeholder_titles(topic: str, audience: str, count: int) -> list[dict[str, str]]:
     titles = []
+    count = max(1, int(count or 10))
+    families = ["viewpoint-direct", "pain-truth", "counterintuitive", "cost-consequence", "method-rule"]
     for index in range(count):
+        family = families[index % len(families)]
         titles.append(
             {
-                "title": f"{topic}：第 {index + 1} 个可执行选题角度",
-                "strategy": "结果导向 + 认知反差",
+                "title": f"{topic}，真正关键的是第 {index + 1} 个判断",
+                "strategy": "观点直述型",
                 "audience_fit": audience or "大众读者",
                 "risk_note": "占位标题；配置文本模型后可替换为正式提案。",
+                "title_family": family,
+                "title_formula_components": {
+                    "pain_point": "读者最容易卡住的点",
+                    "truth_or_rule": "更想点开的那层真相",
+                    "counterintuitive_hook": "最容易被忽略的一层",
+                    "share_hook": "值得转给同类人的判断",
+                },
+                "title_emotion_mode": "共鸣+反差",
             }
         )
     return titles
@@ -230,7 +241,7 @@ class OpenAICompatibleTextProvider(TextProvider):
         return ProviderResult(payload=self._json_result(content), provider=self.provider_name, model=self.model)
 
     def generate_titles(self, context: dict[str, Any]) -> ProviderResult:
-        count = int(context.get("count", 3) or 3)
+        count = int(context.get("count", 10) or 10)
         if not self.configured():
             return ProviderResult(
                 payload=placeholder_titles(context.get("topic", "未命名主题"), context.get("audience", "大众读者"), count),
@@ -242,13 +253,18 @@ class OpenAICompatibleTextProvider(TextProvider):
             {
                 "role": "system",
                 "content": (
-                "你是微信公众号标题编辑。只输出 JSON 对象，字段 candidates 为数组；每项包含 title, strategy, audience_fit, risk_note。"
-                "必须同时给出不同气质的标题，不要 3 个标题只是同一模板换词。"
+                "你是微信公众号标题编辑。只输出 JSON 对象，字段 candidates 为数组；每项必须包含 title, strategy, audience_fit, risk_note, title_family, title_formula_components, title_emotion_mode。"
+                "标题目标是更强打开率，但不能回到老式标题党。默认情绪模式是‘共鸣+反差’，不是恐吓。"
+                "标题公式优先参考：核心欲望/痛点 + 真相/方法/规律 + 反常识或稀缺性。"
+                "默认产出 10 个候选，家族分布优先按：观点直述型 3、痛点真相型 2、反常识拆解型 2、代价后果型 2、方法规律型 1；如果不是教程稿，方法规律型可由观点直述型补位。"
+                "标题尽量 16 到 24 个中文字符，硬上限 28。最多只允许 1 个主分隔符，默认不用问号。"
+                "必须同时给出不同家族的标题，不要 10 个标题只是同一模板换词。"
                 "如果输入里带有 editorial_blueprint，标题风格必须服从它；如果 recent_corpus_summary 显示某类标题模式已经高频出现，禁止继续复用。"
                 "如果输入里带有 account_strategy，优先服从其中的定位、目标读者、首要目标、禁用标题路数和禁用标题碎片。"
                 "如果输入里带有 author_memory/playbook_summary/lesson_patterns/hard_rules/soft_rules，优先服从这些作者偏好和人工改稿结论。"
                 "如果输入里带有 writing_persona，标题也要服从它的语气和密度，不要把专业型人格写回通用爆款腔。"
                 "不要默认产出“为什么大多数人…”“真正危险的不是…而是…”“先想清 3 件事”这类熟模板。"
+                "每个候选都要能回答：为什么会想点开、痛点在哪、信息差在哪。"
             ),
         },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

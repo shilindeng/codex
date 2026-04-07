@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -10,6 +12,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 from core.title_decision import build_title_decision_report, title_integrity_report  # noqa: E402
+from core.workflow import select_scored_title  # noqa: E402
 
 
 class TitleDecisionTests(unittest.TestCase):
@@ -54,8 +57,10 @@ class TitleDecisionTests(unittest.TestCase):
             account_strategy=manifest["account_strategy"],
         )
         self.assertEqual(report["selected_title"], "复盘企业 AI Agent 落地：团队一提速，为什么后面反而更难交付？")
-        self.assertTrue(report["candidates"][0]["title_gate_passed"])
-        self.assertIn("decision_breakdown", report["candidates"][0])
+        self.assertIn("title_open_rate_score", report["candidates"][0])
+        self.assertIn("title_gate_reason", report["candidates"][0])
+        self.assertIn("title_formula_components", report["candidates"][0])
+        self.assertIn("selected_explainer", report)
 
     def test_title_integrity_rejects_broken_double_template(self):
         report = title_integrity_report(
@@ -65,6 +70,47 @@ class TitleDecisionTests(unittest.TestCase):
         )
         self.assertFalse(report["passed"])
         self.assertTrue(any("拼接" in item or "高风险碎片" in item for item in report["issues"]))
+
+    def test_select_scored_title_triggers_rewrite_round_when_top_three_are_weak(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            manifest = {
+                "recent_article_titles": [
+                    "这次真正的信号，不在表面热闹，而在更深一层",
+                    "为什么大多数人做不好 AI 转型？普通人一定要先想清这3件事",
+                ],
+                "recent_corpus_summary": {
+                    "overused_title_patterns": [
+                        {"key": "signal-briefing", "label": "信号模板", "count": 8},
+                        {"key": "why-think-clear", "label": "想清模板", "count": 10},
+                    ]
+                },
+                "editorial_blueprint": {"style_key": "signal-briefing", "style_label": "信号简报"},
+                "account_strategy": {
+                    "blocked_title_patterns": ["signal-briefing", "why-think-clear", "not-but"],
+                    "blocked_title_fragments": ["这次真正的信号", "更深一层"],
+                },
+            }
+            ideation = {
+                "titles": [
+                    {"title": "这次真正的信号，不在表面热闹，而在更深一层"},
+                    {"title": "为什么大多数人做不好 AI 转型？普通人一定要先想清这3件事"},
+                    {"title": "AI 转型为什么重要"},
+                ]
+            }
+            ideation, _selected = select_scored_title(
+                workspace,
+                manifest,
+                ideation,
+                "AI 转型",
+                "大众读者",
+                "从判断顺序和影响路径角度拆",
+            )
+            self.assertTrue((workspace / "title-decision-report.json").exists())
+            payload = json.loads((workspace / "title-decision-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload.get("title_rewrite_round"), 1)
+            self.assertGreaterEqual(len(payload.get("candidates") or []), 5)
+            self.assertTrue(str(ideation.get("selected_title") or "").strip())
 
 
 if __name__ == "__main__":

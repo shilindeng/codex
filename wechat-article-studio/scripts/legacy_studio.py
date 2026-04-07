@@ -155,7 +155,7 @@ TITLE_TIMELY_WORDS = [
 TITLE_AUDIENCE_WORDS = [
     "普通人", "新手", "职场人", "创业者", "管理者", "家长", "中小企业", "开发者", "运营人", "创作者", "打工人",
 ]
-TITLE_SCORE_THRESHOLD = 56
+TITLE_SCORE_THRESHOLD = 68
 DISCOVERY_TOPIC_LIMIT = 8
 DISCOVERY_FEED_LIMIT = 20
 DISCOVERY_PROVIDER_CHOICES = ("auto", "google-news-rss", "custom-rss", "tavily")
@@ -1680,58 +1680,26 @@ def title_score(title: str) -> tuple[int, str]:
 
 
 def title_dimension_score(title: str, audience: str = "", angle: str = "") -> dict[str, Any]:
+    from core.title_decision import evaluate_title_open_rate
+
     value = (title or "").strip()
-    compact = re.sub(r"\s+", "", value)
-    length = cjk_len(compact)
-    benefit_hits = count_occurrences(compact, TITLE_BENEFIT_WORDS)
-    curiosity_hits = count_occurrences(compact, TITLE_CURIOSITY_WORDS)
-    timely_hits = count_occurrences(compact, TITLE_TIMELY_WORDS)
-    audience_hits = count_occurrences(compact + audience, TITLE_AUDIENCE_WORDS)
-    concrete_hits = len(re.findall(r"[0-9一二三四五六七八九十]+|AI|SOP|ROI|增长|趋势|方法|清单|模板|案例|机会|风险", compact, flags=re.I))
-    conflict_hits = len(re.findall(r"不是.+而是|但|却|反而|误区|真相", compact))
-    marks_hits = sum(1 for mark in ["？", "?", "：", ":", "｜", "|"] if mark in compact)
-
-    hook_score = 8
-    hook_score += min(8, curiosity_hits * 3 + conflict_hits * 2 + marks_hits)
-    hook_score += 2 if compact.startswith(("为什么", "别再", "真正")) else 0
-
-    specificity_score = 8
-    if 11 <= length <= 24:
-        specificity_score += 6
-    elif 8 <= length <= 30:
-        specificity_score += 3
-    specificity_score += min(6, concrete_hits * 2)
-    specificity_score += 2 if any(word in compact for word in ["清单", "步骤", "公式", "案例", "方法"]) else 0
-
-    benefit_score = 8
-    benefit_score += min(8, benefit_hits * 3)
-    benefit_score += 3 if any(word in compact for word in ["避坑", "机会", "增长", "提升", "答案"]) else 0
-    benefit_score += 2 if any(word in angle for word in ["方法", "策略", "判断", "趋势"]) and any(word in compact for word in ["方法", "策略", "判断", "趋势"]) else 0
-
-    relevance_score = 8
-    relevance_score += 4 if audience_hits > 0 else 0
-    relevance_score += 4 if angle and any(token for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", angle) if token in compact) else 0
-    relevance_score += 4 if any(word in compact for word in ["普通人", "新手", "打工人", "创业者", "开发者"]) else 0
-
-    timely_score = 6
-    timely_score += min(8, timely_hits * 3)
-    timely_score += 3 if re.search(r"20\d{2}|这次|最近|刚刚|本周|24小时", compact) else 0
-    timely_score += 3 if any(word in compact for word in ["趋势", "信号", "风向", "爆发", "拐点"]) else 0
-
-    dimensions = [
-        {"dimension": "钩子强度", "weight": 22, "score": min(hook_score, 22), "note": "是否有反差、悬念、问题感和点击冲动。"},
-        {"dimension": "具体度", "weight": 20, "score": min(specificity_score, 20), "note": "是否具体、可感知、带数字/对象/方法。"},
-        {"dimension": "利益点", "weight": 22, "score": min(benefit_score, 22), "note": "是否让读者一眼看到收益、避坑或行动价值。"},
-        {"dimension": "人群相关性", "weight": 18, "score": min(relevance_score, 18), "note": "是否对准目标读者和文章方向。"},
-        {"dimension": "时效热度", "weight": 18, "score": min(timely_score, 18), "note": "是否具备当下感、趋势感或话题性。"},
-    ]
-    total = sum(item["score"] for item in dimensions)
+    report = evaluate_title_open_rate(
+        value,
+        topic=value,
+        audience=audience,
+        angle=angle,
+        candidate={},
+        research={},
+        recent_titles=[],
+        recent_patterns=[],
+        account_strategy={},
+    )
     return {
         "title": value,
-        "total_score": total,
+        "total_score": report.get("title_open_rate_score", 0),
         "threshold": TITLE_SCORE_THRESHOLD,
-        "passed": total >= TITLE_SCORE_THRESHOLD,
-        "score_breakdown": dimensions,
+        "passed": bool(report.get("title_gate_passed")),
+        "score_breakdown": report.get("score_breakdown") or [],
     }
 
 
@@ -1744,70 +1712,38 @@ def rank_title_candidates(
     recent_titles: list[str] | None = None,
     recent_title_patterns: list[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-    try:
-        from core.title_decision import title_integrity_report
-    except ImportError:
-        title_integrity_report = None
-    scored: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    candidates = list(titles or [])
-    recent_titles = [str(item or "").strip() for item in (recent_titles or []) if str(item or "").strip()]
-    recent_title_patterns = [str(item or "").strip() for item in (recent_title_patterns or []) if str(item or "").strip()]
-    if topic and all((item.get("title") or "").strip() != topic.strip() for item in candidates):
-        candidates.append({"title": topic, "strategy": "原始主题", "audience_fit": audience, "risk_note": "作为原始 topic 参与标题评分。"})
-    if selected_title and all((item.get("title") or "").strip() != selected_title.strip() for item in candidates):
-        candidates.append({"title": selected_title, "strategy": "显式指定标题", "audience_fit": audience, "risk_note": "由用户显式指定，保留参与评分。"})
-    for item in candidates:
-        title = (item.get("title") or "").strip()
-        if not title or title in seen:
-            continue
-        seen.add(title)
-        report = title_dimension_score(title, audience, angle)
-        template_key = title_template_key(title)
-        repeat_penalty = 0
-        if title in recent_titles:
-            repeat_penalty += 12
-        if recent_titles and any(title.startswith(prefix[:10]) for prefix in recent_titles[:6] if len(prefix) >= 10):
-            repeat_penalty += 3
-        if template_key and template_key in recent_title_patterns:
-            repeat_penalty += 10
-        integrity = title_integrity_report(title, topic=topic) if title_integrity_report else {"score": 10, "passed": True, "issues": []}
-        if not integrity.get("passed", True):
-            repeat_penalty += max(3, int(round(10 - float(integrity.get("score") or 0))))
-        final_score = max(0, int(report["total_score"]) - repeat_penalty)
-        scored.append(
-            {
-                **item,
-                "title": title,
-                "title_score": final_score,
-                "title_gate_passed": final_score >= report["threshold"],
-                "title_score_breakdown": report["score_breakdown"],
-                "title_score_threshold": report["threshold"],
-                "title_template_key": template_key,
-                "title_repeat_penalty": repeat_penalty,
-                "title_integrity": integrity,
-            }
-        )
-    scored.sort(key=lambda item: (item.get("title_gate_passed", False), item.get("title_score", 0)), reverse=True)
-    selected = scored[0] if scored else None
-    return scored, selected
+    from core.title_decision import build_title_decision_report
+
+    recent_summary = {"overused_title_patterns": [{"key": key, "count": 8} for key in (recent_title_patterns or [])]}
+    payload = build_title_decision_report(
+        topic=topic,
+        audience=audience,
+        angle=angle,
+        candidates=list(titles or []),
+        manifest={"recent_article_titles": recent_titles or [], "recent_corpus_summary": recent_summary},
+        research={},
+        editorial_blueprint={},
+        selected_title=selected_title,
+        account_strategy={},
+    )
+    ranked = list(payload.get("candidates") or [])
+    return ranked, ranked[0] if ranked else None
 
 
 def generate_hot_title_variants(topic: str, angle: str = "", audience: str = "") -> list[dict[str, str]]:
     classification = classify_news_topic(topic)
     content_kind = classify_discovery_content_kind(topic)
-    style_keys = ["signal-briefing", "case-memo", "counterintuitive-column"]
+    style_key = "signal-briefing"
     if content_kind == "教程/工具":
-        style_keys = ["practical-playbook", "qa-cross-exam", "myth-buster"]
+        style_key = "practical-playbook"
     elif content_kind == "研究/论文":
-        style_keys = ["signal-briefing", "case-memo", "qa-cross-exam"]
-    elif content_kind == "事件解读":
-        style_keys = ["case-memo", "counterintuitive-column", "signal-briefing"]
+        style_key = "case-memo"
     elif classification.get("topic_type") == "文娱/平台":
-        style_keys = ["case-memo", "field-observation", "counterintuitive-column"]
-    elif classification.get("topic_type") == "教育":
-        style_keys = ["myth-buster", "practical-playbook", "open-letter"]
-
+        style_key = "field-observation"
+    blueprint = {
+        "style_key": style_key,
+        "style_label": (EDITORIAL_STYLE_LIBRARY.get(style_key) or {}).get("style_label", style_key),
+    }
     blocked_patterns = {
         "overused_title_patterns": [
             {"key": "why-think-clear", "count": 99},
@@ -1815,56 +1751,16 @@ def generate_hot_title_variants(topic: str, angle: str = "", audience: str = "")
             {"key": "not-but", "count": 99},
         ]
     }
-    candidates: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for style_key in style_keys:
-        blueprint = {
-            "style_key": style_key,
-            "style_label": (EDITORIAL_STYLE_LIBRARY.get(style_key) or {}).get("style_label", style_key),
-        }
-        variants = generate_diverse_title_variants(
-            topic,
-            angle,
-            audience,
-            editorial_blueprint=blueprint,
-            recent_titles=[],
-            recent_corpus_summary=blocked_patterns,
-        )
-        for item in variants:
-            title = str(item.get("title") or "").strip()
-            normalized = re.sub(r"\s+", "", title)
-            if not title or normalized in seen:
-                continue
-            seen.add(normalized)
-            candidates.append(
-                {
-                    "title": title,
-                    "strategy": f"热点标题工厂：{blueprint['style_label']}",
-                    "audience_fit": audience or "大众读者",
-                    "risk_note": "按热点题材自动切换标题写法，主动避开旧模板。",
-                }
-            )
-            if len(candidates) >= 6:
-                return candidates
-    fallback = [
-        f"{topic}这件事，真正值得聊的不是热闹本身",
-        f"关于{topic}，我更想拆开讲清楚那一步",
-        f"{topic}背后真正该被看见的，是影响路径",
-    ]
-    for title in fallback:
-        normalized = re.sub(r"\s+", "", title)
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        candidates.append(
-            {
-                "title": title,
-                "strategy": "热点标题工厂：兜底",
-                "audience_fit": audience or "大众读者",
-                "risk_note": "当题材不适合固定模版时启用的兜底写法。",
-            }
-        )
-    return candidates[:6]
+    return generate_diverse_title_variants(
+        topic,
+        angle,
+        audience,
+        editorial_blueprint=blueprint,
+        recent_titles=[],
+        recent_corpus_summary=blocked_patterns,
+        count=10,
+        boost_round=1,
+    )
 
 
 def intro_score(title: str, intro: str) -> tuple[int, str]:

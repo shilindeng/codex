@@ -33,6 +33,8 @@
 
 - `generate_research_pack(context) -> dict`
 - `generate_titles(context) -> list[dict]`
+  - 每项至少包含：`title`, `strategy`, `audience_fit`, `risk_note`
+  - 新标题链路推荐补充：`title_family`, `title_formula_components`, `title_emotion_mode`
 - `generate_outline(context) -> dict`
 - `generate_article(context) -> str`
 - `review_article(context) -> dict`
