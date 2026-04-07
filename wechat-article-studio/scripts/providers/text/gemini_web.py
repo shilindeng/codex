@@ -214,6 +214,7 @@ class GeminiWebTextProvider(TextProvider):
             "9. 如果原稿缺少现场、案例或反向看法，请优先补这些内容，但不要写成“行业判断”“事实/依据”“边界/误判”这类标签。"
             "10. 如果原稿段落过碎，请合并出一两段真正展开的分析段；如果多个段落起手一样，请重写起手。"
             "11. 如果输入给了 humanizerai_detection 或 humanizerai_humanized_body，把它当外部去味参考稿，只借它的去味方向，不要照抄，也不要丢掉原文事实、Markdown 结构和账号风格。"
+            "12. 额外避开这几类 AI 腔：反复写“不是X，而是Y”“问题不在X，而在Y”，反复用“换句话说/更重要的是/真正的问题是”先铺垫再说重点，以及让“数据/趋势/市场/AI/系统”替人做动作。"
             f"\n输入：{json.dumps(context, ensure_ascii=False)}"
         )
         text = self._run_prompt(prompt, expect_json=False)

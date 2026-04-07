@@ -225,6 +225,26 @@ class ViralEngineTests(unittest.TestCase):
         self.assertIn("prompt_leak", smell_types)
         self.assertLess(report.get("interaction_score") or 0, 6)
 
+    def test_score_report_flags_stop_slop_patterns(self):
+        title = "这篇稿子有明显的 AI 腔"
+        body = "\n\n".join(
+            [
+                "换句话说，这件事不是工具不行，而是判断顺序出了错。",
+                "更重要的是，真正的问题是很多人把热闹看成了结果。",
+                "不是信息太少，而是动作太散。",
+                "问题不在模型不够强，而在团队根本没有接住流程。",
+                "真正危险的不是信息太少，而是大家一直在补错地方。",
+                "数据告诉我们所有人都在焦虑。",
+                "市场奖励那些更会包装的人。",
+            ]
+        )
+        report = build_score_report(title, body, {"topic": title, "audience": "大众读者", "direction": "", "source_urls": []}, threshold=70)
+        smell_types = {item.get("type") for item in report.get("ai_smell_findings") or []}
+        self.assertIn("throat_clearing", smell_types)
+        self.assertIn("binary_contrast", smell_types)
+        self.assertIn("false_agency", smell_types)
+        self.assertFalse(report.get("quality_gates", {}).get("de_ai_passed"))
+
     def test_collect_render_blockers_blocks_missing_evidence_and_title_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

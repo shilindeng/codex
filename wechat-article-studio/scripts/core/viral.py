@@ -79,6 +79,26 @@ PROMPT_LEAK_PATTERNS = [
     "写作要求",
 ]
 
+STOP_SLOP_THROAT_CLEARING_PATTERNS: list[tuple[str, str]] = [
+    (r"(?:^|[。！？!?；;\n]\s*)(先说结论)(?:[，,:：\s])", "先说结论"),
+    (r"(?:^|[。！？!?；;\n]\s*)(换句话说|说白了|说到底)(?:[，,:：\s])", "先铺垫再说重点"),
+    (r"(?:^|[。！？!?；;\n]\s*)(更重要的是|更关键的是|值得注意的是|需要注意的是)(?:[，,:：\s])", "先铺垫再说重点"),
+    (r"(?:^|[。！？!?；;\n]\s*)(真正的问题是|这里有个问题|我们先来看|接下来我们看)(?:[，,:：\s])", "自我领读式起手"),
+]
+
+STOP_SLOP_BINARY_CONTRAST_PATTERNS: list[tuple[str, str]] = [
+    (r"不是[^。！？!?；;\n]{1,24}而是[^。！？!?；;\n]{1,24}", "不是X，而是Y"),
+    (r"问题不在[^。！？!?；;\n]{1,24}而在[^。！？!?；;\n]{1,24}", "问题不在X，而在Y"),
+    (r"真正[^。！？!?；;\n]{0,10}不是[^。！？!?；;\n]{1,24}而是[^。！？!?；;\n]{1,24}", "真正的不是X，而是Y"),
+]
+
+STOP_SLOP_FALSE_AGENCY_PATTERNS: list[tuple[str, str]] = [
+    (r"(?:数据|图表|报告)[^。！？!?；;\n]{0,6}告诉(?:我们|你)?", "让抽象信息替人下判断"),
+    (r"市场[^。！？!?；;\n]{0,4}(奖励|惩罚)", "让抽象系统替人行动"),
+    (r"趋势[^。！？!?；;\n]{0,4}(要求|逼着|告诉|教会)", "让抽象趋势替人行动"),
+    (r"(?:AI|模型|系统)[^。！？!?；;\n]{0,4}(知道|理解|记住|想要|决定)", "让工具像人一样思考"),
+]
+
 EMOTION_VALUE_MARKERS = [
     "你不是",
     "你会发现",
@@ -227,6 +247,9 @@ COMMON_PARAGRAPH_STARTERS = {
     "这件事",
     "先说",
     "接下来",
+    "换句话说",
+    "更重要的是",
+    "真正的问题是",
 }
 
 COMMON_SENTENCE_OPENERS = {
@@ -241,6 +264,10 @@ COMMON_SENTENCE_OPENERS = {
     "先说",
     "但真正",
     "与此同时",
+    "换句话说",
+    "更重要的是",
+    "值得注意的是",
+    "真正的问题是",
 }
 
 COMMON_ADVERBS = {
@@ -272,6 +299,7 @@ SEVERE_AI_SMELL_TYPES = {
     "outline_like",
     "repeated_starter",
     "repeated_sentence_opener",
+    "throat_clearing",
     "heading_monotony",
     "author_phrase",
     "author_starter",
@@ -1371,6 +1399,60 @@ def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> lis
         if len(str(phrase)) <= 2 and hit_count < 2:
             continue
         findings.append({"type": "template_phrase", "pattern": phrase, "count": hit_count, "evidence": phrase})
+    throat_clearing_hits = 0
+    throat_clearing_labels: list[str] = []
+    direct_conclusion_hits = 0
+    for pattern, label in STOP_SLOP_THROAT_CLEARING_PATTERNS:
+        hit_count = len(re.findall(pattern, body))
+        if not hit_count:
+            continue
+        throat_clearing_hits += hit_count
+        throat_clearing_labels.append(label)
+        if label == "先说结论":
+            direct_conclusion_hits += hit_count
+    if throat_clearing_hits >= 2 or direct_conclusion_hits >= 1:
+        findings.append(
+            {
+                "type": "throat_clearing",
+                "pattern": "throat-clearing",
+                "count": throat_clearing_hits,
+                "evidence": " / ".join(dict.fromkeys(throat_clearing_labels)) or "先铺垫再说重点",
+            }
+        )
+    binary_hits = 0
+    binary_labels: list[str] = []
+    for pattern, label in STOP_SLOP_BINARY_CONTRAST_PATTERNS:
+        hit_count = len(re.findall(pattern, body))
+        if not hit_count:
+            continue
+        binary_hits += hit_count
+        binary_labels.append(label)
+    if binary_hits >= 3:
+        findings.append(
+            {
+                "type": "binary_contrast",
+                "pattern": "not-but-chain",
+                "count": binary_hits,
+                "evidence": " / ".join(dict.fromkeys(binary_labels)) or "不是X，而是Y",
+            }
+        )
+    false_agency_hits = 0
+    false_agency_labels: list[str] = []
+    for pattern, label in STOP_SLOP_FALSE_AGENCY_PATTERNS:
+        hit_count = len(re.findall(pattern, body))
+        if not hit_count:
+            continue
+        false_agency_hits += hit_count
+        false_agency_labels.append(label)
+    if false_agency_hits:
+        findings.append(
+            {
+                "type": "false_agency",
+                "pattern": "false-agency",
+                "count": false_agency_hits,
+                "evidence": " / ".join(dict.fromkeys(false_agency_labels)) or "让抽象概念替人行动",
+            }
+        )
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in legacy.sentence_split(body)]
     if sentence_lengths:
         long_sentences = [length for length in sentence_lengths if length >= 55]
@@ -2128,9 +2210,16 @@ def _score_style(review: dict[str, Any], body: str) -> tuple[int, str]:
     for item in findings:
         finding_type = str(item.get("type") or "")
         count = int(item.get("count") or 0)
-        if finding_type in {"repeated_starter", "repeated_sentence_opener", "heading_monotony", "author_phrase", "author_starter"}:
+        if finding_type in {
+            "repeated_starter",
+            "repeated_sentence_opener",
+            "heading_monotony",
+            "author_phrase",
+            "author_starter",
+            "throat_clearing",
+        }:
             penalty += max(2, min(3, count))
-        elif finding_type in {"outline_like", "enumeration_voice"}:
+        elif finding_type in {"outline_like", "enumeration_voice", "false_agency", "binary_contrast"}:
             penalty += 2
         else:
             penalty += 1
