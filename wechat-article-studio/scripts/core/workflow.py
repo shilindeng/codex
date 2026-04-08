@@ -4,6 +4,7 @@ import argparse
 import copy
 import json
 import re
+import shutil
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
@@ -40,6 +41,23 @@ from core.content_enhancement import (
     enhancement_strategy_for_archetype,
     load_content_enhancement,
     write_content_enhancement_artifacts,
+)
+from core.viral_pipeline import (
+    PLATFORM_CHOICES as VIRAL_PLATFORM_CHOICES,
+    analyze_source_corpus,
+    apply_source_similarity_gate,
+    build_source_similarity_report,
+    collect_source_corpus,
+    discover_viral_candidates,
+    markdown_discovery_report,
+    markdown_similarity_report,
+    markdown_viral_dna_report,
+    select_viral_candidates,
+    write_discovery_artifacts,
+    write_platform_versions,
+    write_research_from_viral_analysis,
+    write_similarity_artifacts,
+    write_source_corpus_artifacts,
 )
 from core.editorial_anchor import build_editorial_anchor_plan, write_editorial_anchor_artifacts
 from core.images import cmd_assemble as legacy_assemble
@@ -101,6 +119,44 @@ _AUTHOR_MEMORY_CACHE: dict[
     ],
     dict[str, Any],
 ] = {}
+VIRAL_QUERY_RESET_PATHS = [
+    "research.json",
+    "viral-discovery.json",
+    "viral-discovery.md",
+    "source-corpus.json",
+    "viral-dna.json",
+    "viral-dna.md",
+    "ideation.json",
+    "article.md",
+    "title-report.json",
+    "title-report.md",
+    "title-decision-report.json",
+    "title-decision-report.md",
+    "content-enhancement.json",
+    "content-enhancement.md",
+    "editorial-anchor-plan.json",
+    "editorial-anchor-plan.md",
+    "review-report.json",
+    "review-report.md",
+    "score-report.json",
+    "score-report.md",
+    "content-fingerprint.json",
+    "layout-plan.json",
+    "layout-plan.md",
+    "acceptance-report.json",
+    "acceptance-report.md",
+    "similarity-report.json",
+    "similarity-report.md",
+    "image-plan.json",
+    "image-outline.json",
+    "image-outline.md",
+    "assembled.md",
+    "article.html",
+    "article.wechat.html",
+    "publish-result.json",
+    "latest-draft-report.json",
+    "versions",
+]
 
 
 def normalize_content_mode(value: str | None) -> str:
@@ -235,6 +291,7 @@ def collect_render_blockers(workspace: Path, manifest: dict[str, Any], score_rep
     if research_report.get("requires_evidence") and not research_report.get("passed"):
         blockers.append(f"调研门槛未通过：{'；'.join(research_report.get('reasons') or [])}")
     blockers.extend(collect_title_consistency_issues(workspace, manifest))
+    blockers.extend(_similarity_blockers(workspace))
     return blockers
 
 
@@ -289,6 +346,7 @@ def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
 def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
     blockers = placeholder_reasons(workspace, manifest)
     blockers.extend(collect_title_consistency_issues(workspace, manifest))
+    blockers.extend(_similarity_blockers(workspace))
     report = read_json(workspace / "score-report.json", default={}) or {}
     if not report:
         blockers.append("缺少 score-report.json，无法确认是否可发布")
@@ -1068,6 +1126,18 @@ def extract_style_signals(sample_paths: list[str]) -> list[str]:
 
 def load_research(workspace: Path) -> dict[str, Any]:
     return _load_json_payload(workspace / "research.json")
+
+
+def load_viral_discovery(workspace: Path) -> dict[str, Any]:
+    return _load_json_payload(workspace / "viral-discovery.json")
+
+
+def load_source_corpus(workspace: Path) -> dict[str, Any]:
+    return _load_json_payload(workspace / "source-corpus.json")
+
+
+def load_viral_dna(workspace: Path) -> dict[str, Any]:
+    return _load_json_payload(workspace / "viral-dna.json")
 
 
 def load_ideation(workspace: Path) -> dict[str, Any]:
@@ -2388,8 +2458,155 @@ def _reset_manifest_progress(manifest: dict[str, Any]) -> None:
             continue
         manifest[key] = "not_started"
     # Reset revision-related state on topic change.
-    for key in ["revision_round", "revision_rounds", "stop_reason", "best_round", "viral_blueprint", "editorial_blueprint", "writing_persona", "content_enhancement_path", "humanness_signals"]:
+    for key in [
+        "revision_round",
+        "revision_rounds",
+        "stop_reason",
+        "best_round",
+        "viral_blueprint",
+        "editorial_blueprint",
+        "writing_persona",
+        "content_enhancement_path",
+        "humanness_signals",
+        "viral_selection",
+        "viral_query",
+        "viral_selected_count",
+        "viral_discovery_path",
+        "source_corpus_path",
+        "viral_dna_path",
+        "similarity_report_path",
+        "versions_manifest_path",
+    ]:
         manifest.pop(key, None)
+
+
+def _recommended_viral_indexes(discovery: dict[str, Any]) -> list[int]:
+    recommended = list(discovery.get("recommended_selection") or [])
+    if recommended:
+        ids = [str(item.get("source_id") or "") for item in recommended]
+        indexes: list[int] = []
+        for idx, candidate in enumerate(discovery.get("candidates") or [], start=1):
+            if str(candidate.get("source_id") or "") in ids:
+                indexes.append(idx)
+        if indexes:
+            return indexes[:5]
+    return list(range(1, min(5, len(discovery.get("candidates") or [])) + 1))
+
+
+def _selected_viral_from_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    items = manifest.get("viral_selection") or []
+    return list(items) if isinstance(items, list) else []
+
+
+def _clear_workspace_paths(workspace: Path, rel_paths: list[str]) -> None:
+    for rel in rel_paths:
+        target = workspace / rel
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+
+
+def _viral_query_changed(workspace: Path, manifest: dict[str, Any], query: str) -> bool:
+    query_text = str(query or "").strip()
+    if not query_text:
+        return False
+    existing_query = str(manifest.get("viral_query") or "").strip()
+    existing_topic = str(manifest.get("topic") or "").strip()
+    if existing_query and existing_query != query_text:
+        return True
+    if existing_topic and existing_topic != query_text:
+        for rel in ["source-corpus.json", "viral-dna.json", "article.md", "score-report.json", "versions"]:
+            if (workspace / rel).exists():
+                return True
+    return False
+
+
+def _reset_for_new_viral_query(workspace: Path, manifest: dict[str, Any], query: str) -> None:
+    _reset_manifest_progress(manifest)
+    _clear_workspace_paths(workspace, VIRAL_QUERY_RESET_PATHS)
+    manifest.update(
+        {
+            "topic": str(query or "").strip(),
+            "direction": "",
+            "selected_title": "",
+            "source_urls": [],
+        }
+    )
+    for key in [
+        "viral_query",
+        "viral_selection",
+        "viral_selected_count",
+        "research_requirements",
+        "title_score",
+        "title_gate_passed",
+        "score_total",
+        "score_passed",
+        "rewrite_path",
+        "rewrite_preview_score",
+        "rewrite_preview_passed",
+        "evidence_report_path",
+        "evidence_used_count",
+        "versions_manifest_path",
+    ]:
+        manifest.pop(key, None)
+
+
+def _similarity_blockers(workspace: Path) -> list[str]:
+    report = read_json(workspace / "similarity-report.json", default={}) or {}
+    if report.get("available") and not bool(report.get("passed")):
+        failed = list(report.get("failed_items") or [])
+        if failed:
+            details = "；".join(
+                f"{item.get('title')}({', '.join(item.get('failures') or [])})" for item in failed[:3]
+            )
+            return [f"与爆款样本相似度未通过：{details}"]
+        return ["与爆款样本相似度未通过"]
+    return []
+
+
+def _write_viral_analysis_payload(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    topic: str,
+    angle: str,
+    audience: str,
+    content_mode: str,
+) -> dict[str, Any]:
+    corpus = load_source_corpus(workspace)
+    payload = analyze_source_corpus(
+        corpus,
+        topic=topic,
+        angle=angle,
+        audience=audience,
+        content_mode=content_mode,
+        account_strategy=manifest.get("account_strategy") or {},
+    )
+    _update_research_requirements(workspace, manifest, payload["research"])
+    write_research_from_viral_analysis(workspace, payload)
+    manifest.update(
+        {
+            "topic": payload["research"].get("topic") or topic,
+            "direction": payload["research"].get("angle") or angle,
+            "audience": payload["research"].get("audience") or audience,
+            "source_urls": [str(item.get("url") or "").strip() for item in (payload["research"].get("sources") or []) if str(item.get("url") or "").strip()],
+            "research_path": "research.json",
+            "source_corpus_path": "source-corpus.json",
+            "viral_dna_path": "viral-dna.json",
+            "text_provider": "viral-pipeline",
+            "text_model": "heuristic",
+            "viral_blueprint": payload["dna"].get("viral_blueprint") or manifest.get("viral_blueprint") or {},
+            "editorial_blueprint": payload["dna"].get("editorial_blueprint") or manifest.get("editorial_blueprint") or {},
+            "writing_persona": payload["dna"].get("writing_persona") or manifest.get("writing_persona") or {},
+        }
+    )
+    update_stage(manifest, "research", "research_status")
+    save_manifest(workspace, manifest)
+    return payload
 
 
 def cmd_select_topic(args: argparse.Namespace) -> int:
@@ -2486,6 +2703,204 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+def cmd_discover_viral(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
+    query = str(getattr(args, "query", "") or getattr(args, "topic", "") or manifest.get("topic") or manifest.get("selected_title") or "").strip()
+    if not query:
+        raise SystemExit("discover-viral 需要 --query，或当前工作目录里已有 topic。")
+    if _viral_query_changed(workspace, manifest, query):
+        _reset_for_new_viral_query(workspace, manifest, query)
+    platforms = list(getattr(args, "platform", None) or VIRAL_PLATFORM_CHOICES)
+    payload = discover_viral_candidates(
+        query,
+        platforms=platforms,
+        limit_per_platform=int(getattr(args, "limit_per_platform", 6) or 6),
+        account_strategy=manifest.get("account_strategy") or {},
+    )
+    write_discovery_artifacts(workspace, payload)
+    manifest["viral_query"] = query
+    manifest["topic"] = query
+    manifest["viral_discovery_path"] = "viral-discovery.json"
+    manifest["source_urls"] = [str(item.get("url") or "").strip() for item in (payload.get("recommended_selection") or []) if str(item.get("url") or "").strip()]
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_select_viral(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
+    discovery = load_viral_discovery(workspace)
+    if not discovery:
+        raise SystemExit("找不到 viral-discovery.json，请先运行 discover-viral。")
+    indexes = list(getattr(args, "index", None) or [])
+    if not indexes:
+        indexes = _recommended_viral_indexes(discovery)
+    selected = select_viral_candidates(discovery, [int(item) for item in indexes])
+    query = str(discovery.get("query") or manifest.get("viral_query") or manifest.get("topic") or "").strip()
+    if str(manifest.get("viral_query") or "").strip() and str(manifest.get("viral_query") or "").strip() != query:
+        _reset_manifest_progress(manifest)
+    source_urls = [str(item.get("url") or "").strip() for item in selected if str(item.get("url") or "").strip()]
+    manifest.update(
+        {
+            "viral_query": query,
+            "viral_selection": selected,
+            "viral_selected_count": len(selected),
+            "viral_discovery_path": "viral-discovery.json",
+            "source_urls": source_urls,
+        }
+    )
+    if not str(manifest.get("topic") or "").strip():
+        manifest["topic"] = query
+    save_manifest(workspace, manifest)
+    print(
+        json.dumps(
+            {
+                "workspace": str(workspace),
+                "query": query,
+                "selected_indexes": indexes,
+                "selected_count": len(selected),
+                "source_urls": source_urls,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def cmd_collect_viral(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    manifest = attach_account_strategy(workspace, manifest)
+    selected = _selected_viral_from_manifest(manifest)
+    if not selected and list(getattr(args, "index", None) or []):
+        discovery = load_viral_discovery(workspace)
+        selected = select_viral_candidates(discovery, [int(item) for item in list(getattr(args, "index", None) or [])])
+        manifest["viral_selection"] = selected
+    if not selected:
+        raise SystemExit("collect-viral 找不到已选样本。请先运行 select-viral。")
+    payload = collect_source_corpus(selected)
+    write_source_corpus_artifacts(workspace, payload)
+    manifest["source_corpus_path"] = "source-corpus.json"
+    manifest["source_urls"] = [str(item.get("url") or "").strip() for item in (payload.get("items") or []) if str(item.get("url") or "").strip()]
+    manifest["viral_selection"] = list(payload.get("items") or [])
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_analyze_viral(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace, args, include_corpus=False, include_author_memory=True)
+    corpus = load_source_corpus(workspace)
+    if not corpus:
+        raise SystemExit("analyze-viral 找不到 source-corpus.json，请先运行 collect-viral。")
+    topic = str(getattr(args, "topic", "") or manifest.get("topic") or manifest.get("viral_query") or "").strip()
+    if not topic:
+        raise SystemExit("analyze-viral 需要 topic；请传 --topic 或先在工作目录里设好 topic。")
+    angle = str(getattr(args, "angle", "") or manifest.get("direction") or "").strip()
+    audience = str(getattr(args, "audience", "") or manifest.get("audience") or "大众读者").strip()
+    payload = _write_viral_analysis_payload(
+        workspace,
+        manifest,
+        topic=topic,
+        angle=angle,
+        audience=audience,
+        content_mode=manifest.get("content_mode") or "tech-balanced",
+    )
+    print(json.dumps(payload["dna"], ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_adapt_platforms(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace, args)
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    if not article_path.exists():
+        raise SystemExit(f"找不到正文：{article_path}")
+    raw_article = read_text(article_path)
+    meta, body = split_frontmatter(raw_article)
+    selected_title = str(getattr(args, "title", "") or manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名标题").strip()
+    summary = str(getattr(args, "summary", "") or meta.get("summary") or manifest.get("summary") or extract_summary(body)).strip()
+    versions_manifest = write_platform_versions(
+        workspace,
+        article_text=raw_article,
+        selected_title=selected_title,
+        summary=summary,
+        dna_payload=load_viral_dna(workspace),
+    )
+    manifest["versions_manifest_path"] = "versions/manifest.json"
+    save_manifest(workspace, manifest)
+    print(json.dumps(versions_manifest, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_viral_run(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest, style_sample = _prepare_run_manifest(workspace, args)
+    topic = str(getattr(args, "topic", "") or manifest.get("topic") or manifest.get("selected_title") or "").strip()
+    query = str(getattr(args, "query", "") or topic).strip()
+    if not query:
+        raise SystemExit("viral-run 需要 --query 或 --topic。")
+    cmd_discover_viral(
+        argparse.Namespace(
+            workspace=str(workspace),
+            query=query,
+            topic=topic,
+            platform=list(getattr(args, "platform", None) or VIRAL_PLATFORM_CHOICES),
+            limit_per_platform=int(getattr(args, "limit_per_platform", 6) or 6),
+        )
+    )
+    discovery = load_viral_discovery(workspace)
+    indexes = list(getattr(args, "index", None) or []) or _recommended_viral_indexes(discovery)
+    cmd_select_viral(argparse.Namespace(workspace=str(workspace), index=indexes))
+    cmd_collect_viral(argparse.Namespace(workspace=str(workspace), index=[]))
+    cmd_analyze_viral(
+        argparse.Namespace(
+            workspace=str(workspace),
+            topic=topic or query,
+            angle=getattr(args, "angle", None),
+            audience=getattr(args, "audience", None),
+            style_sample=style_sample,
+            content_mode=manifest.get("content_mode") or "tech-balanced",
+            wechat_header_mode=manifest.get("wechat_header_mode") or "drop-title",
+        )
+    )
+
+    if not (workspace / "ideation.json").exists() or not load_ideation(workspace).get("titles"):
+        cmd_titles(argparse.Namespace(workspace=str(workspace), count=args.title_count, selected_title=None))
+    ideation = load_ideation(workspace)
+    if not ideation.get("outline"):
+        cmd_outline(argparse.Namespace(workspace=str(workspace), title=args.title or ideation.get("selected_title"), style_sample=style_sample))
+        ideation = load_ideation(workspace)
+    current_title = args.title or ideation.get("selected_title")
+    cmd_enhance(
+        argparse.Namespace(
+            workspace=str(workspace),
+            title=current_title,
+            style_sample=style_sample,
+            content_mode=manifest.get("content_mode") or "tech-balanced",
+            wechat_header_mode=manifest.get("wechat_header_mode") or "drop-title",
+        )
+    )
+    if not (workspace / "article.md").exists():
+        cmd_write(argparse.Namespace(workspace=str(workspace), title=current_title, outline_file=None, style_sample=style_sample))
+    score_report = _run_revision_loop(workspace, max_rounds=int(getattr(args, "max_revision_rounds", 3) or 3), style_sample=style_sample)
+    manifest = load_manifest(workspace)
+    _finalize_after_score(workspace, manifest, manifest.get("selected_title") or topic or query, score_report)
+    render_blockers = collect_render_blockers(workspace, manifest, score_report)
+    if render_blockers:
+        detail = "\n".join(f"- {item}" for item in render_blockers)
+        raise SystemExit(f"当前稿件不满足 render 前置条件：\n{detail}")
+    _run_image_render_pipeline(workspace, manifest, args)
+    cmd_adapt_platforms(argparse.Namespace(workspace=str(workspace), title=None, summary=None, style_sample=[]))
     return 0
 
 
@@ -3247,6 +3662,10 @@ def cmd_score(args: argparse.Namespace) -> int:
         stop_reason=str(manifest.get("stop_reason") or ""),
     )
     report = apply_research_credibility_boost(report, load_research(workspace))
+    similarity_report = build_source_similarity_report(title, body, manifest, load_source_corpus(workspace))
+    write_similarity_artifacts(workspace, similarity_report)
+    manifest["similarity_report_path"] = "similarity-report.json"
+    report = apply_source_similarity_gate(report, similarity_report)
 
     if not report.get("passed") and not args.no_rewrite:
         if args.rewrite_output:
@@ -3701,6 +4120,49 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     run.set_defaults(func=cmd_run)
 
+    viral_run = subparsers.add_parser("viral-run", help="一键跑爆款发现、采集、拆解、原创改写与公众号版本输出")
+    viral_run.add_argument("--workspace", required=True)
+    viral_run.add_argument("--query")
+    viral_run.add_argument("--topic")
+    viral_run.add_argument("--angle")
+    viral_run.add_argument("--audience")
+    viral_run.add_argument("--title")
+    viral_run.add_argument("--title-count", type=int, default=10)
+    viral_run.add_argument("--index", action="append", type=int, default=[])
+    viral_run.add_argument("--platform", action="append", choices=VIRAL_PLATFORM_CHOICES, default=[])
+    viral_run.add_argument("--limit-per-platform", type=int, default=6)
+    viral_run.add_argument("--content-mode", choices=CONTENT_MODE_CHOICES, default="tech-balanced")
+    viral_run.add_argument("--wechat-header-mode", choices=WECHAT_HEADER_MODE_CHOICES, default="drop-title")
+    viral_run.add_argument("--max-revision-rounds", type=int, default=3)
+    viral_run.add_argument("--style-sample", action="append", default=[])
+    viral_run.add_argument("--to", choices=["render", "publish"], default="render")
+    viral_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    viral_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    viral_run.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
+    viral_run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    viral_run.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    viral_run.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
+    viral_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
+    viral_run.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
+    viral_run.add_argument("--image-theme")
+    viral_run.add_argument("--image-style")
+    viral_run.add_argument("--image-type")
+    viral_run.add_argument("--image-mood")
+    viral_run.add_argument("--image-text-policy", choices=legacy.IMAGE_TEXT_POLICY_CHOICES)
+    viral_run.add_argument("--image-label-language", choices=legacy.IMAGE_LABEL_LANGUAGE_CHOICES)
+    viral_run.add_argument("--custom-visual-brief")
+    viral_run.add_argument("--inline-count", type=int, default=0)
+    viral_run.add_argument("--dry-run-images", action="store_true")
+    viral_run.add_argument("--dry-run-publish", action="store_true")
+    viral_run.add_argument("--confirmed-publish", action="store_true")
+    viral_run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
+    viral_run.add_argument("--openai-model", default="gpt-image-1")
+    viral_run.add_argument("--accent-color", default="#0F766E")
+    viral_run.add_argument("--layout-style", choices=LAYOUT_STYLE_CHOICES)
+    viral_run.add_argument("--layout-skin", choices=LAYOUT_SKIN_CHOICES, default=None)
+    viral_run.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
+    viral_run.set_defaults(func=cmd_viral_run)
+
     discover_topics = subparsers.add_parser("discover-topics", help="联网发现最近 12/24 小时的热点新闻与可写选题")
     discover_topics.add_argument("--workspace", required=True)
     discover_topics.add_argument("--window-hours", type=int, choices=[12, 24], default=24)
@@ -3717,6 +4179,38 @@ def build_parser() -> argparse.ArgumentParser:
     select_topic.add_argument("--angle", help="显式指定切入角度（优先级高于 --angle-index）")
     select_topic.add_argument("--audience", help="显式指定读者画像（缺省沿用 manifest）")
     select_topic.set_defaults(func=cmd_select_topic)
+
+    discover_viral = subparsers.add_parser("discover-viral", help="多平台搜索适合公众号二次创作的爆款样本")
+    discover_viral.add_argument("--workspace", required=True)
+    discover_viral.add_argument("--query")
+    discover_viral.add_argument("--topic")
+    discover_viral.add_argument("--platform", action="append", choices=VIRAL_PLATFORM_CHOICES, default=[])
+    discover_viral.add_argument("--limit-per-platform", type=int, default=6)
+    discover_viral.set_defaults(func=cmd_discover_viral)
+
+    select_viral = subparsers.add_parser("select-viral", help="从 viral-discovery.json 里选中 1~5 篇爆款样本")
+    select_viral.add_argument("--workspace", required=True)
+    select_viral.add_argument("--index", action="append", type=int, default=[])
+    select_viral.set_defaults(func=cmd_select_viral)
+
+    collect_viral = subparsers.add_parser("collect-viral", help="批量抓取已选样本的全文、字幕、评论和互动数据")
+    collect_viral.add_argument("--workspace", required=True)
+    collect_viral.add_argument("--index", action="append", type=int, default=[])
+    collect_viral.set_defaults(func=cmd_collect_viral)
+
+    analyze_viral = subparsers.add_parser("analyze-viral", help="自动拆解爆款基因，并写回 research/blueprint")
+    analyze_viral.add_argument("--workspace", required=True)
+    analyze_viral.add_argument("--topic")
+    analyze_viral.add_argument("--angle")
+    analyze_viral.add_argument("--audience")
+    analyze_viral.add_argument("--style-sample", action="append", default=[])
+    analyze_viral.set_defaults(func=cmd_analyze_viral)
+
+    adapt_platforms = subparsers.add_parser("adapt-platforms", help="输出公众号版本")
+    adapt_platforms.add_argument("--workspace", required=True)
+    adapt_platforms.add_argument("--title")
+    adapt_platforms.add_argument("--summary")
+    adapt_platforms.set_defaults(func=cmd_adapt_platforms)
 
     evidence = subparsers.add_parser("evidence", help="抽取/补齐来源证据句并回写 research.json/source_urls（默认不联网）")
     evidence.add_argument("--workspace", required=True)

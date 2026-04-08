@@ -31,3 +31,10 @@ python -m pytest -q
 ```text
 C:\Users\dsl\.codex\skills\wechat-article-studio
 ```
+
+## Viral Pipeline
+
+- 新增爆款采集链路：`discover-viral -> select-viral -> collect-viral -> analyze-viral -> viral-run -> adapt-platforms`
+- `adapt-platforms` 现在只输出公众号版本，不再生成小红书、微博、B 站版本。
+- 当你用新 query 重新跑 `discover-viral` 或 `viral-run` 时，系统会自动清掉旧样本、旧拆解、旧正文、旧评分和 `versions/`，避免串稿。
+- 详细说明见 [references/viral-pipeline.md](references/viral-pipeline.md)

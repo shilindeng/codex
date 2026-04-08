@@ -24,6 +24,9 @@ MANIFEST_STATUS_DEFAULTS = {
 ARTIFACT_DEFAULTS = {
     "research_path": "research.json",
     "topic_discovery_path": "topic-discovery.json",
+    "viral_discovery_path": "viral-discovery.json",
+    "source_corpus_path": "source-corpus.json",
+    "viral_dna_path": "viral-dna.json",
     "ideation_path": "ideation.json",
     "article_path": "article.md",
     "title_report_path": "title-report.json",
@@ -33,6 +36,7 @@ ARTIFACT_DEFAULTS = {
     "content_fingerprint_path": "content-fingerprint.json",
     "layout_plan_path": "layout-plan.json",
     "acceptance_report_path": "acceptance-report.json",
+    "similarity_report_path": "similarity-report.json",
     "references_path": "references.json",
     "image_plan_path": "image-plan.json",
     "image_outline_path": "image-outline.json",
@@ -41,6 +45,7 @@ ARTIFACT_DEFAULTS = {
     "assembled_path": "assembled.md",
     "html_path": "article.html",
     "wechat_html_path": "article.wechat.html",
+    "versions_manifest_path": "versions/manifest.json",
     "publish_result_path": "publish-result.json",
     "latest_draft_report_path": "latest-draft-report.json",
 }
