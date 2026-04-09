@@ -94,6 +94,7 @@ from core.viral import (
     normalize_outline_payload,
     normalize_review_payload,
     normalize_viral_blueprint,
+    recompute_score_outcome,
 )
 from core.title_decision import build_title_decision_report, markdown_title_decision_report, title_integrity_report
 from providers.text.gemini_web import GeminiWebTextProvider
@@ -101,7 +102,7 @@ from providers.text.openai_compatible import OpenAICompatibleTextProvider, place
 from publishers.wechat import cmd_publish as wechat_publish
 from publishers.wechat import cmd_verify_draft as wechat_verify_draft
 
-PUBLISH_MIN_CREDIBILITY_SCORE = 5
+PUBLISH_MIN_CREDIBILITY_SCORE = 6
 CONTENT_MODE_CHOICES = ("tech-balanced", "tech-credible", "viral")
 WECHAT_HEADER_MODE_CHOICES = ("keep", "drop-title", "drop-title-summary")
 RECENT_CORPUS_LIMIT = 20
@@ -1164,6 +1165,18 @@ def _dedupe_generation_lines(values: list[str]) -> list[str]:
     return output
 
 
+def _has_markdown_table(body: str) -> bool:
+    return bool(re.search(r"(?m)^\|.+\|\s*\n\|(?:\s*:?-+:?\s*\|)+", body or ""))
+
+
+def _analogy_signal_count(body: str) -> int:
+    return len(re.findall(r"(像[^。！？!?；;\n]{1,18}一样|就像|好比|相当于|更像一个|像是在)", body or ""))
+
+
+def _comparison_signal_count(body: str) -> int:
+    return len(re.findall(r"(对比|相比之下|一边[^。！？!?；;\n]{0,18}一边|差别在于|差异在于|更像[^。！？!?；;\n]{0,18}不是)", body or ""))
+
+
 def build_generation_preflight_report(
     title: str,
     body: str,
@@ -1177,11 +1190,20 @@ def build_generation_preflight_report(
     template_findings = generation_template_findings(title, body, manifest)
     enhancement = content_enhancement or manifest.get("content_enhancement") or {}
     section_enhancements = list(enhancement.get("section_enhancements") or []) if isinstance(enhancement, dict) else []
+    has_table = _has_markdown_table(body)
+    analogy_count = _analogy_signal_count(body)
+    comparison_count = _comparison_signal_count(body)
     missing_elements: list[str] = []
     if depth.get("scene_paragraph_count", 0) < 1:
         missing_elements.append("开头缺少具体场景、动作或瞬间。")
     if depth.get("evidence_paragraph_count", 0) < 1:
         missing_elements.append("中段缺少案例、数据或事实托底。")
+    if not has_table:
+        missing_elements.append("正文缺少一张服务判断的数据表格或对比表。")
+    if analogy_count < 1:
+        missing_elements.append("正文缺少类比分析，抽象问题还没被讲直白。")
+    if comparison_count < 1:
+        missing_elements.append("正文缺少明确对比分析，差异还没被讲透。")
     if depth.get("counterpoint_paragraph_count", 0) < 1:
         missing_elements.append("全文缺少反方、误判或适用边界。")
     if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4:
@@ -1191,6 +1213,14 @@ def build_generation_preflight_report(
             missing_elements.append("写前增强已经准备了来源材料，但正文还没把证据真正写进去。")
         if depth.get("scene_paragraph_count", 0) < 1 and any(item.get("detail_anchors") for item in section_enhancements):
             missing_elements.append("写前增强已经规划了场景细节，但首屏还没真正落下现场。")
+        if not has_table and any(item.get("table_targets") for item in section_enhancements):
+            missing_elements.append("写前增强已经要求表格，但正文还没有真正把表格写出来。")
+        if analogy_count < 1 and any(item.get("analogy_targets") for item in section_enhancements):
+            missing_elements.append("写前增强已经要求类比分析，但正文还没有把抽象问题讲直白。")
+        if comparison_count < 1 and any(item.get("comparison_targets") for item in section_enhancements):
+            missing_elements.append("写前增强已经要求对比分析，但正文还没有把差异讲透。")
+        if depth.get("evidence_paragraph_count", 0) < 2 and any(item.get("citation_targets") for item in section_enhancements):
+            missing_elements.append("写前增强已经要求引用或来源化表达，但正文里还不够。")
         if depth.get("counterpoint_paragraph_count", 0) < 1 and any(item.get("counterpoint_targets") for item in section_enhancements):
             missing_elements.append("写前增强已经给了边界提醒，但正文还没把反方或适用边界写进去。")
 
@@ -1212,6 +1242,9 @@ def build_generation_preflight_report(
             "重写小标题，至少用两种不同句法。" if depth.get("heading_monotony") else "",
             "补一个开头场景或动作瞬间。" if depth.get("scene_paragraph_count", 0) < 1 else "",
             "补一处案例、数据或事实支撑。" if depth.get("evidence_paragraph_count", 0) < 1 else "",
+            "补一张能帮助读者看清差异、趋势或成本的 Markdown 表格。" if not has_table else "",
+            "补一段类比分析，把抽象问题讲成人一看就懂的画面。" if analogy_count < 1 else "",
+            "补一段对比分析，讲清楚表面像什么、实际差在哪。" if comparison_count < 1 else "",
             "补一处反方、误判或适用边界。" if depth.get("counterpoint_paragraph_count", 0) < 1 else "",
             "把卡片段落合并成至少一段真正展开的分析。" if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4 else "",
             "删除内部提示语、写作说明和蓝图口吻。" if any(str(item.get("type") or "") == "prompt_leak" for item in ai_smell) else "",
@@ -1223,6 +1256,21 @@ def build_generation_preflight_report(
             (
                 f"优先把这一节的现场写出来：{(section_enhancements[0].get('detail_anchors') or [''])[0]}"
                 if section_enhancements and section_enhancements[0].get("detail_anchors") and depth.get("scene_paragraph_count", 0) < 1
+                else ""
+            ),
+            (
+                f"优先把这一节需要的表格写出来：{(section_enhancements[0].get('table_targets') or [''])[0]}"
+                if section_enhancements and section_enhancements[0].get("table_targets") and not has_table
+                else ""
+            ),
+            (
+                f"优先把这一节的类比补出来：{(section_enhancements[0].get('analogy_targets') or [''])[0]}"
+                if section_enhancements and section_enhancements[0].get("analogy_targets") and analogy_count < 1
+                else ""
+            ),
+            (
+                f"优先把这一节的对比写透：{(section_enhancements[0].get('comparison_targets') or [''])[0]}"
+                if section_enhancements and section_enhancements[0].get("comparison_targets") and comparison_count < 1
                 else ""
             ),
         ]
@@ -1736,24 +1784,22 @@ def apply_research_credibility_boost(report: dict[str, Any], research: dict[str,
     boosted = json.loads(json.dumps(report, ensure_ascii=False))
     target = None
     for item in boosted.get("score_breakdown", []):
-        if item.get("dimension") == "可信度与检索支撑":
+        if item.get("dimension") in {"事实/案例/对比托底", "可信度与检索支撑"}:
             target = item
             break
     if target is None:
         return boosted
-    weight = int(target.get("weight") or 8) or 8
-    bonus = min(weight, max(target.get("score", 0), min(4, len(sources)) + min(4, len(evidence_items))))
+    weight = int(target.get("weight") or 10) or 10
+    bonus = min(weight, max(int(target.get("score", 0) or 0), min(4, len(sources)) + min(4, len(evidence_items)) + 2))
     target["score"] = bonus
-    boosted["total_score"] = sum(item.get("score", 0) for item in boosted.get("score_breakdown", []))
     quality_gates = boosted.get("quality_gates") or {}
     quality_gates["credibility_passed"] = bonus >= PUBLISH_MIN_CREDIBILITY_SCORE
     boosted["quality_gates"] = quality_gates
-    boosted["passed"] = boosted["total_score"] >= boosted.get("threshold", legacy.DEFAULT_THRESHOLD) and all(quality_gates.values())
     weaknesses = normalize_string_list(boosted.get("weaknesses"))
-    if bonus >= 4:
-        weaknesses = [item for item in weaknesses if not item.startswith("可信度与检索支撑")]
+    if bonus >= 6:
+        weaknesses = [item for item in weaknesses if not item.startswith("可信度与检索支撑") and not item.startswith("事实/案例/对比托底")]
     boosted["weaknesses"] = weaknesses
-    return boosted
+    return recompute_score_outcome(boosted)
 
 
 def cmd_research(args: argparse.Namespace) -> int:
@@ -2183,7 +2229,7 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest["score_passed"] = report["passed"]
     mode = (getattr(args, "mode", None) or "improve-score").strip().lower().replace("_", "-")
     if mode == "explosive-score":
-        mode = "improve-score"
+        mode = "stage-1"
     revision_round = int(manifest.get("revision_round") or 0)
     output_name = f"article-rewrite-r{revision_round}.md" if revision_round >= 1 else "article-rewrite.md"
     rewrite = generate_revision_candidate(
@@ -3747,11 +3793,12 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
     manifest["best_round"] = 0
     save_manifest(workspace, manifest)
 
-    best_score = -1
+    best_rank = (-1, -1, -1)
     best_round = 0
     best_article_path = str(manifest.get("article_path") or "article.md")
     scores: list[int] = []
     stop_reason = ""
+    stage_modes = ["stage-1", "stage-2", "stage-3"]
 
     for round_index in range(1, max_rounds + 1):
         manifest = load_manifest(workspace)
@@ -3768,6 +3815,8 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
             "round": round_index,
             "score": score_value,
             "passed": passed,
+            "stage": stage_modes[min(round_index - 1, len(stage_modes) - 1)],
+            "virality_score": int(score_report.get("virality_score") or 0),
             "article_path": str(manifest.get("article_path") or "article.md"),
             "review_report_path": str(manifest.get("review_report_path") or "review-report.json"),
             "score_report_path": str(manifest.get("score_report_path") or "score-report.json"),
@@ -3777,8 +3826,14 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
         manifest["revision_rounds"] = revision_rounds
         save_manifest(workspace, manifest)
 
-        if score_value > best_score:
-            best_score = score_value
+        hard_gate_count = sum(
+            1
+            for name in ["naturalness_floor_passed", "reading_flow_passed", "hook_quality_passed", "ending_naturalness_passed"]
+            if (score_report.get("quality_gates") or {}).get(name)
+        )
+        current_rank = (hard_gate_count, int(score_report.get("virality_score") or 0), score_value)
+        if current_rank > best_rank:
+            best_rank = current_rank
             best_round = round_index
             best_article_path = record["article_path"]
 
@@ -3795,11 +3850,12 @@ def _run_revision_loop(workspace: Path, *, max_rounds: int, style_sample: list[s
                 break
 
         # Next round rewrite: keep per-round artifact via revision_round in manifest.
+        next_mode = stage_modes[min(round_index - 1, len(stage_modes) - 1)]
         cmd_revise(
             argparse.Namespace(
                 workspace=str(workspace),
                 promote=True,
-                mode="explosive-score",
+                mode=next_mode,
                 style_sample=style_sample or [],
             )
         )
@@ -3997,9 +4053,9 @@ def build_parser() -> argparse.ArgumentParser:
     revise.add_argument("--promote", action="store_true", help="将改写稿切换为后续流程默认正文")
     revise.add_argument(
         "--mode",
-        choices=["improve-score", "explosive-score", "de-ai"],
+        choices=["improve-score", "explosive-score", "de-ai", "stage-1", "stage-2", "stage-3"],
         default="improve-score",
-        help="改写模式：爆款提分改写（explosive-score/improve-score）或去 AI 味（de-ai）",
+        help="改写模式：综合提分（improve-score）、阶段化回炉（stage-1/2/3）、爆点增强别名（explosive-score）或去 AI 味（de-ai）",
     )
     revise.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     revise.set_defaults(func=cmd_revise)

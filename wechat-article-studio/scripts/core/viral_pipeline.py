@@ -23,7 +23,7 @@ from core.artifacts import extract_summary, join_frontmatter, now_iso, split_fro
 from core.content_fingerprint import build_article_fingerprint, compare_fingerprints
 from core.editorial_strategy import TITLE_PATTERN_LABELS, normalize_editorial_blueprint, title_template_key
 from core.persona import normalize_writing_persona
-from core.viral import normalize_viral_blueprint
+from core.viral import normalize_viral_blueprint, recompute_score_outcome
 
 PLATFORM_CHOICES = ("wechat", "xiaohongshu", "weibo", "bilibili")
 DISCOVERY_PRIMARY_COUNT = 3
@@ -1469,7 +1469,6 @@ def apply_source_similarity_gate(report: dict[str, Any], similarity_report: dict
     quality_gates["source_similarity_passed"] = bool(similarity_report.get("passed", True))
     updated["quality_gates"] = quality_gates
     updated["source_similarity"] = similarity_report
-    updated["passed"] = updated.get("total_score", 0) >= updated.get("threshold", legacy.DEFAULT_THRESHOLD) and all(quality_gates.values())
     if not similarity_report.get("passed", True):
         mandatory = list(updated.get("mandatory_revisions") or [])
         mandatory.insert(0, "与爆款样本相似度过高，必须继续改写标题、关键段落和结构推进。")
@@ -1477,7 +1476,7 @@ def apply_source_similarity_gate(report: dict[str, Any], similarity_report: dict
         weaknesses = list(updated.get("weaknesses") or [])
         weaknesses.append("来源样本相似度过高，需要拉开标题、段落和结构路线。")
         updated["weaknesses"] = _dedupe_texts(weaknesses, limit=8)
-    return updated
+    return recompute_score_outcome(updated)
 
 
 def write_platform_versions(

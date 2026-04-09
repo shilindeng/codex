@@ -32,18 +32,24 @@ VIRAL_BLUEPRINT_FIELDS = [
     "emotion_value_goals",
 ]
 
-SCORE_WEIGHTS: list[tuple[str, int]] = [
-    ("标题与开头爆点", 10),
-    ("核心观点与副观点", 10),
-    ("说服策略与论证多样性", 10),
-    ("情绪触发与刺痛感", 10),
-    ("金句与传播句密度", 10),
-    ("互动参与与社交货币", 10),
-    ("情感曲线与节奏", 8),
-    ("情感层次与共鸣", 8),
-    ("视角转化与认知增量", 8),
-    ("语言风格自然度", 8),
-    ("可信度与检索支撑", 8),
+SCORE_GROUP_WEIGHTS: dict[str, int] = {
+    "virality": 50,
+    "publishability": 30,
+    "naturalness": 20,
+}
+
+SCORE_DIMENSIONS: list[tuple[str, int, str]] = [
+    ("标题与首屏打开欲", 14, "virality"),
+    ("核心判断与新鲜度", 12, "virality"),
+    ("可转述谈资与金句质量", 10, "virality"),
+    ("评论与传播触发", 8, "virality"),
+    ("峰值时刻设计", 6, "virality"),
+    ("中段推进与结构张力", 12, "publishability"),
+    ("事实/案例/对比托底", 10, "publishability"),
+    ("结尾收束自然度", 8, "publishability"),
+    ("模板腔控制", 8, "naturalness"),
+    ("句式和段落节奏", 6, "naturalness"),
+    ("具体处境/边界/反方", 6, "naturalness"),
 ]
 
 DEFAULT_THRESHOLD = 86
@@ -305,6 +311,14 @@ SEVERE_AI_SMELL_TYPES = {
     "author_starter",
     "prompt_leak",
 }
+
+CRITICAL_QUALITY_GATES = (
+    "naturalness_floor_passed",
+    "reading_flow_passed",
+    "hook_quality_passed",
+    "ending_naturalness_passed",
+    "material_coverage_passed",
+)
 BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "article_archetype",
     "primary_interaction_goal",
@@ -1716,27 +1730,54 @@ def _heuristic_editorial_review(
     novelty = "high" if any(word in body for word in ["误判", "分水岭", "真相", "被忽略", "拐点"]) and depth.get("counterpoint_paragraph_count", 0) >= 1 else "medium"
     template_risk = (
         "high"
-        if len(template_findings) >= 2
+        if len(template_findings) >= 4
         or similarity.get("max_similarity", 0) > 0.38
-        or depth.get("repeated_starter_count", 0) >= 2
-        or depth.get("repeated_sentence_opener_count", 0) >= 2
+        or depth.get("repeated_starter_count", 0) >= 3
+        or depth.get("repeated_sentence_opener_count", 0) >= 3
         or depth.get("heading_monotony")
         or bool(prompt_leaks)
         else "medium" if template_findings else "low"
     )
     citation_restraint = "high" if citation.get("raw_url_count", 0) == 0 else "low"
     ending = " ".join(legacy.list_paragraphs(body)[-2:])
-    ending_naturalness = "high" if ending and not re.search(r"最后给你一个可执行清单|如果你只想记住一句话", ending) else "low"
-    interaction_naturalness = "high" if re.search(r"(如果是你|你会怎么|你更认同|欢迎留言|评论区)", ending) else "low"
+    ending_naturalness = "high" if ending and not re.search(r"最后给你一个可执行清单|如果你只想记住一句话|欢迎留言|评论区见", ending) else "low"
+    if ending_naturalness == "high" and re.search(r"(欢迎留言|评论区见|点个赞|顺手转发)", ending):
+        ending_naturalness = "medium"
+    interaction_naturalness = "medium"
+    if re.search(r"(欢迎留言|评论区见|记得点赞|顺手转发)", ending):
+        interaction_naturalness = "low"
+    elif re.search(r"(如果是你|你会怎么|你更认同)", ending):
+        interaction_naturalness = "high"
+    opening_hook_strength = "high" if reading_desire == "high" and depth.get("scene_paragraph_count", 0) >= 1 else "medium"
+    if reading_desire == "low":
+        opening_hook_strength = "low"
+    expanded_middle = sum(1 for item in legacy.list_paragraphs(body)[1:-1] if 55 <= legacy.cjk_len(item) <= 220)
+    middle_flow_strength = (
+        "high"
+        if expanded_middle >= 1 and not depth.get("outline_like") and depth.get("repeated_starter_count", 0) <= 1 and depth.get("repeated_sentence_opener_count", 0) <= 1
+        else "medium"
+    )
+    if expanded_middle < 1 or depth.get("outline_like"):
+        middle_flow_strength = "low"
+    evidence_support_strength = "high" if depth.get("evidence_paragraph_count", 0) >= 1 and citation.get("reference_count", 0) >= 1 else "medium"
+    if depth.get("evidence_paragraph_count", 0) < 1:
+        evidence_support_strength = "low"
+    human_judgment = "high" if depth.get("counterpoint_paragraph_count", 0) >= 1 and template_risk != "high" else "medium"
+    if depth.get("counterpoint_paragraph_count", 0) < 1 or template_risk == "high":
+        human_judgment = "low"
     return {
         "reading_desire": reading_desire,
         "professional_tone": professional_tone,
         "novelty_of_viewpoint": novelty,
+        "opening_hook_strength": opening_hook_strength,
+        "middle_flow_strength": middle_flow_strength,
+        "evidence_support_strength": evidence_support_strength,
+        "human_judgment": human_judgment,
         "template_risk": template_risk,
         "citation_restraint": citation_restraint,
         "ending_naturalness": ending_naturalness,
         "interaction_naturalness": interaction_naturalness,
-        "summary": "高分稿必须让人想读下去、像专业编辑写的，并且不靠套路完成互动设计。",
+        "summary": "爆款稿先要让人继续读，再让人愿意带走判断；模板感和硬互动都不能替代阅读推进。",
     }
 
 
@@ -2090,6 +2131,170 @@ def normalize_review_payload(
     return result
 
 
+def _dimension_weight(name: str) -> int:
+    for dimension, weight, _group in SCORE_DIMENSIONS:
+        if dimension == name:
+            return weight
+    return 0
+
+
+def _score_item(name: str, score: int | float, note: str) -> dict[str, Any]:
+    weight = _dimension_weight(name)
+    return {
+        "dimension": name,
+        "weight": weight,
+        "score": int(legacy.clamp(int(score or 0), 0, weight)),
+        "note": note,
+    }
+
+
+def _effective_signature_lines(review: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in review.get("viral_analysis", {}).get("signature_lines") or []:
+        text = str(item.get("text") if isinstance(item, dict) else item).strip()
+        cleaned = _clean_sentence(text)
+        if not cleaned or cleaned.startswith("## "):
+            continue
+        if not (10 <= legacy.cjk_len(cleaned) <= 42):
+            continue
+        key = re.sub(r"\s+", "", cleaned)
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(cleaned)
+        if len(values) >= 3:
+            break
+    return values
+
+
+def _explicit_interaction_cta_hits(text: str) -> int:
+    return len(re.findall(r"(欢迎留言|评论区见|评论区聊聊|记得点赞|点个赞|顺手转发|欢迎转发|点在看)", text or ""))
+
+
+def _question_bait_hits(text: str) -> int:
+    return len(re.findall(r"(如果是你|你会怎么|你更认同|你怎么看|你遇到过)", text or ""))
+
+
+def _editorial_points(value: str, *, high: int, medium: int = 0, low: int = 0) -> int:
+    normalized = str(value or "").strip().lower()
+    if normalized == "high":
+        return high
+    if normalized == "medium":
+        return medium
+    return low
+
+
+def _persona_fit_score(manifest: dict[str, Any], review: dict[str, Any], editorial_review: dict[str, Any]) -> int:
+    score = 6
+    if manifest.get("writing_persona") or manifest.get("account_strategy"):
+        score += 1
+    if review.get("persona_findings"):
+        score -= 2
+    else:
+        score += 1 if manifest.get("writing_persona") else 0
+    if review.get("enhancement_findings"):
+        score -= 1
+    if editorial_review.get("template_risk") == "high":
+        score -= 1
+    if editorial_review.get("human_judgment") == "high":
+        score += 1
+    return int(legacy.clamp(score, 0, 10))
+
+
+def _severe_naturalness_hits(review: dict[str, Any], editorial_review: dict[str, Any]) -> int:
+    hits = 0
+    for item in review.get("ai_smell_findings") or []:
+        finding_type = str(item.get("type") or "")
+        count = int(item.get("count") or 0)
+        if finding_type in {"outline_like", "prompt_leak", "heading_monotony"}:
+            hits += 1
+        elif finding_type in {"throat_clearing", "template_phrase"} and count >= 2:
+            hits += 1
+        elif finding_type in {"repeated_starter", "repeated_sentence_opener"} and count >= 3:
+            hits += 1
+        elif finding_type == "binary_contrast" and count >= 15:
+            hits += 1
+    return hits
+
+
+def _reading_flow_metrics(body: str, review: dict[str, Any], editorial_review: dict[str, Any]) -> dict[str, Any]:
+    depth = review.get("depth_signals") or {}
+    paragraphs = legacy.list_paragraphs(body)
+    middle_blocks = paragraphs[1:-1] if len(paragraphs) > 2 else paragraphs
+    expanded_middle = sum(1 for item in middle_blocks if 55 <= legacy.cjk_len(item) <= 220)
+    hard_cta_hits = _explicit_interaction_cta_hits(" ".join(paragraphs[-2:]))
+    return {
+        "expanded_middle_count": expanded_middle,
+        "has_expanded_middle": expanded_middle >= 1,
+        "flow_ok": bool(
+            editorial_review.get("middle_flow_strength") != "low"
+            and not depth.get("outline_like")
+            and expanded_middle >= 1
+            and depth.get("repeated_starter_count", 0) <= 1
+            and depth.get("repeated_sentence_opener_count", 0) <= 1
+            and hard_cta_hits == 0
+        ),
+    }
+
+
+def _build_score_groups(breakdown: list[dict[str, Any]]) -> tuple[dict[str, Any], int, int, int]:
+    groups: dict[str, dict[str, Any]] = {
+        "virality": {"label": "爆款潜力", "weight": SCORE_GROUP_WEIGHTS["virality"], "score": 0, "items": []},
+        "publishability": {"label": "阅读完成度", "weight": SCORE_GROUP_WEIGHTS["publishability"], "score": 0, "items": []},
+        "naturalness": {"label": "去 AI 味与真人感", "weight": SCORE_GROUP_WEIGHTS["naturalness"], "score": 0, "items": []},
+    }
+    for item in breakdown:
+        for dimension, _weight, group in SCORE_DIMENSIONS:
+            if dimension == item.get("dimension"):
+                groups[group]["items"].append(item["dimension"])
+                groups[group]["score"] += int(item.get("score") or 0)
+                break
+    virality = int(groups["virality"]["score"])
+    publishability = int(groups["publishability"]["score"])
+    naturalness = int(groups["naturalness"]["score"])
+    return groups, virality, publishability, naturalness
+
+
+def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
+    updated = json.loads(json.dumps(report or {}, ensure_ascii=False))
+    breakdown = []
+    for item in updated.get("score_breakdown") or []:
+        dimension = str(item.get("dimension") or "").strip()
+        weight = _dimension_weight(dimension) or int(item.get("weight") or 0) or 0
+        score = int(legacy.clamp(int(item.get("score") or 0), 0, weight))
+        breakdown.append({"dimension": dimension, "weight": weight, "score": score, "note": str(item.get("note") or "")})
+    updated["score_breakdown"] = breakdown
+    score_groups, virality_score, publishability_score, naturalness_score = _build_score_groups(breakdown)
+    total_score = int(legacy.clamp(virality_score + publishability_score + naturalness_score, 0, 100))
+    updated["score_groups"] = score_groups
+    updated["virality_score"] = virality_score
+    updated["publishability_score"] = publishability_score
+    updated["naturalness_score"] = naturalness_score
+    updated["naturalness_floor_passed"] = bool((updated.get("quality_gates") or {}).get("naturalness_floor_passed", True))
+    updated["reading_flow_passed"] = bool((updated.get("quality_gates") or {}).get("reading_flow_passed", True))
+    updated["hook_quality_passed"] = bool((updated.get("quality_gates") or {}).get("hook_quality_passed", True))
+    updated["ending_naturalness_passed"] = bool((updated.get("quality_gates") or {}).get("ending_naturalness_passed", True))
+    updated["total_score"] = total_score
+    threshold = int(updated.get("threshold") or DEFAULT_THRESHOLD)
+    quality_gates = dict(updated.get("quality_gates") or {})
+    updated["quality_gates"] = quality_gates
+    required_gate_names = {
+        "title_integrity_passed",
+        "credibility_passed",
+        "evidence_minimum_passed",
+        "prompt_leak_passed",
+        "similarity_passed",
+        "citation_policy_passed",
+        "editorial_review_passed",
+        *CRITICAL_QUALITY_GATES,
+    }
+    if "source_similarity_passed" in quality_gates:
+        required_gate_names.add("source_similarity_passed")
+    updated["passed"] = total_score >= threshold and all(bool(quality_gates.get(name, True)) for name in required_gate_names)
+    return updated
+
+
 def _score_hot_intro(title: str, body: str, review: dict[str, Any]) -> tuple[int, str]:
     intro = legacy.intro_text(body)
     depth = review.get("depth_signals") or _depth_signals(body, review.get("manifest_context") or {})
@@ -2127,7 +2332,7 @@ def _score_argument_diversity(review: dict[str, Any]) -> tuple[int, str]:
     score += min(2, int(depth.get("evidence_paragraph_count") or 0))
     score += 1 if depth.get("counterpoint_paragraph_count", 0) else 0
     score += 1 if depth.get("scene_paragraph_count", 0) else 0
-    return score, "爆款稿不靠单向说教，至少要能在拆解、对比、案例、趋势、场景、步骤里切换 3 种以上。"
+    return min(10, score), "爆款稿不靠单向说教，至少要能在拆解、对比、案例、趋势、场景、步骤里切换 3 种以上。"
 
 
 def _score_emotion_trigger(review: dict[str, Any]) -> tuple[int, str]:
@@ -2299,12 +2504,71 @@ def _image_fit_expectation(title: str, body: str, manifest: dict[str, Any]) -> d
     }
 
 
+def _has_markdown_table(body: str) -> bool:
+    return bool(re.search(r"(?m)^\|.+\|\s*\n\|(?:\s*:?-+:?\s*\|)+", body or ""))
+
+
+def _analogy_signal_count(body: str) -> int:
+    return len(re.findall(r"(像[^。！？!?；;\n]{1,18}一样|就像|好比|相当于|更像一个|像是在)", body or ""))
+
+
+def _comparison_signal_count(body: str) -> int:
+    return len(re.findall(r"(对比|相比之下|一边[^。！？!?；;\n]{0,18}一边|差别在于|差异在于|更像[^。！？!?；;\n]{0,18}不是)", body or ""))
+
+
+def _material_signal_summary(body: str, manifest: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    citation = review.get("citation_findings") or _citation_findings(body, manifest)
+    refs = _references_summary(manifest)
+    depth = review.get("depth_signals") or {}
+    has_table = _has_markdown_table(body)
+    analogy_count = _analogy_signal_count(body)
+    comparison_count = _comparison_signal_count(body)
+    data_points = len(re.findall(r"\d{4}年|\d+(?:\.\d+)?%|\d+倍|\d+万|\d+亿|第\d+", body or ""))
+    case_hits = len(re.findall(r"(案例|复盘|比如|例如|某家公司|某个团队|一次真实项目)", body or ""))
+    citation_hits = int(citation.get("inline_citation_count") or 0) + int(refs.get("reference_count") or 0)
+    material_types: list[str] = []
+    if data_points >= 2:
+        material_types.append("data")
+    if has_table:
+        material_types.append("table")
+    if citation_hits >= 2:
+        material_types.append("citation")
+    if analogy_count >= 1:
+        material_types.append("analogy")
+    if case_hits >= 1 or int(depth.get("evidence_paragraph_count") or 0) >= 1:
+        material_types.append("case")
+    if comparison_count >= 1:
+        material_types.append("comparison")
+    if int(depth.get("counterpoint_paragraph_count") or 0) >= 1:
+        material_types.append("boundary")
+    missing = [name for name in ["data", "table", "citation", "analogy", "comparison", "boundary"] if name not in material_types]
+    return {
+        "material_types": material_types,
+        "coverage_count": len(material_types),
+        "has_table": has_table,
+        "analogy_count": analogy_count,
+        "comparison_count": comparison_count,
+        "data_point_count": data_points,
+        "citation_count": citation_hits,
+        "case_signal_count": case_hits,
+        "missing_materials": missing,
+    }
+
+
+def _material_gate_required(blueprint: dict[str, Any]) -> bool:
+    archetype = str(blueprint.get("article_archetype") or "commentary").strip().lower()
+    return archetype != "narrative"
+
+
 def _build_quality_gates(
     review: dict[str, Any],
     blueprint: dict[str, Any],
     credibility_score: int,
     *,
+    body: str,
+    hot_intro_score: int,
     interaction_score: int,
+    material_signals: dict[str, Any],
     template_penalty_hits: int,
     similarity_findings: dict[str, Any],
     citation_findings: dict[str, Any],
@@ -2315,11 +2579,26 @@ def _build_quality_gates(
     editorial = review.get("editorial_review") or {}
     depth = review.get("depth_signals") or {}
     prompt_leak_hits = [item for item in (review.get("ai_smell_findings") or []) if str(item.get("type") or "") == "prompt_leak"]
+    flow_metrics = _reading_flow_metrics(body, review, editorial)
+    ending_text = " ".join(legacy.list_paragraphs(body)[-2:])
+    hard_cta_hits = _explicit_interaction_cta_hits(ending_text)
+    question_bait_hits = _question_bait_hits(ending_text)
+    severe_naturalness_hits = _severe_naturalness_hits(review, editorial)
+    material_gate_required = _material_gate_required(blueprint)
+    material_coverage_passed = True
+    if material_gate_required:
+        material_coverage_passed = bool(
+            int(material_signals.get("coverage_count") or 0) >= 4
+            and bool(material_signals.get("has_table"))
+            and int(material_signals.get("citation_count") or 0) >= 2
+            and int(material_signals.get("analogy_count") or 0) >= 1
+            and int(material_signals.get("comparison_count") or 0) >= 1
+        )
     return {
         "viral_blueprint_complete": blueprint_complete(blueprint),
-        "interaction_passed": interaction_score >= 6,
-        "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD,
-        "credibility_passed": credibility_score >= 5,
+        "interaction_passed": interaction_score >= 4,
+        "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD and severe_naturalness_hits == 0,
+        "credibility_passed": credibility_score >= 6,
         "title_integrity_passed": bool(title_integrity.get("passed")),
         "evidence_minimum_passed": bool(evidence_readiness.get("passed", True)),
         "prompt_leak_passed": not prompt_leak_hits,
@@ -2327,18 +2606,29 @@ def _build_quality_gates(
             depth.get("scene_paragraph_count", 0) >= 1
             and depth.get("evidence_paragraph_count", 0) >= 1
             and depth.get("counterpoint_paragraph_count", 0) >= 1
+            and flow_metrics.get("has_expanded_middle")
             and not depth.get("outline_like")
         ),
         "structure_passed": bool(
             depth.get("repeated_starter_count", 0) <= 1
             and depth.get("repeated_sentence_opener_count", 0) <= 1
             and not depth.get("heading_monotony")
-            and (depth.get("long_paragraph_count", 0) >= 1 or depth.get("paragraph_count", 0) <= 4)
+            and flow_metrics.get("has_expanded_middle")
         ),
-        "template_penalty_passed": template_penalty_hits <= 1,
+        "template_penalty_passed": template_penalty_hits <= 2 and severe_naturalness_hits == 0,
         "similarity_passed": bool(similarity_findings.get("similarity_passed", True)),
         "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
-        "editorial_review_passed": editorial.get("reading_desire") != "low" and editorial.get("template_risk") != "high" and editorial.get("interaction_naturalness") != "low",
+        "naturalness_floor_passed": severe_naturalness_hits == 0 and editorial.get("template_risk") != "high" and int(review.get("humanness_score") or 0) >= 6,
+        "reading_flow_passed": bool(flow_metrics.get("flow_ok")),
+        "hook_quality_passed": bool(title_integrity.get("passed")) and hot_intro_score >= 8 and editorial.get("opening_hook_strength") != "low",
+        "ending_naturalness_passed": editorial.get("ending_naturalness") != "low" and hard_cta_hits == 0 and question_bait_hits <= 1,
+        "material_coverage_passed": material_coverage_passed,
+        "editorial_review_passed": (
+            editorial.get("opening_hook_strength") != "low"
+            and editorial.get("middle_flow_strength") != "low"
+            and editorial.get("template_risk") != "high"
+            and editorial.get("ending_naturalness") != "low"
+        ),
     }
 
 
@@ -2395,29 +2685,169 @@ def build_score_report(
     humanness_findings = _dedupe(_normalize_list(review.get("humanness_findings")) + derived_humanness_findings)
     evidence_readiness = _evidence_readiness(manifest, body, review | {"depth_signals": depth_signals})
     image_fit_expectation = _image_fit_expectation(title, body, manifest)
+    material_signals = _material_signal_summary(body, manifest, review | {"depth_signals": depth_signals, "citation_findings": citation_findings})
     template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
         similarity_findings.get("repeated_phrases") or []
     )
-    breakdown = [
-        {"dimension": "标题与开头爆点", "weight": 10, "score": hot_intro, "note": hot_intro_note},
-        {"dimension": "核心观点与副观点", "weight": 10, "score": viewpoint_score, "note": viewpoint_note},
-        {"dimension": "说服策略与论证多样性", "weight": 10, "score": argument_score, "note": argument_note},
-        {"dimension": "情绪触发与刺痛感", "weight": 10, "score": emotion_score, "note": emotion_note},
-        {"dimension": "金句与传播句密度", "weight": 10, "score": signature_score, "note": signature_note},
-        {"dimension": "互动参与与社交货币", "weight": 10, "score": interaction_score, "note": interaction_note},
-        {"dimension": "情感曲线与节奏", "weight": 8, "score": curve_score, "note": curve_note},
-        {"dimension": "情感层次与共鸣", "weight": 8, "score": layers_score, "note": layers_note},
-        {"dimension": "视角转化与认知增量", "weight": 8, "score": perspective_score, "note": perspective_note},
-        {"dimension": "语言风格自然度", "weight": 8, "score": style_score, "note": style_note},
-        {"dimension": "可信度与检索支撑", "weight": 8, "score": credibility_score, "note": credibility_note},
+    effective_signatures = _effective_signature_lines(review)
+    analysis = review.get("viral_analysis", {}) or {}
+    ending_text = " ".join(legacy.list_paragraphs(body)[-2:])
+    hard_cta_hits = _explicit_interaction_cta_hits(ending_text)
+    question_bait_hits = _question_bait_hits(ending_text)
+    flow_metrics = _reading_flow_metrics(body, review | {"depth_signals": depth_signals}, editorial_review)
+    opening_hook_score = int(
+        legacy.clamp(
+            4
+            + min(4, hot_intro // 2)
+            + (3 if bool(title_integrity.get("passed")) else 0)
+            + (2 if depth_signals.get("scene_paragraph_count", 0) >= 1 else 0)
+            + _editorial_points(editorial_review.get("opening_hook_strength"), high=1, medium=0, low=-1),
+            0,
+            14,
+        )
+    )
+    judgment_novelty_score = int(
+        legacy.clamp(
+            2
+            + min(3, len(_normalize_list(analysis.get("secondary_viewpoints"))))
+            + (2 if bool(str(analysis.get("core_viewpoint") or "").strip()) else 0)
+            + _editorial_points(editorial_review.get("novelty_of_viewpoint"), high=3, medium=1, low=0)
+            + (2 if depth_signals.get("counterpoint_paragraph_count", 0) >= 1 else 0)
+            + (1 if len(_normalize_list(analysis.get("perspective_shifts"))) >= 2 else 0),
+            0,
+            12,
+        )
+    )
+    signature_quality_score = int(
+        legacy.clamp(
+            2
+            + min(4, len(effective_signatures) * 2)
+            + (2 if len(_normalize_list(analysis.get("social_currency_points"))) >= 2 else 0)
+            + (2 if len(effective_signatures) >= 2 and editorial_review.get("template_risk") != "high" else 0),
+            0,
+            10,
+        )
+    )
+    natural_comment_triggers = [
+        item
+        for item in _normalize_list(analysis.get("comment_triggers"))
+        if item and not item.strip().startswith("##") and not re.search(r"(欢迎留言|评论区见|评论区)", item)
     ]
-    humanness_adjustment = 1 if humanness_score >= 8 else -2 if humanness_score <= 4 else -1 if humanness_score <= 6 else 0
-    total = max(0, min(100, sum(item["score"] for item in breakdown) + humanness_adjustment))
+    interaction_quality_score = int(
+        legacy.clamp(
+            1
+            + min(2, len(natural_comment_triggers))
+            + (2 if len(_normalize_list(analysis.get("social_currency_points"))) >= 2 else 0)
+            + (1 if len(_normalize_list(analysis.get("controversy_anchors"))) >= 1 else 0)
+            + (1 if len(_normalize_list(analysis.get("identity_labels"))) >= 1 else 0)
+            + (1 if len(_normalize_list(analysis.get("share_triggers"))) >= 2 else 0)
+            - hard_cta_hits,
+            0,
+            8,
+        )
+    )
+    peak_moment_score = int(
+        legacy.clamp(
+            1
+            + (2 if str(analysis.get("peak_moment") or "").strip() else 0)
+            + (1 if str(analysis.get("ending_interaction_design") or "").strip() else 0)
+            + (1 if len(_normalize_list(analysis.get("emotion_curve"))) >= 3 else 0)
+            + (1 if flow_metrics.get("has_expanded_middle") else 0),
+            0,
+            6,
+        )
+    )
+    flow_score = int(
+        legacy.clamp(
+            2
+            + _editorial_points(editorial_review.get("middle_flow_strength"), high=4, medium=2, low=0)
+            + (2 if flow_metrics.get("has_expanded_middle") else 0)
+            + (1 if depth_signals.get("repeated_starter_count", 0) <= 1 else 0)
+            + (1 if depth_signals.get("repeated_sentence_opener_count", 0) <= 1 else 0)
+            + (1 if not depth_signals.get("outline_like") else 0)
+            + (1 if 6 <= depth_signals.get("paragraph_count", 0) <= 36 else 0),
+            0,
+            12,
+        )
+    )
+    evidence_backbone_score = int(
+        legacy.clamp(
+            1
+            + min(3, int(depth_signals.get("evidence_paragraph_count") or 0) * 2)
+            + min(2, int((_references_summary(manifest).get("reference_count") or 0) >= 2) * 2)
+            + (2 if depth_signals.get("counterpoint_paragraph_count", 0) >= 1 else 0)
+            + (1 if depth_signals.get("scene_paragraph_count", 0) >= 1 else 0)
+            + (1 if len(_dedupe(_normalize_list(analysis.get("argument_diversity")))) >= 3 else 0)
+            + (1 if material_signals.get("has_table") else 0)
+            + (1 if int(material_signals.get("comparison_count") or 0) >= 1 else 0)
+            + (1 if int(material_signals.get("citation_count") or 0) >= 2 else 0),
+            0,
+            10,
+        )
+    )
+    ending_score = int(
+        legacy.clamp(
+            2
+            + _editorial_points(editorial_review.get("ending_naturalness"), high=4, medium=2, low=0)
+            + (1 if hard_cta_hits == 0 else 0)
+            + (1 if legacy.cjk_len(ending_text) >= 24 else 0)
+            - max(0, question_bait_hits - 1),
+            0,
+            8,
+        )
+    )
+    severe_naturalness_hits = _severe_naturalness_hits(review, editorial_review)
+    template_control_score = int(legacy.clamp(8 - min(7, severe_naturalness_hits * 2 + min(3, template_penalty_hits)), 0, 8))
+    long_sentence_penalty = next(
+        (min(2, max(0, int(item.get("count") or 0) - 2)) for item in (review.get("ai_smell_findings") or []) if str(item.get("type") or "") == "long_sentence_cluster"),
+        0,
+    )
+    rhythm_score = int(
+        legacy.clamp(
+            2
+            + (2 if int(humanness_signals.get("sentence_length_range") or 0) >= 18 else 0)
+            + (1 if int(humanness_signals.get("paragraph_length_range") or 0) >= 40 else 0)
+            + (1 if float(humanness_signals.get("adverb_density") or 0) <= 0.035 else 0)
+            - long_sentence_penalty,
+            0,
+            6,
+        )
+    )
+    scene_boundary_score = int(
+        legacy.clamp(
+            (2 if depth_signals.get("scene_paragraph_count", 0) >= 1 else 0)
+            + (2 if depth_signals.get("counterpoint_paragraph_count", 0) >= 1 else 0)
+            + (1 if depth_signals.get("detail_paragraph_count", 0) >= 2 else 0)
+            + (1 if depth_signals.get("evidence_paragraph_count", 0) >= 1 else 0)
+            + (1 if int(material_signals.get("analogy_count") or 0) >= 1 else 0),
+            0,
+            6,
+        )
+    )
+    breakdown = [
+        _score_item("标题与首屏打开欲", opening_hook_score, "先把人带进问题，再谈后面的爆点。"),
+        _score_item("核心判断与新鲜度", judgment_novelty_score, "爆款稿要有明确判断，而且不是旧话新说。"),
+        _score_item("可转述谈资与金句质量", signature_quality_score, "只认少量真正值钱、能被复述的句子，不再靠数量灌分。"),
+        _score_item("评论与传播触发", interaction_quality_score, "只给自然分歧点、身份认同点和谈资表达记分，不奖励硬互动。"),
+        _score_item("峰值时刻设计", peak_moment_score, "中段要有停下来划线的时刻，但不能靠套路制造。"),
+        _score_item("中段推进与结构张力", flow_score, "中段要真正展开，而不是一串判断卡片。"),
+        _score_item("事实/案例/对比托底", evidence_backbone_score, "有判断，更要有事实、案例和反方托底。"),
+        _score_item("结尾收束自然度", ending_score, "结尾先把判断收住，不靠硬提问和硬互动。"),
+        _score_item("模板腔控制", template_control_score, "爆款不是模板拼装，模板腔越重，分越应该掉。"),
+        _score_item("句式和段落节奏", rhythm_score, "句式和段落要有呼吸感，读者才不会觉得像任务作文。"),
+        _score_item("具体处境/边界/反方", scene_boundary_score, "能看见处境，也能看见边界，文章才立得住。"),
+    ]
+    score_groups, virality_score, publishability_score, naturalness_score = _build_score_groups(breakdown)
+    total = virality_score + publishability_score + naturalness_score
+    humanness_adjustment = 0
     quality_gates = _build_quality_gates(
         review | {"editorial_review": editorial_review, "depth_signals": depth_signals},
         blueprint,
-        credibility_score,
-        interaction_score=interaction_score,
+        evidence_backbone_score,
+        body=body,
+        hot_intro_score=opening_hook_score,
+        interaction_score=interaction_quality_score,
+        material_signals=material_signals,
         template_penalty_hits=template_penalty_hits,
         similarity_findings=similarity_findings,
         citation_findings=citation_findings,
@@ -2432,31 +2862,54 @@ def build_score_report(
             strengths.append(f"{item['dimension']}表现较强：{item['note']}")
         elif ratio < 0.65:
             weaknesses.append(f"{item['dimension']}偏弱：{item['note']}")
+    if material_signals.get("has_table"):
+        strengths.append("正文已经有表格，关键差异更容易一眼看清。")
+    else:
+        weaknesses.append("正文还缺一张服务判断的表格。")
+    if int(material_signals.get("analogy_count") or 0) >= 1:
+        strengths.append("正文已经有类比分析，抽象问题更容易讲直白。")
+    else:
+        weaknesses.append("正文还缺类比分析，抽象问题讲得不够直观。")
+    if int(material_signals.get("comparison_count") or 0) >= 1:
+        strengths.append("正文已经有对比分析，表面像什么和实际差在哪讲得更清楚。")
+    else:
+        weaknesses.append("正文还缺对比分析，差异还没真正讲透。")
+    if int(material_signals.get("citation_count") or 0) >= 2:
+        strengths.append("正文里的来源化表达已经能托住关键判断。")
+    else:
+        weaknesses.append("正文里的引用或来源化表达还不够。")
     failed_gates = [name for name, ok in quality_gates.items() if not ok]
     mandatory_revisions = _dedupe(
         [
             "补齐爆款蓝图，先把主观点、副观点、情绪触发点和论证方式定下来。" if not quality_gates["viral_blueprint_complete"] else "",
-            "补互动设计：显式安排点赞共鸣点、评论问题和可转发谈资。" if interaction_score < 7 else "",
-            "继续清理模板腔，压低 AI 痕迹。" if not quality_gates["de_ai_passed"] else "",
-            "补来源、数据或官方依据，提升可信度。" if not quality_gates["credibility_passed"] else "",
+            "先把标题和首屏钩子拉起来，别让读者在前两段就掉下去。" if not quality_gates["hook_quality_passed"] else "",
+            "先把中段写顺，补出一段真正展开的分析，不要继续堆判断卡片。" if not quality_gates["reading_flow_passed"] else "",
+            "继续清理模板腔，压低 AI 痕迹，别再靠固定反转句和硬互动提分。" if not quality_gates["naturalness_floor_passed"] else "",
+            "补来源、案例、对比或官方依据，让关键判断有托底。" if not quality_gates["credibility_passed"] else "",
+            "把素材补到位：至少 4 类素材、1 张表格、2 处引用、1 段类比、1 段对比分析。" if not quality_gates["material_coverage_passed"] else "",
+            "补一张服务判断的 Markdown 表格，让差异、趋势或成本一眼能看明白。" if not material_signals.get("has_table") else "",
+            "补一段类比分析，把抽象问题讲成读者一听就懂的画面。" if int(material_signals.get("analogy_count") or 0) < 1 else "",
+            "补一段对比分析，讲清楚表面像什么、实际差在哪。" if int(material_signals.get("comparison_count") or 0) < 1 else "",
+            "补至少 2 处自然来源化表达或引用，不要只在文末堆来源。" if int(material_signals.get("citation_count") or 0) < 2 else "",
             "重写标题，先保证语义完整、句法顺和首屏可读。" if not quality_gates["title_integrity_passed"] else "",
             "补足最小证据要求：至少 2 条来源、至少 1 条可写进正文的证据卡。" if not quality_gates["evidence_minimum_passed"] else "",
             "删除成稿里泄漏的内部提示语、写作说明和蓝图口吻。" if not quality_gates["prompt_leak_passed"] else "",
             "补现场、案例和反方边界，让文章真正立起来。" if not quality_gates["depth_passed"] else "",
             "打散段落起手和小标题模式，避免整篇像同一套模板复印。" if not quality_gates["structure_passed"] else "",
             "重写篇章结构和句法节奏，压低模板惩罚。" if not quality_gates["template_penalty_passed"] else "",
-            "根据真人感信号补句长落差、段落节奏和自我修正痕迹。" if humanness_score <= 6 else "",
+            "根据真人感信号补句长落差、段落节奏和自我修正痕迹。" if rhythm_score < 4 else "",
             "重写开头/结尾和标题层级，主动拉开与最近文章的差异。" if not quality_gates["similarity_passed"] else "",
             "把正文裸链接改成自然来源表述，不要再挂 [1][2] 或文末参考资料尾卡。" if not quality_gates["citation_policy_passed"] else "",
-            "先把阅读欲望、专业感和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
+            "先把阅读欲望、中段推进和结尾自然度拉上来，再谈提分。" if not quality_gates["editorial_review_passed"] else "",
+            "结尾要先收束判断，不要硬塞互动和站队问题。" if not quality_gates["ending_naturalness_passed"] else "",
         ]
         + list(review.get("revision_priorities") or [])
     )
     opening_continue_read_risk = (
         "high"
-        if editorial_review.get("reading_desire") == "low" or hot_intro <= 5
+        if editorial_review.get("opening_hook_strength") == "low" or opening_hook_score <= 7
         else "medium"
-        if hot_intro <= 7
+        if opening_hook_score <= 10
         else "low"
     )
     publish_blockers = _dedupe(
@@ -2496,23 +2949,38 @@ def build_score_report(
             ]
             + humanness_findings
         ),
+        "material_actions": _dedupe(
+            [
+                "补一张 Markdown 表格，让读者一眼看懂差异、趋势或成本。" if not material_signals.get("has_table") else "",
+                "补一段类比分析，把抽象问题讲直白。" if int(material_signals.get("analogy_count") or 0) < 1 else "",
+                "补一段对比分析，讲清楚表面像什么、实际差在哪。" if int(material_signals.get("comparison_count") or 0) < 1 else "",
+                "补至少 2 处自然来源化表达或引用。" if int(material_signals.get("citation_count") or 0) < 2 else "",
+            ]
+        ),
         "failed_quality_gates": failed_gates,
         "revision_priorities": list(review.get("revision_priorities") or []),
     }
     ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
-    passed = total >= threshold and all(quality_gates.values())
-    return {
+    report = {
         "title": title,
         "threshold": threshold,
         "total_score": total,
-        "passed": passed,
         "score_breakdown": breakdown,
+        "score_groups": score_groups,
+        "virality_score": virality_score,
+        "publishability_score": publishability_score,
+        "naturalness_score": naturalness_score,
+        "persona_fit_score": _persona_fit_score(manifest, review, editorial_review),
         "strengths": strengths[:5],
         "weaknesses": weaknesses[:5],
         "mandatory_revisions": mandatory_revisions[:7],
         "suggestions": suggestions,
         "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
         "quality_gates": quality_gates,
+        "naturalness_floor_passed": quality_gates.get("naturalness_floor_passed", True),
+        "reading_flow_passed": quality_gates.get("reading_flow_passed", True),
+        "hook_quality_passed": quality_gates.get("hook_quality_passed", True),
+        "ending_naturalness_passed": quality_gates.get("ending_naturalness_passed", True),
         "title_integrity": title_integrity,
         "evidence_readiness": evidence_readiness,
         "image_fit_expectation": image_fit_expectation,
@@ -2525,11 +2993,12 @@ def build_score_report(
         "pain_point_sentences": review.get("pain_point_sentences") or [],
         "ai_smell_findings": review.get("ai_smell_findings") or [],
         "ai_smell_hits": ai_smell_hits,
-        "interaction_score": interaction_score,
+        "interaction_score": interaction_quality_score,
         "template_penalty_hits": template_penalty_hits,
         "template_findings": template_findings,
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
+        "material_signals": material_signals,
         "interaction_findings": interaction_findings,
         "depth_signals": depth_signals,
         "humanness_signals": humanness_signals,
@@ -2545,6 +3014,7 @@ def build_score_report(
         "stop_reason": stop_reason,
         "generated_at": legacy.now_iso(),
     }
+    return recompute_score_outcome(report)
 
 
 def markdown_review_report(review: dict[str, Any]) -> str:
@@ -2640,6 +3110,13 @@ def markdown_score_report(report: dict[str, Any]) -> str:
         f"- 阈值：`{report.get('threshold', DEFAULT_THRESHOLD)}`",
         f"- 结果：`{'通过' if report.get('passed') else '未通过'}`",
     ]
+    if report.get("score_groups"):
+        lines.extend(["", "## 分组得分", ""])
+        for key in ["virality", "publishability", "naturalness"]:
+            item = (report.get("score_groups") or {}).get(key) or {}
+            lines.append(f"- {item.get('label') or key}：`{item.get('score', 0)}` / `{item.get('weight', 0)}`")
+        if report.get("persona_fit_score") not in (None, ""):
+            lines.append(f"- 人设/账号贴合度：`{report.get('persona_fit_score', 0)}` / 10")
     stop_reason = str(report.get("stop_reason") or "").strip()
     if stop_reason:
         lines.append(f"- 停止原因：`{stop_reason}`")
@@ -2649,9 +3126,19 @@ def markdown_score_report(report: dict[str, Any]) -> str:
     if report.get("humanness_score") not in (None, ""):
         lines.extend(["", "## 真人感信号", ""])
         lines.append(f"- 真人感分：`{report.get('humanness_score', 0)}` / 10")
-        lines.append(f"- 调整分：`{report.get('humanness_adjustment', 0)}`")
         for item in report.get("humanness_findings") or []:
             lines.append(f"- {item}")
+    if report.get("material_signals"):
+        material = report.get("material_signals") or {}
+        lines.extend(["", "## 素材覆盖", ""])
+        lines.append(f"- 素材类型数：`{material.get('coverage_count', 0)}`")
+        lines.append(f"- 表格：`{'有' if material.get('has_table') else '无'}`")
+        lines.append(f"- 引用/来源化表达：`{material.get('citation_count', 0)}`")
+        lines.append(f"- 类比分析：`{material.get('analogy_count', 0)}`")
+        lines.append(f"- 对比分析：`{material.get('comparison_count', 0)}`")
+        missing = material.get("missing_materials") or []
+        if missing:
+            lines.append(f"- 缺失：{', '.join(missing)}")
     lines.extend(["", "## 质量门槛", ""])
     for name, ok in (report.get("quality_gates") or {}).items():
         lines.append(f"- {name}：`{'通过' if ok else '未通过'}`")
@@ -2677,6 +3164,10 @@ def markdown_score_report(report: dict[str, Any]) -> str:
             lines.append(f"- 评论引导：{item}")
         for item in suggestions.get("share_points") or []:
             lines.append(f"- 转发谈资：{item}")
+    if suggestions.get("material_actions"):
+        lines.extend(["", "## 素材补强", ""])
+        for item in suggestions.get("material_actions") or []:
+            lines.append(f"- {item}")
     lines.extend(["", "## 下一轮改稿优先级", ""])
     for item in (report.get("suggestions") or {}).get("revision_priorities") or ["优先守住当前爆点和节奏。"]:
         lines.append(f"- {item}")

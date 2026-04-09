@@ -136,7 +136,14 @@ class EnhancementAndPersonaTests(unittest.TestCase):
         self.assertTrue(payload.get("section_enhancements"))
         self.assertTrue(payload["section_enhancements"][0].get("must_include"))
         self.assertTrue(payload["section_enhancements"][0].get("support_quotes"))
+        self.assertTrue(payload["section_enhancements"][0].get("table_targets"))
+        self.assertTrue(payload["section_enhancements"][0].get("analogy_targets"))
+        self.assertTrue(payload["section_enhancements"][0].get("comparison_targets"))
+        self.assertTrue(payload["section_enhancements"][0].get("citation_targets"))
         self.assertTrue(payload.get("shared_materials", {}).get("source_cards"))
+        material_requirements = payload.get("shared_materials", {}).get("material_requirements") or []
+        self.assertTrue(any("表格" in item for item in material_requirements))
+        self.assertTrue(any("类比" in item for item in material_requirements))
 
     def test_cmd_enhance_writes_artifacts_and_persona(self):
         with tempfile.TemporaryDirectory() as tmp:

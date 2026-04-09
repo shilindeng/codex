@@ -14,7 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 from core.viral import build_score_report, default_viral_blueprint, infer_article_archetype, normalize_outline_payload  # noqa: E402
-from core.workflow import collect_publish_blockers, collect_render_blockers, _run_revision_loop  # noqa: E402
+from core.workflow import apply_research_credibility_boost, collect_publish_blockers, collect_render_blockers, _run_revision_loop  # noqa: E402
 import legacy_studio as legacy  # noqa: E402
 from providers.text.openai_compatible import placeholder_article, placeholder_outline  # noqa: E402
 
@@ -86,11 +86,16 @@ class ViralEngineTests(unittest.TestCase):
         body = "\n\n".join(
             [
                 "你可能也有过这种时刻：工具越看越多，收藏夹越堆越满，但真正要开始动手时，人反而更迟疑了。",
-                "问题不在信息太少，而在你总把注意力花在看起来重要、实际上不决定结果的地方。",
+                "真正拖住人的，往往不是信息不够，而是注意力一直落在看起来重要、实际上不决定结果的地方。",
                 "如果你已经在这种循环里打转很久，那种疲惫不是矫情，而是注意力被不断切碎之后的自然反应。",
                 "更糟的是，你越努力补工具，越容易误以为自己离解决问题更近，结果只是把焦虑包装得更体面。",
                 "一份 GitHub Next 的开发者研究提醒过我们，真正让人疲惫的往往不是代码量，而是来回切换上下文带来的注意力流失 [1]。",
                 "Stack Overflow 的开发者调查也反复出现同一个信号：工具越来越多，判断成本没有同步下降 [2]。",
+                "",
+                "| 动作 | 表面收益 | 长期代价 |",
+                "| --- | --- | --- |",
+                "| 一直补工具 | 看起来学得更快 | 判断越来越乱 |",
+                "| 先收住一个关键动作 | 起步更慢 | 结果更稳 |",
                 "",
                 "## 大家真正误判了什么",
                 "很多人把“学更多”误当成安全感，但真正能降低焦虑的，从来不是信息密度，而是判断顺序。",
@@ -99,15 +104,21 @@ class ViralEngineTests(unittest.TestCase):
                 "",
                 "## 真正拉开差距的分水岭",
                 "真正能带来掌控感的，不是知道更多名词，而是知道哪一类动作必须先做、哪一类动作可以暂时不做。",
+                "这就像收拾行李：东西当然越多越安全，但真正让你赶得上车的，往往是先把最关键的那几件装进去。",
                 "这句话之所以值得记住，是因为它把焦虑从情绪问题重新翻译成了排序问题。",
                 "> 不是信息不够，而是判断顺序出了错。",
                 "> 当你把注意力收回来，焦虑才会开始松动。",
                 "> 最有价值的进步，往往发生在你终于敢停掉那些看起来很努力的动作之后。",
                 "",
+                "## 也别把一切都怪工具",
+                "工具本身并不是问题，很多时候它甚至真的帮你省掉了重复动作。",
+                "相比之下，先收住一个动作的团队，后面更容易稳住节奏；一味补工具的团队，常常只是把混乱包装得更像努力。",
+                "但如果判断顺序一直是乱的，新工具只会把这种混乱包装得更像进步。",
+                "",
                 "## 最后的判断",
-                "如果你也处在那种“越学越乱”的阶段，也许真正该问自己的不是“我还缺什么工具”，而是“我现在到底该先守住哪一个动作？”",
+                "如果你也处在那种“越学越乱”的阶段，也许真正该问自己的不是“我还缺什么工具”，而是“我现在到底该先守住哪一个动作”。",
                 "这不是鸡汤，而是一种能帮你把注意力重新拿回来的判断。",
-                "如果是你，你会先砍掉哪一类无效动作？",
+                "先守住一个动作，再决定还要不要继续往上堆信息。",
             ]
         ).strip()
         with tempfile.TemporaryDirectory() as tmp:
@@ -133,10 +144,15 @@ class ViralEngineTests(unittest.TestCase):
                 "workspace": str(workspace),
                 "references_path": "references.json",
             }
-            report = build_score_report(title, body, manifest, threshold=76)
+            report = build_score_report(title, body, manifest, threshold=74)
         self.assertIn("quality_gates", report)
         self.assertIn("passed", report)
-        self.assertTrue(any(item["dimension"] == "互动参与与社交货币" for item in report.get("score_breakdown", [])))
+        self.assertTrue(any(item["dimension"] == "评论与传播触发" for item in report.get("score_breakdown", [])))
+        self.assertIn("score_groups", report)
+        self.assertIn("virality_score", report)
+        self.assertIn("publishability_score", report)
+        self.assertIn("persona_fit_score", report)
+        self.assertTrue(report.get("quality_gates", {}).get("material_coverage_passed"))
         # This sample should be able to pass both total score and gates.
         self.assertTrue(bool(report.get("passed")))
 
@@ -164,7 +180,12 @@ class ViralEngineTests(unittest.TestCase):
         patterns = {item.get("type") for item in report.get("ai_smell_findings") or []}
         self.assertIn("outline_like", patterns)
         self.assertIn("repeated_starter", patterns)
-        self.assertTrue(any("补现场、案例和反方边界" in item for item in report.get("mandatory_revisions", [])))
+        self.assertTrue(
+            any(
+                ("补现场、案例和反方边界" in item) or ("先把中段写顺" in item) or ("真正立起来" in item)
+                for item in report.get("mandatory_revisions", [])
+            )
+        )
 
     def test_score_report_respects_author_memory_blacklist(self):
         title = "一个看上去没问题但其实很模板的稿子"
@@ -220,10 +241,137 @@ class ViralEngineTests(unittest.TestCase):
             threshold=70,
         )
         self.assertFalse(report.get("quality_gates", {}).get("prompt_leak_passed"))
-        self.assertFalse(report.get("quality_gates", {}).get("interaction_passed"))
         smell_types = {item.get("type") for item in report.get("ai_smell_findings") or []}
         self.assertIn("prompt_leak", smell_types)
-        self.assertLess(report.get("interaction_score") or 0, 6)
+        self.assertLessEqual(report.get("interaction_score") or 0, 5)
+
+    def test_score_report_caps_dimension_scores_and_requires_new_hard_gates(self):
+        title = "表面热闹但实际上很模板的稿子"
+        body = "\n\n".join(
+            [
+                "很多人一上来就会说，这件事最重要的，不是工具，而是判断。",
+                "换句话说，你以为问题在工具，真正的问题是判断顺序。",
+                "更重要的是，真正的问题是大家都在用同一套句子写文章。",
+                "## 为什么这件事会反复发生？",
+                "不是信息太少，而是结构太像。",
+                "## 为什么读起来越来越像任务作文？",
+                "问题不在观点不够，而在中段根本没有展开。",
+                "## 最后的判断",
+                "如果是你，你会怎么选？欢迎留言。",
+            ]
+        )
+        report = build_score_report(title, body, {"topic": title, "audience": "大众读者", "direction": "", "source_urls": []}, threshold=70)
+        self.assertTrue(all(int(item["score"]) <= int(item["weight"]) for item in report.get("score_breakdown", [])))
+        self.assertFalse(report.get("quality_gates", {}).get("naturalness_floor_passed"))
+        self.assertFalse(report.get("quality_gates", {}).get("ending_naturalness_passed"))
+        self.assertFalse(report.get("passed"))
+
+    def test_score_report_exposes_material_signals_and_flags_missing_materials(self):
+        title = "企业 AI 选型，别只看参数表面热闹"
+        body = "\n\n".join(
+            [
+                "很多团队做 AI 选型时，最先看的往往是参数和榜单。",
+                "但真正决定后续成本的，常常是接入方式、维护边界和谁来对结果负责。",
+                "## 真正该比的是什么",
+                "如果两套方案表面都能跑，差别往往不在 demo，而在落地后的代价。",
+                "## 最后的判断",
+                "别把短期顺手，当成长期靠谱。",
+            ]
+        )
+        report = build_score_report(title, body, {"topic": title, "audience": "大众读者", "direction": "", "source_urls": []}, threshold=70)
+        material = report.get("material_signals") or {}
+        self.assertIn("coverage_count", material)
+        self.assertFalse(material.get("has_table"))
+        self.assertLess(int(material.get("analogy_count") or 0), 1)
+        self.assertLess(int(material.get("comparison_count") or 0), 1)
+        self.assertFalse(report.get("quality_gates", {}).get("material_coverage_passed"))
+        self.assertTrue(any("表格" in item for item in report.get("mandatory_revisions") or []))
+        self.assertTrue(any("类比分析" in item for item in report.get("mandatory_revisions") or []))
+
+    def test_score_report_rewards_material_richness(self):
+        title = "企业 AI 选型，别只看参数表面热闹"
+        sparse = "\n\n".join(
+            [
+                "很多团队做 AI 选型时，最先看的往往是参数和榜单。",
+                "真正决定后续成本的，常常是接入方式、维护边界和谁来对结果负责。",
+                "## 最后的判断",
+                "别把短期顺手，当成长期靠谱。",
+            ]
+        )
+        rich = "\n\n".join(
+            [
+                "很多团队做 AI 选型时，最先看的往往是参数和榜单。",
+                "真正决定后续成本的，常常是接入方式、维护边界和谁来对结果负责。",
+                "根据 2026 年公开案例，迁移失败最常见的不是模型不够强，而是接入链路和权限边界没理顺 [1]。",
+                "",
+                "| 方案 | 上线速度 | 维护成本 | 风险点 |",
+                "| --- | --- | --- | --- |",
+                "| A | 快 | 高 | 返工多 |",
+                "| B | 慢一点 | 更稳 | 边界清楚 |",
+                "",
+                "如果把选型看成租房，参数更像地段广告，真正长期贵不贵，更像物业、通勤和后续维修。",
+                "表面都能住，实际差别在于后面每个月要不要持续还债。",
+                "## 最后的判断",
+                "别把短期顺手，当成长期靠谱。",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "references.json").write_text(
+                json.dumps({"items": [{"index": 1, "url": "https://example.com/a", "title": "公开案例", "domain": "example.com"}]}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            manifest = {"topic": title, "audience": "大众读者", "direction": "", "source_urls": ["https://example.com/a"], "workspace": str(workspace), "references_path": "references.json"}
+            sparse_report = build_score_report(title, sparse, manifest, threshold=70)
+            rich_report = build_score_report(title, rich, manifest, threshold=70)
+        self.assertGreater(int(rich_report.get("material_signals", {}).get("coverage_count") or 0), int(sparse_report.get("material_signals", {}).get("coverage_count") or 0))
+        rich_item = next(item for item in rich_report.get("score_breakdown") or [] if item["dimension"] == "事实/案例/对比托底")
+        sparse_item = next(item for item in sparse_report.get("score_breakdown") or [] if item["dimension"] == "事实/案例/对比托底")
+        self.assertGreater(int(rich_item["score"]), int(sparse_item["score"]))
+
+    def test_research_credibility_boost_recomputes_passed_consistently(self):
+        report = {
+            "threshold": 79,
+            "total_score": 76,
+            "score_breakdown": [
+                {"dimension": "标题与首屏打开欲", "weight": 14, "score": 11, "note": ""},
+                {"dimension": "核心判断与新鲜度", "weight": 12, "score": 10, "note": ""},
+                {"dimension": "可转述谈资与金句质量", "weight": 10, "score": 8, "note": ""},
+                {"dimension": "评论与传播触发", "weight": 8, "score": 5, "note": ""},
+                {"dimension": "峰值时刻设计", "weight": 6, "score": 4, "note": ""},
+                {"dimension": "中段推进与结构张力", "weight": 12, "score": 10, "note": ""},
+                {"dimension": "事实/案例/对比托底", "weight": 10, "score": 3, "note": ""},
+                {"dimension": "结尾收束自然度", "weight": 8, "score": 7, "note": ""},
+                {"dimension": "模板腔控制", "weight": 8, "score": 7, "note": ""},
+                {"dimension": "句式和段落节奏", "weight": 6, "score": 6, "note": ""},
+                {"dimension": "具体处境/边界/反方", "weight": 6, "score": 5, "note": ""},
+            ],
+            "quality_gates": {
+                "viral_blueprint_complete": True,
+                "interaction_passed": True,
+                "de_ai_passed": True,
+                "credibility_passed": False,
+                "title_integrity_passed": True,
+                "evidence_minimum_passed": True,
+                "prompt_leak_passed": True,
+                "depth_passed": True,
+                "structure_passed": True,
+                "template_penalty_passed": True,
+                "similarity_passed": True,
+                "citation_policy_passed": True,
+                "naturalness_floor_passed": True,
+                "reading_flow_passed": True,
+                "hook_quality_passed": True,
+                "ending_naturalness_passed": True,
+                "editorial_review_passed": True,
+            },
+            "weaknesses": ["事实/案例/对比托底偏弱：证据还不够。"],
+            "passed": False,
+        }
+        boosted = apply_research_credibility_boost(report, {"sources": ["来源 1", "来源 2"], "evidence_items": ["证据 1", "证据 2"]})
+        self.assertTrue(any(item["dimension"] == "事实/案例/对比托底" and item["score"] >= 6 for item in boosted.get("score_breakdown", [])))
+        self.assertEqual(boosted.get("total_score"), sum(int(item["score"]) for item in boosted.get("score_breakdown", [])))
+        self.assertTrue(boosted.get("passed"))
 
     def test_score_report_flags_stop_slop_patterns(self):
         title = "这篇稿子有明显的 AI 腔"

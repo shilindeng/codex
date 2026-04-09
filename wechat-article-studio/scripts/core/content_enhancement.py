@@ -220,6 +220,64 @@ def _counterpoint_targets(section: dict[str, Any], archetype: str) -> list[str]:
     ]
 
 
+def _table_targets(title: str, section: dict[str, Any], archetype: str) -> list[str]:
+    heading = _normalize_text(str(section.get("heading") or title or "这一节"))
+    evidence_need = _normalize_text(str(section.get("evidence_need") or ""))
+    if archetype == "tutorial":
+        return [
+            f"围绕“{heading}”补一张小表格，至少列出步骤、常见错误和判断依据。",
+            "表格优先帮助读者快速看清顺序、条件或成本，不要做装饰。",
+        ]
+    if any(word in f"{heading} {evidence_need}" for word in ["对比", "选型", "成本", "差异", "趋势", "分水岭", "判断"]):
+        return [
+            f"围绕“{heading}”补一张 2 到 4 列的小表格，帮助读者一眼看懂差异、趋势或成本。",
+            "表格必须服务判断，至少要能回答“差在哪”“贵在哪”或“该怎么选”。",
+        ]
+    return [
+        f"如果“{heading}”里出现多个对象、阶段或结果，优先补一张表格把差异讲清楚。",
+        "没有结构化表格时，至少提前想好指标、现状、风险、判断这几列该怎么摆。",
+    ]
+
+
+def _analogy_targets(title: str, section: dict[str, Any]) -> list[str]:
+    heading = _normalize_text(str(section.get("heading") or title or "这一节"))
+    return [
+        f"围绕“{heading}”补一段类比分析，把抽象问题讲成读者一听就懂的画面。",
+        "类比要服务解释，不要为了好看硬凑比喻。",
+    ]
+
+
+def _comparison_targets(title: str, section: dict[str, Any], archetype: str) -> list[str]:
+    heading = _normalize_text(str(section.get("heading") or title or "这一节"))
+    if archetype == "tutorial":
+        return [
+            f"围绕“{heading}”补一个做对与做错的对比，让读者知道差别会落在哪。",
+            "对比要落到结果、成本或适用条件，别只写抽象判断。",
+        ]
+    return [
+        f"围绕“{heading}”补一段对比分析，讲清表面像什么、实际差在哪。",
+        "对比至少要落到对象、路径、成本、风险中的一项。",
+    ]
+
+
+def _citation_targets(section: dict[str, Any], research: dict[str, Any], evidence_report: dict[str, Any] | None = None) -> list[str]:
+    cards = _source_cards(research, evidence_report)
+    quotes = _evidence_quotes(research, evidence_report)
+    output: list[str] = []
+    for item in quotes[:2]:
+        text = _normalize_text(str(item.get("text") or ""))
+        if text:
+            output.append(f"把这条证据自然写进正文：{text}")
+    for item in cards[:2]:
+        title_text = _normalize_text(str(item.get("title") or item.get("url") or "来源"))
+        if title_text:
+            output.append(f"把“{title_text}”自然融进句子，不要只在文末挂来源。")
+    if not output:
+        heading = _normalize_text(str(section.get("heading") or "这一节"))
+        output = [f"围绕“{heading}”至少补 2 处来源化表达，让判断有出处。"] 
+    return _dedupe(output)[:4]
+
+
 def _section_must_include(strategy: str, section: dict[str, Any], title: str) -> list[str]:
     heading = _normalize_text(str(section.get("heading") or title or ""))
     if strategy == "angle-discovery":
@@ -282,6 +340,12 @@ def _shared_materials(
         "core_judgment": core_judgment,
         "mainstream_views": secondary[:4],
         "counter_angles": counter_angles,
+        "material_requirements": [
+            "正文至少落下 4 类素材：数据、表格、引用、类比、案例、对比分析、反方/边界。",
+            "至少补 1 个 Markdown 表格，而且表格必须帮助读者看懂差异、趋势或成本。",
+            "至少补 2 处自然来源化表达或引用，不要只在文末堆来源。",
+            "至少补 1 段类比分析和 1 段对比分析，把抽象问题讲直白。",
+        ],
         "evidence_targets": [item.get("text") or "" for item in evidence_items[:4]],
         "source_cards": sources[:4],
         "evidence_quotes": evidence_items[:4],
@@ -324,11 +388,15 @@ def build_content_enhancement(
         [
             "至少有一节明确补场景或动作瞬间。",
             "至少有一节明确补案例、数据或事实托底。",
+            "至少有一节明确补表格，帮助读者更快看懂差异、趋势或成本。",
+            "至少有一节明确补类比分析，把抽象概念讲直白。",
+            "至少有一节明确补对比分析，讲清表面像什么、实际差在哪。",
+            "正文至少出现 2 处自然来源化表达或引用。",
             "至少有一节明确补反方、误判或适用边界。",
             "不要把所有段落都写成判断句卡片。",
         ]
         + [f"这篇稿子默认使用“{strategy_meta['label']}”策略。", strategy_meta["goal"]]
-    )[:6]
+    )[:8]
     section_enhancements = []
     all_quotes = _evidence_quotes(research, evidence_report)
     all_sources = _source_cards(research, evidence_report)
@@ -342,6 +410,10 @@ def build_content_enhancement(
                 "section_goal": _normalize_text(str(section.get("goal") or "展开该章节")),
                 "must_include": _section_must_include(strategy, section, title),
                 "evidence_targets": _section_evidence_targets(section, research, evidence_report),
+                "table_targets": _table_targets(title, section, archetype),
+                "analogy_targets": _analogy_targets(title, section),
+                "comparison_targets": _comparison_targets(title, section, archetype),
+                "citation_targets": _citation_targets(section, research, evidence_report),
                 "detail_anchors": _detail_anchors(title, section, archetype),
                 "counterpoint_targets": _counterpoint_targets(section, archetype),
                 "support_quotes": matched_quotes,
@@ -380,6 +452,8 @@ def markdown_content_enhancement(payload: dict[str, Any]) -> str:
         lines.append(f"核心判断：{shared['core_judgment']}")
     for item in shared.get("counter_angles") or []:
         lines.append(f"角度提醒：{item}")
+    for item in shared.get("material_requirements") or []:
+        lines.append(f"素材要求：{item}")
     for item in shared.get("evidence_targets") or []:
         lines.append(f"证据目标：{item}")
     for item in shared.get("source_cards") or []:
@@ -393,7 +467,7 @@ def markdown_content_enhancement(payload: dict[str, Any]) -> str:
     for item in payload.get("section_enhancements") or []:
         heading = item.get("heading") or "未命名章节"
         lines.append(f"章节：{heading}")
-        for field in ["must_include", "evidence_targets", "detail_anchors", "counterpoint_targets"]:
+        for field in ["must_include", "evidence_targets", "table_targets", "analogy_targets", "comparison_targets", "citation_targets", "detail_anchors", "counterpoint_targets"]:
             for value in item.get(field) or []:
                 lines.append(f"{heading} / {field}：{value}")
         for support in item.get("support_quotes") or []:

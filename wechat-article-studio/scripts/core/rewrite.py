@@ -122,10 +122,13 @@ def generate_revision_candidate(
 
     provider = _active_text_provider_for_rewrite()
     mode = (mode or "improve-score").strip().lower().replace("_", "-")
-    if mode not in {"improve-score", "de-ai"}:
+    if mode == "explosive-score":
+        mode = "stage-1"
+    if mode not in {"improve-score", "de-ai", "stage-1", "stage-2", "stage-3"}:
         mode = "improve-score"
 
     triggered_dimensions = _low_dimensions(report)
+    material_actions = list((report.get("suggestions") or {}).get("material_actions") or [])
     applied_actions: list[str] = []
     rewritten_body = ""
     provider_name = ""
@@ -170,10 +173,39 @@ def generate_revision_candidate(
                 "- 保持 Markdown 结构（H2/H3、列表、引用、代码块），不要输出解释。\n"
             )
             applied_actions.append("模型改写：去 AI 味与节奏优化")
+        elif mode == "stage-1":
+            rewrite_goal = (
+                "阶段 1 改写：爆点增强，但不能靠模板冲分。\n"
+                "- 只优先修标题、首屏钩子和中段峰值判断。\n"
+                "- 开头尽快把读者带进问题，但不要喊口号，也不要“先说结论”。\n"
+                "- 中段补一个真正值得划线的判断或对比，不要只是多写几句类似金句。\n"
+                "- 不碰结尾互动设计，不要加“如果是你/欢迎留言/评论区见”。\n"
+                "- 保持事实边界，不编造数据，不改坏原文结构。\n"
+            )
+            applied_actions.append("模型改写：阶段 1 首屏与爆点增强")
+        elif mode == "stage-2":
+            rewrite_goal = (
+                "阶段 2 改写：模板腔清理与阅读顺畅修复。\n"
+                "- 优先清理“不是X，而是Y”“换句话说”“更重要的是”等高频模板句。\n"
+                "- 压缩长句，打散重复起手和同质化小标题。\n"
+                "- 如果正文像判断卡片，就合并出一两段真正展开的分析段。\n"
+                "- 不额外补互动口号，不要硬塞评论问题。\n"
+                "- 保持 Markdown 结构和原始事实。\n"
+            )
+            applied_actions.append("模型改写：阶段 2 去模板腔与节奏修复")
+        elif mode == "stage-3":
+            rewrite_goal = (
+                "阶段 3 改写：自然传播点与收尾优化。\n"
+                "- 只在正文已经顺的前提下，补一两处可转述判断或传播表达。\n"
+                "- 结尾优先收束全文判断，允许留下余味，但不要硬塞互动问题。\n"
+                "- 可以强化一条值得复述的判断，不要再堆身份标签和站队点。\n"
+                "- 不要把文章改回模板爆款腔。\n"
+            )
+            applied_actions.append("模型改写：阶段 3 自然传播点与结尾优化")
         else:
             rewrite_goal = (
                 "爆款提分改写：\n"
-                "- 优先修复最影响阅读完成度和传播力的 3 个问题，而不是机械套模板。\n"
+                "- 先修标题、首屏和中段推进，再补自然传播表达。\n"
                 "- 开头可以用场景、反差、问题、细节或新闻切口，不要默认“先说结论”。\n"
                 "- 结尾只有在教程/方法文里才适合给动作；分析稿优先用判断、余味、风险提醒或趋势观察收束。\n"
                 "- 补情绪价值句和刺痛句，但不要让整篇变成统一口号。\n"
@@ -185,18 +217,21 @@ def generate_revision_candidate(
             )
             applied_actions.append("模型改写：按评分短板提分优化")
 
-            context = {
-                "mode": mode,
-                "title": title,
-                "audience": manifest.get("audience") or "公众号读者",
-                "direction": manifest.get("direction") or "",
-                "summary": meta.get("summary") or manifest.get("summary") or extract_summary(before_body),
-                "article_body": humanizerai_seed_body if mode == "de-ai" else before_body,
-                "source_article_body": before_body,
-                "rewrite_goal": rewrite_goal,
+        context = {
+            "mode": mode,
+            "title": title,
+            "audience": manifest.get("audience") or "公众号读者",
+            "direction": manifest.get("direction") or "",
+            "summary": meta.get("summary") or manifest.get("summary") or extract_summary(before_body),
+            "article_body": humanizerai_seed_body if mode == "de-ai" else before_body,
+            "source_article_body": before_body,
+            "rewrite_goal": rewrite_goal,
+            "rewrite_stage": mode if mode.startswith("stage-") else "",
             "mandatory_revisions": report.get("mandatory_revisions") or [],
             "weaknesses": report.get("weaknesses") or [],
             "suggestions": report.get("suggestions") or {},
+            "material_signals": report.get("material_signals") or {},
+            "material_actions": material_actions,
             "score_breakdown": report.get("score_breakdown") or [],
             "viral_blueprint": report.get("viral_blueprint") or manifest.get("viral_blueprint") or {},
             "viral_analysis": report.get("viral_analysis") or {},
@@ -211,19 +246,19 @@ def generate_revision_candidate(
             "recent_corpus_summary": manifest.get("recent_corpus_summary") or {},
             "corpus_root": manifest.get("corpus_root") or "",
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
-                "author_memory": manifest.get("author_memory") or {},
-                "writing_persona": manifest.get("writing_persona") or {},
-                "content_enhancement": legacy.read_json(workspace / "content-enhancement.json", default={}) or {},
-                "humanness_signals": report.get("humanness_signals") or {},
-                "humanizerai_detection": humanizerai_before or {},
-                "humanizerai_humanized_body": humanizerai_seed_body if humanizerai_applied else "",
-            }
-            result = provider.revise_article(context)
+            "author_memory": manifest.get("author_memory") or {},
+            "writing_persona": manifest.get("writing_persona") or {},
+            "content_enhancement": legacy.read_json(workspace / "content-enhancement.json", default={}) or {},
+            "humanness_signals": report.get("humanness_signals") or {},
+            "humanizerai_detection": humanizerai_before or {},
+            "humanizerai_humanized_body": humanizerai_seed_body if humanizerai_applied else "",
+        }
+        result = provider.revise_article(context)
         provider_name = result.provider
         provider_model = result.model
         rewritten_body = strip_leading_h1(str(result.payload or ""), title).strip() + "\n"
     else:
-        if mode == "de-ai":
+        if mode in {"de-ai", "stage-2"}:
             seed_for_cleanup = humanizerai_seed_body if humanizerai_applied else before_body
             rewritten_body = legacy.cleanup_rewrite_markdown(seed_for_cleanup) or seed_for_cleanup
             if not humanizerai_applied:
@@ -238,7 +273,18 @@ def generate_revision_candidate(
             # Legacy already wrote files; we will augment the rewrite.json below for consistency.
             _, rewritten_body = legacy.split_frontmatter(read_text(output_path))
             rewritten_body = strip_leading_h1(rewritten_body, title).strip() + "\n"
-            applied_actions.extend(list(legacy_rewrite.get("applied_actions") or []) or ["规则改写：按评分短板提分"])
+            fallback_action = {
+                "stage-1": "规则改写：阶段 1 首屏与爆点增强",
+                "stage-3": "规则改写：阶段 3 收尾与传播表达优化",
+            }.get(mode, "规则改写：按评分短板提分")
+            applied_actions.extend(list(legacy_rewrite.get("applied_actions") or []) or [fallback_action])
+
+    if rewritten_body:
+        rewrite_meta = dict(meta)
+        rewrite_meta["title"] = title
+        rewrite_meta["summary"] = meta.get("summary") or manifest.get("summary") or extract_summary(rewritten_body)
+        rewrite_meta["rewrite_from"] = meta.get("title") or title
+        write_text(output_path, join_frontmatter(rewrite_meta, rewritten_body))
 
     threshold = int(report.get("threshold") or legacy.DEFAULT_THRESHOLD)
     preview_report = legacy.build_score_report(title, rewritten_body, manifest, threshold)
@@ -277,6 +323,7 @@ def generate_revision_candidate(
     rewrite_payload = {
         "output_path": output_path.name,
         "mode": mode,
+        "stage": mode if mode.startswith("stage-") else "",
         "report_path": report_path.name,
         "diff_metrics": diff_metrics,
         "triggered_dimensions": triggered_dimensions,

@@ -313,6 +313,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果输入包含 writing_persona，要让大纲的开头方式、证据摆法和收束方式服从它，不要只认你最熟悉的篇型模板。"
                     "如果输入包含 fingerprint_collision_notes，必须主动换开头路数、证据组织、互动目标或结尾收束，不能只换词。"
                     "大纲必须主动分配深度：至少有一个“现场/案例/具体瞬间”章节，一个“误判/反方/边界”章节，一个“最后判断/收束”章节。"
+                    "大纲还必须提前分配素材：至少明确哪一节放数据或案例，哪一节放表格，哪一节放引用，哪一节做类比，哪一节做对比分析。"
                     "不要让所有小标题都长得像同一类问句、编号句或判断句。"
                 ),
             },
@@ -343,11 +344,12 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果输入带有 author_memory，就把它当成作者作战卡：先服从 hard_rules，再服从 playbook_summary、voice_fingerprint、lesson_patterns，soft_rules 只作次级参考。"
                     "如果输入带有 writing_persona，要让语气、段落节奏、证据呈现和收尾习惯服从它。"
                     "如果输入带有 content_enhancement，必须把里面的 hard_requirements、shared_materials、section_enhancements 当成正文硬材料，不要忽略。"
+                    "如果写前增强里出现 table_targets、analogy_targets、comparison_targets、citation_targets，必须把它们真正写进正文，不要只留在计划里。"
                     "如果输入带有 example_snippets/exemplar_snippets，只把它们当语感示例，不能复写原句。"
                     "如果输入带有 layout_plan，正文必须给这些版式模块留出自然材料，不要写到最后只剩空洞判断。"
                     "输入里的 must_have_elements、generation_guardrails、preflight_checklist、heading_variation_rule、paragraph_variation_rule 都是生成阶段硬约束。输出前先自查，再给最终正文。"
-                    "牢记：高互动文章 = 情绪价值（共鸣/争议） + 社交货币（谈资/身份） + 峰终体验。"
-                    "优先服务输入中的 primary_interaction_goal，只把 secondary_interaction_goal 作为辅助，不要三种互动全开。"
+                    "牢记：爆款潜力建立在阅读推进之上。先把开头钩住、判断讲透、证据托住，再自然形成可传播表达。"
+                    "优先服务输入中的 primary_interaction_goal，但不要把点赞、评论、转发写成固定三件套。"
                     "写作要求："
                     "1. 允许用场景、新闻、反差、细节、人物、问题等不同方式开头，不要默认使用“先说结论”“如果你只想记住一句话”“这篇文章会”。"
                     "2. 结尾不默认给 checklist；只有当题材明显是教程/方法文时，才给动作。分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束。"
@@ -355,9 +357,9 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "4. 段落短但不能碎，句式要有长短变化；禁用首先/其次/最后/综上所述等模板连接词。"
                     "5. 多用具体场景、案例、对比、引用和事实支撑，不要空喊观点。"
                     "6. 不要自我解释写作结构，不要出现“接下来我会”“下面我们来看”。"
-                    "7. 中段必须设计一个让读者想停下来划线、点赞或争辩的峰值时刻。"
-                    "8. 结尾要么升华成一句值得点赞/转发的判断，要么留下一个和读者自身强相关、会激发评论的问题。"
-                    "9. 让文章至少提供一个可转述的社交谈资和一个可贴身份的表达点，但不要低级钓鱼。"
+                    "7. 中段要有一个真正的峰值判断或关键对比，让读者自然停下来，而不是靠硬抛问题。"
+                    "8. 结尾优先收束判断和余味，不要默认抛“如果是你”“欢迎留言”这类互动句。"
+                    "9. 文章可以自然形成谈资或可转述表达，但不要硬塞身份标签、站队点和互动口号。"
                     "10. 必须遵守引用策略：正文不要裸贴 URL，也不要写 [1][2] 这种引用标记；把来源自然融进句子里。"
                     "11. 必须避开输入 recent_phrase_blacklist 里的高频套话和结构。"
                     "12. 如果 recent_corpus_summary 提示某种标题模式、开头模式、结尾模式或小标题模式已经过度出现，必须主动换路数。"
@@ -367,6 +369,10 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "16. 至少保留 1~2 段真正展开的分析段，不要所有段落都短到像提纲卡片。"
                     "17. 不要让多个段落反复用“很多人/你可能/如果你”起手；同一篇里这种起手最多各用一次。"
                     "18. 小标题之间要有句法变化，不要整篇都是同一类问句、同一类编号句或同一类判断句。"
+                    "19. 正文至少落下 4 类素材：数据、表格、引用、类比、案例、对比分析、反方/边界；少于 4 类就不算完成。"
+                    "20. 正文至少有 1 个 Markdown 表格，而且表格必须帮助读者一眼看懂差异、趋势、成本或结论，不要做装饰。"
+                    "21. 正文至少有 2 处自然来源化表达或引用，不要只在文末挂来源。"
+                    "22. 正文至少有 1 段类比分析，把抽象问题讲直白；至少有 1 段对比分析，讲清表面像什么、实际差在哪。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -402,8 +408,9 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果输入包含 content_enhancement，要判断写前要求的角度、细节、证据和边界有没有真正落进正文。"
                     "如果输入包含 layout_plan，要判断正文是否给既定版式模块留够事实、案例、对比或结论材料。"
                     "还要重点判断：有没有具体场景/动作/瞬间，有没有事实或案例托底，有没有反方或适用边界，段落是否过碎像提纲，多个段落是否反复同一种起手。"
-                    "同时判断：这篇文章为什么值得点赞、为什么会引发评论、为什么会被转发；如果缺失，请明确指出。"
-                    "editorial_review 必须包含 reading_desire, professional_tone, novelty_of_viewpoint, template_risk, citation_restraint, ending_naturalness, interaction_naturalness, summary。"
+                    "还要明确判断：有没有数据表格、有没有至少 2 处自然来源化表达、有没有类比分析、有没有对比分析；如果没有，要直接指出。"
+                    "同时判断：哪里会让人继续读，哪里像在完成任务，哪里虽然有爆点但读起来发硬。"
+                    "editorial_review 必须包含 reading_desire, professional_tone, novelty_of_viewpoint, opening_hook_strength, middle_flow_strength, evidence_support_strength, template_risk, citation_restraint, ending_naturalness, interaction_naturalness, human_judgment, summary。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -444,15 +451,17 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果输入给了 author_memory，必须优先贴近作者自己的 hard_rules、playbook_summary、voice_fingerprint 和 lesson_patterns。"
                     "如果输入给了 writing_persona，改稿时也要保住它的语气、段落节奏和证据摆法。"
                     "如果输入给了 content_enhancement，优先把里面要求的角度、细节和支撑材料补进来，但不要写成生硬标签。"
+                    "如果写前增强里要求了表格、引用、类比或对比分析，这些材料必须真正落进正文。"
+                    "如果输入给了 material_actions 或 material_signals，优先逐条补齐缺的素材，不要只补情绪句和金句。"
                     "如果输入给了 layout_plan，改稿时要顺手补足对应版式模块需要的材料。"
                     "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
                     "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
                     "改稿优先级是：先补角度，再补案例或实际支撑，再补场景细节，再补反向看法或使用前提，再处理结构同质化，最后才清理模板连接词。"
-                    "改稿时必须补足互动设计："
-                    "1. 至少一个让人想点赞的金句或升华句。"
-                    "2. 至少一个自然触发评论的问题、站队点或经验补充点。"
-                    "3. 至少一个值得转发的谈资、身份标签或可复述判断。"
-                    "4. 中段要有峰值，结尾要有收束。"
+                    "改稿时先修顺畅度和爆点，不要默认补互动设计三件套。"
+                    "1. 第一优先级是标题、首屏、中段推进。"
+                    "2. 第二优先级是去模板腔、压长句、打散同质化结构。"
+                    "3. 只有前两者站住了，才允许补自然传播点或可转述判断。"
+                    "4. 结尾必须先收束，不要靠“如果是你/欢迎留言”硬抬互动。"
                     "5. 必须去掉正文裸 URL，也不要补 [1][2] 或文末参考资料尾卡。"
                     "6. 必须避开输入 recent_phrase_blacklist 中的开头、结尾和桥接套话。"
                     "7. 如果 recent_corpus_summary 显示标题、开头、结尾或小标题模式撞上近期高频套路，必须顺手换骨架。"
@@ -462,6 +471,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "11. 如果输入给了 humanness_signals，请针对其中的高风险项逐个修，不要泛泛地改腔调。"
                     "12. 如果输入给了 humanizerai_detection 或 humanizerai_humanized_body，把它当外部去味参考稿，只借它的去味方向，不要照抄，也不要丢掉原文事实、Markdown 结构和账号风格。"
                     "13. 额外避开这几类 AI 腔：反复写“不是X，而是Y”“问题不在X，而在Y”，反复用“换句话说/更重要的是/真正的问题是”先铺垫再说重点，以及让“数据/趋势/市场/AI/系统”替人做动作。"
+                    "14. 如果正文还没有数据表格、引用、类比分析、对比分析，就优先补这些；不要只会补情绪句和金句。"
                 ),
             },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

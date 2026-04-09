@@ -60,6 +60,10 @@ class GenerationGuardrailTests(unittest.TestCase):
                     {
                         "support_quotes": [{"text": "一次真实案例显示，团队卡住的不是模型，而是责任边界。"}],
                         "support_sources": [{"title": "官方案例", "url": "https://example.com/a"}],
+                        "table_targets": ["补一张差异表。"],
+                        "analogy_targets": ["补一个像搭脚手架一样的类比。"],
+                        "comparison_targets": ["补一段旧做法和新做法的对比。"],
+                        "citation_targets": ["把官方案例自然写进正文。"],
                         "detail_anchors": ["补一个会议室里的瞬间。"],
                         "counterpoint_targets": ["补一句适用边界。"],
                     }
@@ -77,7 +81,12 @@ class GenerationGuardrailTests(unittest.TestCase):
         )
         report = build_generation_preflight_report("测试标题", body, manifest, {})
         self.assertTrue(any("来源材料" in item for item in report.get("missing_elements") or []))
+        self.assertTrue(any("表格" in item for item in report.get("missing_elements") or []))
+        self.assertTrue(any("类比分析" in item for item in report.get("missing_elements") or []))
+        self.assertTrue(any("对比分析" in item for item in report.get("missing_elements") or []))
         self.assertTrue(any("优先把这一条来源材料写进正文" in item for item in report.get("rewrite_focus") or []))
+        self.assertTrue(any("表格" in item for item in report.get("rewrite_focus") or []))
+        self.assertTrue(any("类比" in item for item in report.get("rewrite_focus") or []))
 
     def test_generation_preflight_detects_prompt_leak(self):
         manifest = {"audience": "大众读者", "direction": "", "source_urls": []}
