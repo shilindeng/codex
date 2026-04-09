@@ -213,3 +213,15 @@
 - `draft`：兼容旧版正文落盘
 - `all`：兼容别名，行为等价于 `run`
 - `publish` / `verify-draft`：兼容旧版微信发布链路
+
+## `prepare-publication`
+
+- 输入：`--workspace [--input]`
+- 依赖：`article.md`，若缺失则回退到 `assembled.md`
+- 输出：
+  - `publication.md`
+  - `publication-report.json`
+- 说明：
+  - 在公众号渲染前整理成品 Markdown
+  - 会统一处理轻引用、技术词、对比块、数据块和正文图片数量
+  - `render / run / hosted-run / viral-run` 会自动调用，不需要手工额外执行

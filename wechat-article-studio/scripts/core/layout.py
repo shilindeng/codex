@@ -1026,9 +1026,9 @@ class _Sanitizer(HTMLParser):
         base = f"color:{t.heading};font-weight:800;line-height:1.45;"
         if self._theme.key == "magazine":
             if level == "h2":
-                return base + "margin:40px 0 16px;font-size:24px;letter-spacing:0.28px;border-bottom:1px solid #e8dbc8;padding-bottom:10px;"
+                return base + 'margin:38px 0 16px;font-size:24px;letter-spacing:0.18px;border-bottom:1px solid #e8dbc8;padding-bottom:10px;font-family:Georgia,"Times New Roman","Songti SC","STSong",serif;font-weight:700;'
             if level == "h3":
-                return base + "margin:30px 0 12px;font-size:19px;color:#3f3328;"
+                return base + 'margin:28px 0 12px;font-size:18px;color:#4b3d30;font-family:Georgia,"Songti SC","STSong",serif;font-weight:700;'
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "poster":
             if level == "h2":
@@ -1038,9 +1038,9 @@ class _Sanitizer(HTMLParser):
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "business":
             if level == "h2":
-                return base + f"margin:36px 0 16px;font-size:22px;padding:8px 0 8px 12px;border-left:5px solid {self._accent};background:linear-gradient(90deg, rgba(29,78,216,0.08), rgba(29,78,216,0));"
+                return base + f'margin:30px 0 14px;font-size:22px;padding:0 0 8px;border-left:none;border-bottom:1px solid {t.line};background:transparent;letter-spacing:0.04em;color:#173a67;font-weight:820;'
             if level == "h3":
-                return base + "margin:28px 0 12px;font-size:18px;color:#18355f;"
+                return base + "margin:24px 0 10px;font-size:18px;color:#18355f;letter-spacing:0.03em;font-weight:760;"
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "cards":
             if level == "h2":
@@ -1050,9 +1050,9 @@ class _Sanitizer(HTMLParser):
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "warm":
             if level == "h2":
-                return base + f"margin:36px 0 16px;font-size:22px;padding:8px 0 8px 12px;border-left:5px solid {self._accent};background:linear-gradient(90deg, rgba(217,119,6,0.10), rgba(217,119,6,0));"
+                return base + f'margin:34px 0 14px;font-size:22px;padding:8px 0 8px 12px;border-left:3px solid {self._accent};background:linear-gradient(90deg, rgba(217,119,6,0.08), rgba(217,119,6,0));font-family:"Georgia","Songti SC","STSong",serif;font-weight:720;'
             if level == "h3":
-                return base + "margin:28px 0 12px;font-size:18px;color:#7c4d12;"
+                return base + 'margin:24px 0 10px;font-size:18px;color:#7c4d12;font-family:"Georgia","Songti SC","STSong",serif;font-weight:700;'
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "blueprint":
             if level == "h2":
@@ -1062,15 +1062,15 @@ class _Sanitizer(HTMLParser):
             return base + "margin:22px 0 8px;font-size:17px;"
         if self._theme.key == "tech":
             if level == "h2":
-                return base + f"margin:36px 0 16px;font-size:22px;padding:8px 0 8px 12px;border-left:5px solid {self._accent};background:linear-gradient(90deg, rgba(14,165,233,0.09), rgba(14,165,233,0));"
+                return base + f'margin:30px 0 14px;font-size:22px;padding:0 0 8px;border-left:none;border-bottom:1px solid {t.line};background:transparent;letter-spacing:0.06em;color:#105f78;font-weight:830;'
             if level == "h3":
-                return base + "margin:28px 0 12px;font-size:18px;color:#11657f;"
+                return base + "margin:24px 0 10px;font-size:18px;color:#11657f;letter-spacing:0.04em;font-weight:760;"
             return base + "margin:22px 0 8px;font-size:17px;"
         # clean default
         if level == "h2":
-            return base + f"margin:34px 0 14px;font-size:22px;padding-left:10px;border-left:3px solid {self._accent};"
+            return base + f"margin:30px 0 14px;font-size:22px;padding:0 0 8px;border-left:none;border-bottom:1px solid {t.line};"
         if level == "h3":
-            return base + "margin:26px 0 10px;font-size:18px;"
+            return base + "margin:24px 0 10px;font-size:18px;"
         return base + "margin:22px 0 8px;font-size:17px;"
 
     def _style_for_wx_role(self, tag: str, attrs: dict[str, str]) -> str | None:
@@ -1091,21 +1091,65 @@ class _Sanitizer(HTMLParser):
                 bg = t.soft2
             if role == "hero-compare":
                 bg = accent_tint
+            if t.key == "magazine":
+                return (
+                    "margin:0 0 20px;padding:14px 0 16px;border-radius:0;"
+                    "background:transparent;border-top:1px solid #d8c8b6;border-bottom:1px solid #d8c8b6;border-left:none;border-right:none;box-shadow:none;"
+                )
+            if t.key == "business":
+                return (
+                    f"margin:0 0 18px;padding:14px 16px 16px;border-radius:8px;background:{t.soft2};"
+                    f"border-left:4px solid {self._accent};border-top:1px solid {t.line};border-right:1px solid {t.line};border-bottom:1px solid {t.line};box-shadow:none;"
+                )
+            if t.key == "warm":
+                return (
+                    f"margin:0 0 18px;padding:16px 16px 18px;border-radius:{t.radius_sm};background:#fff8f1;"
+                    f"border:1px solid #f0dcc2;box-shadow:none;"
+                )
+            if t.key == "tech":
+                return (
+                    "margin:0 0 18px;padding:14px 16px 16px;border-radius:8px;background:#0f172a;"
+                    f"border-top:2px solid {self._accent};border-left:none;border-right:none;border-bottom:none;box-shadow:none;"
+                )
             return (
-                f"margin:0 0 24px;padding:18px 18px 20px;border-radius:{t.radius};"
+                f"margin:0 0 18px;padding:14px 14px 16px;border-radius:{t.radius_sm};"
                 f"background:{bg};border:{outline};"
-                "box-shadow:0 12px 28px rgba(15,23,42,0.05);"
+                "box-shadow:none;"
             )
         if tag == "p" and role == "hero-kicker":
+            if t.key == "magazine":
+                return f'margin:0 0 6px;color:{self._accent};font-size:11px;line-height:1.4;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;font-family:"Georgia","Songti SC","STSong",serif;'
+            if t.key == "business":
+                return f"margin:0 0 6px;color:{self._accent};font-size:11px;line-height:1.4;font-weight:900;letter-spacing:0.18em;text-transform:uppercase;"
+            if t.key == "warm":
+                return f'margin:0 0 8px;color:{self._accent};font-size:12px;line-height:1.4;font-weight:700;letter-spacing:0.08em;font-family:"Georgia","Songti SC","STSong",serif;'
+            if t.key == "tech":
+                return f'margin:0 0 8px;color:#7dd3fc;font-size:11px;line-height:1.4;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;font-family:Cascadia Code,Consolas,monospace;'
             return f"margin:0 0 8px;color:{self._accent};font-size:12px;line-height:1.4;font-weight:900;letter-spacing:0.18em;text-transform:uppercase;"
         if tag == "p" and role == "hero-title":
+            if t.key == "magazine":
+                return 'margin:0;color:#17120d;font-size:30px;line-height:1.2;font-weight:700;letter-spacing:0.04em;font-family:Georgia,"Times New Roman","Songti SC","STSong",serif;'
+            if t.key == "business":
+                return f"margin:0;color:{t.heading};font-size:29px;line-height:1.24;font-weight:860;letter-spacing:0.04em;"
+            if t.key == "warm":
+                return 'margin:0;color:#2f2419;font-size:29px;line-height:1.24;font-weight:720;letter-spacing:0.04em;font-family:Georgia,"Songti SC","STSong",serif;'
+            if t.key == "tech":
+                return 'margin:0;color:#f8fafc;font-size:28px;line-height:1.24;font-weight:820;letter-spacing:0.03em;'
             return f"margin:0;color:{t.heading};font-size:28px;line-height:1.26;font-weight:900;letter-spacing:0.04em;"
         if tag == "p" and role == "hero-strap":
+            if t.key == "magazine":
+                return "margin:10px 0 0;color:#584a3c;font-size:15px;line-height:1.9;font-weight:500;"
+            if t.key == "business":
+                return "margin:10px 0 0;color:#365274;font-size:15px;line-height:1.85;font-weight:600;"
+            if t.key == "warm":
+                return "margin:10px 0 0;color:#6f573f;font-size:15px;line-height:1.9;font-weight:500;"
+            if t.key == "tech":
+                return "margin:10px 0 0;color:#cbd5e1;font-size:15px;line-height:1.85;font-weight:500;"
             return f"margin:12px 0 0;color:{t.text};font-size:16px;line-height:1.9;font-weight:700;"
         if tag == "p" and role == "hero-meta":
             return f"margin:10px 0 0;color:{t.muted};font-size:13px;line-height:1.75;"
         if tag == "section" and role == "lead-note":
-            return f"margin:0 0 22px;padding:14px 16px;border-radius:{t.radius};background:{accent_tint};border:{outline};"
+            return f"margin:0 0 14px;padding:10px 12px;border-radius:{t.radius_sm};background:{accent_tint};border:{outline};"
         if tag == "p" and role == "lead-note-text":
             return f"margin:0;color:{t.text};font-size:15px;line-height:1.88;font-weight:600;"
         if tag == "section" and role in {"evidence-strip", "boundary-card", "scene-card", "turning-point-card", "pitfall-card", "fit-card", "emotion-turn"}:
@@ -1119,26 +1163,26 @@ class _Sanitizer(HTMLParser):
                 "emotion-turn": t.soft2,
             }
             return (
-                f"margin:18px 0 24px;padding:16px 16px 14px;border-radius:{t.radius};"
+                f"margin:16px 0 18px;padding:12px 12px 10px;border-radius:{t.radius_sm};"
                 f"background:{bg_map.get(role, t.soft)};border:{outline};"
-                "box-shadow:0 8px 22px rgba(15,23,42,0.04);"
+                "box-shadow:none;"
             )
         if tag == "p" and role in {"evidence-strip-label", "boundary-label", "scene-label", "turning-point-label", "pitfall-label", "fit-label", "emotion-turn-label"}:
             return f"margin:0 0 8px;color:{self._accent};font-size:12px;line-height:1.45;font-weight:900;letter-spacing:0.12em;text-transform:uppercase;"
         if tag == "section" and role in {"summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
             return (
-                f"margin:30px 0 0;padding:18px 18px 16px;border-radius:{t.radius};"
+                f"margin:22px 0 0;padding:14px 14px 12px;border-radius:{t.radius_sm};"
                 f"background:{t.soft};border:{outline};"
-                "box-shadow:0 10px 26px rgba(15,23,42,0.04);"
+                "box-shadow:none;"
             )
         if tag == "section" and role == "keyline":
-            return f"margin:20px 0;padding:18px 18px 16px;border-radius:{t.radius};background:{accent_tint};border:{outline};"
+            return f"margin:18px 0;padding:12px 12px 10px;border-radius:{t.radius_sm};background:{accent_tint};border:{outline};"
         if tag == "p" and role == "keyline-text":
             return f"margin:0;color:{t.heading};font-size:18px;line-height:1.86;font-weight:800;letter-spacing:0.02em;"
         if tag in {"h2", "h3", "h4"} and role == "section-break":
-            return f"margin:42px 0 16px;padding:0 0 10px;border:none;border-bottom:1px solid {t.line};color:{t.heading};font-size:23px;line-height:1.35;font-weight:900;letter-spacing:0.04em;"
+            return f"margin:34px 0 14px;padding:0 0 8px;border:none;border-bottom:1px solid {t.line};color:{t.heading};font-size:22px;line-height:1.36;font-weight:850;letter-spacing:0.02em;"
         if tag in {"h2", "h3", "h4"} and role == "section-label":
-            return f"margin:30px 0 12px;padding:0;color:{t.heading};font-size:20px;line-height:1.42;font-weight:800;"
+            return f"margin:26px 0 10px;padding:0;color:{t.heading};font-size:19px;line-height:1.42;font-weight:780;"
         if tag == "section" and role == "steps":
             return f"margin:22px 0;padding:18px 18px 6px;border-radius:{t.radius};background:{t.soft};border:{outline};"
         if tag == "section" and role == "steps-item":
@@ -1189,21 +1233,59 @@ class _Sanitizer(HTMLParser):
         if tag == "p" and role == "dialogue-text":
             return f"margin:0;color:{t.text};font-size:15px;line-height:1.82;"
         if tag == "section" and role == "quote-card":
+            if t.key == "magazine":
+                return (
+                    "margin:24px 0;padding:18px 0;border-radius:0;background:transparent;"
+                    "border-top:2px solid #1f1a15;border-bottom:2px solid #1f1a15;border-left:none;border-right:none;box-shadow:none;"
+                )
+            if t.key == "business":
+                return (
+                    f"margin:20px 0;padding:16px 18px;border-radius:8px;background:{t.soft2};"
+                    f"border-left:4px solid {self._accent};border-top:1px solid {t.line};border-right:1px solid {t.line};border-bottom:1px solid {t.line};box-shadow:none;"
+                )
+            if t.key == "warm":
+                return (
+                    "margin:22px 0;padding:18px 18px 16px;border-radius:10px;background:#fff8f1;"
+                    "border:1px solid #f0dcc2;box-shadow:none;"
+                )
+            if t.key == "tech":
+                return (
+                    "margin:22px 0;padding:16px 18px;border-radius:8px;background:#0f172a;"
+                    f"border-top:2px solid {self._accent};border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-bottom:1px solid #1e293b;box-shadow:none;"
+                )
             return (
-                f"margin:24px 0;padding:22px;border-radius:{t.radius};background:{t.soft2};border:{outline};"
-                "box-shadow:0 14px 32px rgba(15,23,42,0.05);"
+                f"margin:20px 0;padding:16px 14px;border-radius:{t.radius_sm};background:{t.soft2};border:{outline};"
+                "box-shadow:none;"
             )
         if tag == "p" and role == "quote-mark":
+            if t.key == "magazine":
+                return "margin:0 0 6px;color:#17120d;font-size:24px;line-height:1;font-weight:700;"
+            if t.key == "warm":
+                return f"margin:0 0 6px;color:{self._accent};font-size:26px;line-height:1;font-weight:700;"
+            if t.key == "tech":
+                return "margin:0 0 8px;color:#7dd3fc;font-size:22px;line-height:1;font-weight:700;"
             return f"margin:0 0 8px;color:{self._accent};font-size:28px;line-height:1;font-weight:800;"
         if tag == "p" and role == "quote-text":
+            if t.key == "magazine":
+                return 'margin:0;color:#1f1a15;font-size:17px;line-height:1.95;font-weight:700;letter-spacing:0.05em;font-family:Georgia,"Songti SC","STSong",serif;'
+            if t.key == "business":
+                return "margin:0;color:#16304e;font-size:16px;line-height:1.9;font-weight:700;letter-spacing:0.03em;"
+            if t.key == "warm":
+                return 'margin:0;color:#533b23;font-size:17px;line-height:1.95;font-weight:650;letter-spacing:0.03em;font-family:Georgia,"Songti SC","STSong",serif;'
+            if t.key == "tech":
+                return "margin:0;color:#e2e8f0;font-size:16px;line-height:1.9;font-weight:650;letter-spacing:0.02em;"
             return f"margin:0;color:{t.heading};font-size:17px;line-height:1.9;font-weight:700;letter-spacing:0.08px;"
         if tag == "p" and role == "quote-author":
+            if t.key == "magazine":
+                return "margin:8px 0 0;color:#6a5a49;font-size:12px;line-height:1.6;letter-spacing:0.08em;text-transform:uppercase;"
+            if t.key == "tech":
+                return "margin:8px 0 0;color:#94a3b8;font-size:12px;line-height:1.6;font-family:Cascadia Code,Consolas,monospace;"
             return f"margin:10px 0 0;color:{t.muted};font-size:13px;line-height:1.6;"
         if tag == "section" and role == "stats-grid":
             return "display:flex;flex-wrap:wrap;gap:12px;margin:22px 0;"
         if tag == "section" and role == "stat-card":
             return (
-                f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:18px 16px;border-radius:{t.radius};"
+                f"box-sizing:border-box;flex:1 1 160px;min-width:140px;padding:14px 12px;border-radius:{t.radius_sm};"
                 f"background:{t.soft};border:{outline};"
             )
         if tag == "p" and role == "stat-value":
@@ -1213,20 +1295,81 @@ class _Sanitizer(HTMLParser):
         if tag == "section" and role == "reference-list":
             return "margin:26px 0 0;"
         if tag == "section" and role == "reference-card":
+            if t.key == "magazine":
+                return (
+                    "margin:14px 0 0;padding:14px 0 12px;border-radius:0;background:transparent;"
+                    "border-top:1px solid #1f1a15;border-bottom:1px solid #e8dbc8;border-left:none;border-right:none;box-shadow:none;"
+                )
+            if t.key == "business":
+                return (
+                    f"margin:12px 0 0;padding:14px 14px 12px;border-radius:8px;background:{t.soft2};"
+                    f"border-left:4px solid {self._accent};border-top:1px solid {t.line};border-right:1px solid {t.line};border-bottom:1px solid {t.line};box-shadow:none;"
+                )
+            if t.key == "warm":
+                return (
+                    "margin:12px 0 0;padding:14px 14px 12px;border-radius:10px;background:#fff8f1;"
+                    "border:1px solid #f0dcc2;box-shadow:none;"
+                )
+            if t.key == "tech":
+                return (
+                    "margin:12px 0 0;padding:14px 14px 12px;border-radius:8px;background:#f8fbfd;"
+                    f"border-top:2px solid {self._accent};border-left:1px solid #cbd5e1;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;box-shadow:none;"
+                )
             return (
-                f"margin:14px 0 0;padding:16px 16px 14px;border-radius:{t.radius};"
+                f"margin:12px 0 0;padding:12px 12px 10px;border-radius:{t.radius_sm};"
                 f"background:{t.soft};border:1px solid {t.line};"
-                "box-shadow:0 8px 22px rgba(15,23,42,0.04);"
+                "box-shadow:none;"
             )
         if tag == "p" and role == "reference-title":
+            if t.key == "magazine":
+                return 'margin:0;color:#1f1a15;font-size:16px;line-height:1.8;font-weight:700;letter-spacing:0.04em;font-family:Georgia,"Songti SC","STSong",serif;'
+            if t.key == "business":
+                return "margin:0;color:#16304e;font-size:15px;line-height:1.72;font-weight:800;letter-spacing:0.04em;"
+            if t.key == "warm":
+                return 'margin:0;color:#4b3722;font-size:16px;line-height:1.8;font-weight:700;font-family:Georgia,"Songti SC","STSong",serif;'
+            if t.key == "tech":
+                return "margin:0;color:#0f172a;font-size:15px;line-height:1.72;font-weight:800;letter-spacing:0.02em;"
             return f"margin:0;color:{t.heading};font-size:16px;line-height:1.78;font-weight:800;letter-spacing:0.04px;"
         if tag == "span" and role == "reference-index":
+            if t.key == "magazine":
+                return f"display:inline-block;margin-right:8px;color:{self._accent};font-size:12px;font-weight:700;vertical-align:2px;letter-spacing:0.12em;"
+            if t.key == "business":
+                return f"display:inline-flex;align-items:center;justify-content:center;margin-right:8px;min-width:22px;height:22px;border-radius:6px;background:{self._accent};color:#ffffff;font-size:12px;font-weight:800;vertical-align:1px;"
+            if t.key == "tech":
+                return f"display:inline-flex;align-items:center;justify-content:center;margin-right:8px;min-width:22px;height:22px;border-radius:6px;background:#0f172a;color:#7dd3fc;font-size:12px;font-weight:800;vertical-align:1px;font-family:Cascadia Code,Consolas,monospace;"
             return f"display:inline-block;margin-right:8px;color:{self._accent};font-size:13px;font-weight:900;vertical-align:1px;"
         if tag == "p" and role == "reference-meta":
+            if t.key == "magazine":
+                return "margin:8px 0 0;color:#6f6255;font-size:13px;line-height:1.78;"
+            if t.key == "business":
+                return "margin:8px 0 0;color:#52677f;font-size:13px;line-height:1.72;"
+            if t.key == "warm":
+                return "margin:8px 0 0;color:#81674f;font-size:13px;line-height:1.78;"
+            if t.key == "tech":
+                return "margin:8px 0 0;color:#475569;font-size:12px;line-height:1.72;font-family:Cascadia Code,Consolas,monospace;"
             return f"margin:8px 0 0;color:{t.muted};font-size:13px;line-height:1.72;"
         if tag == "span" and role == "reference-dot":
             return "display:inline-block;margin:0 6px;"
         if tag == "a" and role == "reference-link":
+            if t.key == "magazine":
+                return f"display:inline-block;box-sizing:border-box;margin:10px 0 0;padding:0;color:{self._accent};text-align:left;font-size:13px;font-weight:700;text-decoration:none;border-bottom:1px solid {self._accent};"
+            if t.key == "business":
+                return (
+                    "display:block;box-sizing:border-box;width:100%;"
+                    f"margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#ffffff;color:{self._accent};"
+                    f"text-align:center;font-size:13px;font-weight:800;text-decoration:none;border:1px solid {self._accent};"
+                )
+            if t.key == "warm":
+                return (
+                    "display:inline-block;box-sizing:border-box;"
+                    f"margin:10px 0 0;padding:4px 0;color:{self._accent};text-align:left;font-size:13px;font-weight:700;text-decoration:none;border-bottom:1px solid #d8b48b;"
+                )
+            if t.key == "tech":
+                return (
+                    "display:block;box-sizing:border-box;width:100%;"
+                    f"margin:12px 0 0;padding:10px 12px;border-radius:8px;background:#0f172a;color:#7dd3fc;"
+                    "text-align:left;font-size:13px;font-weight:800;text-decoration:none;border:none;font-family:Cascadia Code,Consolas,monospace;"
+                )
             return (
                 "display:block;box-sizing:border-box;width:100%;"
                 f"margin:12px 0 0;padding:11px 14px;border-radius:999px;"
@@ -1269,11 +1412,30 @@ class _Sanitizer(HTMLParser):
             elif tone == "mythfact":
                 bg = "#fdf2f8"
                 border = "#fbcfe8"
-            base = (
-                f"margin:18px 0;padding:16px 18px;border-radius:{t.radius};"
-                f"background:{bg};border:1px solid {border};color:{t.text};"
-                "box-shadow:0 8px 24px rgba(15,23,42,0.04);"
-            )
+            if t.key == "magazine":
+                base = (
+                    "margin:22px 0;padding:16px 0;border-radius:0;"
+                    f"background:transparent;border-top:2px solid #1f1a15;border-bottom:1px solid #d8c8b6;border-left:none;border-right:none;color:{t.text};box-shadow:none;"
+                )
+            elif t.key == "business":
+                base = (
+                    f"margin:18px 0;padding:14px 16px;border-radius:8px;background:{bg};"
+                    f"border-left:4px solid {self._accent};border-top:1px solid {border};border-right:1px solid {border};border-bottom:1px solid {border};color:{t.text};box-shadow:none;"
+                )
+            elif t.key == "warm":
+                base = (
+                    f"margin:18px 0;padding:16px 18px;border-radius:10px;background:{bg};border:1px solid {border};color:{t.text};box-shadow:none;"
+                )
+            elif t.key == "tech":
+                base = (
+                    f"margin:18px 0;padding:14px 16px;border-radius:8px;background:#0f172a;border-top:2px solid {self._accent};border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-bottom:1px solid #1e293b;color:#e2e8f0;box-shadow:none;"
+                )
+            else:
+                base = (
+                    f"margin:18px 0;padding:16px 18px;border-radius:{t.radius};"
+                    f"background:{bg};border:1px solid {border};color:{t.text};"
+                    "box-shadow:0 8px 24px rgba(15,23,42,0.04);"
+                )
             if tone:
                 base += f"border-left:4px solid {self._accent};"
             if t.key == "magazine":
@@ -1282,6 +1444,14 @@ class _Sanitizer(HTMLParser):
                 base += "box-shadow:0 10px 24px rgba(15,23,42,0.05);"
             return base
         if tag == "a":
+            if t.key == "magazine":
+                return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(126,168,184,0.55);"
+            if t.key == "business":
+                return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(43,94,167,0.28);"
+            if t.key == "warm":
+                return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(196,125,90,0.38);"
+            if t.key == "tech":
+                return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(14,165,233,0.26);"
             return f"color:{self._accent};text-decoration:none;border-bottom:1px solid rgba(15,23,42,0.12);"
         if tag == "strong":
             return f"color:{t.heading};font-weight:800;"
@@ -1295,22 +1465,50 @@ class _Sanitizer(HTMLParser):
             # Add vertical rhythm directly on img to avoid relying on wrappers.
             shadow = "0 10px 30px rgba(15,23,42,0.06)"
             radius = t.radius
+            border = "none"
             if t.key in {"business", "tech"}:
                 shadow = "0 8px 22px rgba(15,23,42,0.05)"
                 radius = t.radius_sm
             if t.key == "magazine":
-                shadow = "0 14px 28px rgba(90,72,38,0.08)"
+                shadow = "0 10px 22px rgba(90,72,38,0.04)"
+                radius = "0"
+                border = "1px solid #eadfce"
             if t.key == "warm":
-                shadow = "0 12px 26px rgba(180,120,40,0.10)"
+                shadow = "0 10px 20px rgba(180,120,40,0.06)"
+                border = "1px solid #f0dcc2"
+            if t.key == "business":
+                border = "1px solid #d7e5fb"
+            if t.key == "tech":
+                border = "1px solid #cfe7f2"
             return (
                 "display:block;width:100%;height:auto;margin:22px auto 18px;"
-                f"border-radius:{radius};box-shadow:{shadow};"
+                f"border-radius:{radius};box-shadow:{shadow};border:{border};"
             )
         if tag == "code":
             # Inside <pre>, keep code transparent.
             parent = next((item for item in reversed(self._stack) if item), "")
             if parent == "pre":
                 return "padding:0;background:transparent;color:inherit;font-family:Cascadia Code,Consolas,monospace;font-size:0.92em;"
+            if t.key == "magazine":
+                return (
+                    f"padding:1px 5px;border-radius:4px;background:#f7f0e6;border:1px solid #eadfce;color:#705744;"
+                    'font-family:Cascadia Code,Consolas,monospace;font-size:0.9em;word-break:break-word;'
+                )
+            if t.key == "business":
+                return (
+                    f"padding:2px 6px;border-radius:6px;background:#eef4ff;border:1px solid #c9dcfb;color:#173a67;"
+                    'font-family:Cascadia Code,Consolas,monospace;font-size:0.9em;word-break:break-word;'
+                )
+            if t.key == "warm":
+                return (
+                    f"padding:2px 6px;border-radius:6px;background:#fff3e6;border:1px solid #f0dcc2;color:#8a5a2b;"
+                    'font-family:Cascadia Code,Consolas,monospace;font-size:0.9em;word-break:break-word;'
+                )
+            if t.key == "tech":
+                return (
+                    f"padding:2px 6px;border-radius:6px;background:#eaf6fb;border:1px solid #bfe3f2;color:#0f5f75;"
+                    'font-family:Cascadia Code,Consolas,monospace;font-size:0.9em;word-break:break-word;'
+                )
             return (
                 f"padding:2px 6px;border-radius:{t.radius_sm};background:{t.code_bg};"
                 f"border:1px solid {t.code_border};"
@@ -1318,6 +1516,30 @@ class _Sanitizer(HTMLParser):
                 "word-break:break-word;"
             )
         if tag == "pre":
+            if t.key == "magazine":
+                return (
+                    "overflow-x:auto;max-width:100%;"
+                    "margin:20px 0;padding:14px 16px;border-radius:0;background:#1c1917;color:#f5f1ea;"
+                    f"border-top:2px solid {self._accent};box-shadow:none;"
+                )
+            if t.key == "business":
+                return (
+                    "overflow-x:auto;max-width:100%;"
+                    "margin:18px 0;padding:14px 16px;border-radius:8px;background:#0f172a;color:#eff6ff;"
+                    f"border-top:2px solid {self._accent};box-shadow:none;"
+                )
+            if t.key == "warm":
+                return (
+                    "overflow-x:auto;max-width:100%;"
+                    "margin:18px 0;padding:14px 16px;border-radius:10px;background:#3a2b1f;color:#fff4e7;"
+                    f"border-top:2px solid {self._accent};box-shadow:none;"
+                )
+            if t.key == "tech":
+                return (
+                    "overflow-x:auto;max-width:100%;"
+                    "margin:18px 0;padding:14px 16px;border-radius:8px;background:#0b1220;color:#dbeafe;"
+                    f"border-top:2px solid {self._accent};box-shadow:none;"
+                )
             return (
                 "overflow-x:auto;max-width:100%;"
                 f"margin:18px 0;padding:14px 16px;border-radius:{t.radius};"

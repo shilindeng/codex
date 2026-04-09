@@ -27,6 +27,8 @@ ARTIFACT_DEFAULTS = {
     "viral_discovery_path": "viral-discovery.json",
     "source_corpus_path": "source-corpus.json",
     "viral_dna_path": "viral-dna.json",
+    "publication_path": "publication.md",
+    "publication_report_path": "publication-report.json",
     "ideation_path": "ideation.json",
     "article_path": "article.md",
     "title_report_path": "title-report.json",

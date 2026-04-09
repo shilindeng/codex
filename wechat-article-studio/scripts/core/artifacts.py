@@ -15,6 +15,8 @@ STANDARD_ARTIFACTS = [
     "source-corpus.json",
     "viral-dna.json",
     "viral-dna.md",
+    "publication.md",
+    "publication-report.json",
     "ideation.json",
     "article.md",
     "title-report.json",

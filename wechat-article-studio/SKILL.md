@@ -115,6 +115,7 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - 产物契约：读 [references/artifact-contract.md](references/artifact-contract.md)
 - 评分标准：读 [references/scoring-rubric.md](references/scoring-rubric.md)
 - 来源归因与轻引用：读 [references/attribution.md](references/attribution.md)
+- 发布前 Markdown 整理与公众号成品链路：读 [references/publication-pipeline.md](references/publication-pipeline.md)
 - 图片系统与 prompt：读 [references/image-system.md](references/image-system.md)、[references/image-prompting.md](references/image-prompting.md)
 - Provider 约束：读 [references/provider-contract.md](references/provider-contract.md)
 - 微信草稿 API：读 [references/wechat-draft-api.md](references/wechat-draft-api.md)

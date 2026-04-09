@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import re
 import textwrap
 from pathlib import Path
@@ -25,8 +26,9 @@ from core.layout import (
 )
 from core.layout_skin import choose_layout_skin, normalize_layout_skin_request
 from core.manifest import ensure_workspace, load_manifest, relative_posix, save_manifest, workspace_path
+from core.publication import prepare_publication_artifacts
 from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
-from core.wechat_fragment import build_header_module_html, render_wechat_fragment
+from core.wechat_fragment import build_header_module_html, choose_wechat_publication_style, render_wechat_fragment
 
 
 _TECH_MASK_PREFIX = "__WXMASK"
@@ -64,8 +66,17 @@ def _restore_technical_spans(text: str, masks: list[str]) -> str:
     return restored
 
 
-def _wrap_technical_tokens(segment: str) -> str:
+def _wrap_technical_tokens(segment: str, allowed_terms: set[str] | None = None) -> str:
     updated = segment
+
+    def accept(match_text: str) -> bool:
+        value = str(match_text or "").strip()
+        if not value:
+            return False
+        if allowed_terms is None:
+            return True
+        return value in allowed_terms
+
     for pattern in _TECH_TOKEN_PATTERNS:
         parts = re.split(r"(`[^`]+`)", updated)
         rebuilt: list[str] = []
@@ -73,15 +84,16 @@ def _wrap_technical_tokens(segment: str) -> str:
             if part.startswith("`") and part.endswith("`"):
                 rebuilt.append(part)
             else:
-                rebuilt.append(pattern.sub(lambda m: f"`{m.group(1)}`", part))
+                rebuilt.append(pattern.sub(lambda m: f"`{m.group(1)}`" if accept(m.group(1)) else m.group(1), part))
         updated = "".join(rebuilt)
     return updated
 
 
-def highlight_technical_terms_markdown(body: str) -> str:
+def highlight_technical_terms_markdown(body: str, allowed_terms: list[str] | None = None) -> str:
     lines = (body or "").splitlines()
     in_code = False
     output: list[str] = []
+    allowed_set = {str(item).strip() for item in (allowed_terms or []) if str(item).strip()} or None
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("```"):
@@ -98,12 +110,44 @@ def highlight_technical_terms_markdown(body: str) -> str:
                 rebuilt.append(part)
                 continue
             masked, masks = _mask_technical_spans(part)
-            rebuilt.append(_restore_technical_spans(_wrap_technical_tokens(masked), masks))
+            rebuilt.append(_restore_technical_spans(_wrap_technical_tokens(masked, allowed_set), masks))
         output.append("".join(rebuilt))
     return "\n".join(output)
 
 
-def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str:
+def _normalize_publication_style_key(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    aliases = {
+        "wechat-clean": "clean",
+        "wechat-briefing": "business",
+        "wechat-tech": "tech",
+        "editorial-clean": "clean",
+        "warm-journal": "warm",
+    }
+    return aliases.get(normalized, normalized or "clean")
+
+
+def _reference_section_title(style: str) -> str:
+    mapping = {
+        "magazine": "参考资料",
+        "business": "来源与依据",
+        "warm": "延伸阅读",
+        "tech": "来源索引",
+    }
+    return mapping.get(_normalize_publication_style_key(style), "参考资料")
+
+
+def _reference_link_label(style: str) -> str:
+    mapping = {
+        "magazine": "阅读原文",
+        "business": "查看来源",
+        "warm": "继续阅读",
+        "tech": "打开来源",
+    }
+    return mapping.get(_normalize_publication_style_key(style), "查看原文")
+
+
+def build_reference_cards_html(workspace: Path, manifest: dict[str, Any], publication_style: str = "") -> str:
     path = workspace / str(manifest.get("references_path") or "references.json")
     if not path.exists():
         return ""
@@ -111,7 +155,9 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str
     items = payload.get("items") or []
     if not items:
         return ""
-    cards: list[str] = ['<section data-wx-role="reference-list">', '<h2>参考资料</h2>']
+    title = _reference_section_title(publication_style or str(manifest.get("wechat_publication_style") or manifest.get("publication_style") or manifest.get("layout_style") or "clean"))
+    link_label = _reference_link_label(publication_style or str(manifest.get("wechat_publication_style") or manifest.get("publication_style") or manifest.get("layout_style") or "clean"))
+    cards: list[str] = ['<section data-wx-role="reference-list">', f"<h2>{html.escape(title)}</h2>"]
     for item in items:
         index = int(item.get("index") or 0)
         title = html.escape(str(item.get("title") or "参考资料").strip())
@@ -127,7 +173,7 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str
             f'<p data-wx-role="reference-meta">{meta_html}</p>',
         ]
         if url:
-            card_parts.append(f'<a data-wx-role="reference-link" href="{url}">查看原文</a>')
+            card_parts.append(f'<a data-wx-role="reference-link" href="{url}">{html.escape(link_label)}</a>')
         card_parts.append("</section>")
         cards.append(
             "".join(card_parts)
@@ -136,11 +182,53 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any]) -> str
     return "\n".join(cards)
 
 
+def _prepare_publication_for_render(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    input_rel = None
+    article_rel = str(manifest.get("article_path") or "article.md")
+    assembled_rel = str(manifest.get("assembled_path") or "assembled.md")
+    if not (workspace / article_rel).exists() and (workspace / assembled_rel).exists():
+        input_rel = assembled_rel
+    payload = prepare_publication_artifacts(workspace, manifest, input_rel=input_rel)
+    save_manifest(workspace, manifest)
+    return payload
+
+
+def _lighten_publication_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    cloned = json.loads(json.dumps(manifest, ensure_ascii=False))
+    layout_plan = dict(cloned.get("layout_plan") or {})
+    section_modules = list(layout_plan.get("section_modules") or layout_plan.get("section_plans") or [])
+    if section_modules:
+        softened: list[dict[str, Any]] = []
+        body_card_kept = False
+        for index, item in enumerate(section_modules):
+            module = dict(item or {})
+            module_type = str(module.get("module_type") or "")
+            if index == 0 and module_type == "lead-note":
+                module["module_type"] = ""
+            elif module_type in {"summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
+                pass
+            elif module_type in {"evidence-strip", "boundary-card", "scene-card", "turning-point-card", "pitfall-card", "fit-card", "emotion-turn", "keyline"}:
+                if body_card_kept:
+                    module["module_type"] = ""
+                else:
+                    body_card_kept = True
+            elif module_type in {"compare-grid", "step-stack", "quote-card"}:
+                module["module_type"] = ""
+            softened.append(module)
+        layout_plan["section_modules"] = softened
+        layout_plan["section_plans"] = softened
+    cloned["layout_plan"] = layout_plan
+    return cloned
+
+
+def _render_inline_citations_html(content_html: str) -> str:
+    return re.sub(r"(?<!\w)\[(\d{1,2})\](?!</)", lambda m: f"<sup>[{m.group(1)}]</sup>", content_html)
+
+
 def normalize_publication_markdown(title: str, body: str) -> str:
     normalized = body or ""
     normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
-    normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
-    normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
+    normalized = re.sub(r"【\s*(\d{1,2})\s*】", lambda m: f"[{m.group(1)}]", normalized)
     normalized = strip_ai_label_phrases(normalized)
     normalized = expand_compact_markdown_lists(normalized)
     normalized = re.sub(
@@ -157,14 +245,23 @@ def normalize_publication_markdown(title: str, body: str) -> str:
 def cmd_render(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
+    publication_report = _prepare_publication_for_render(workspace, manifest)
     layout_plan_path = workspace / str(manifest.get("layout_plan_path") or "layout-plan.json")
     if layout_plan_path.exists():
         manifest["layout_plan"] = read_json(layout_plan_path, default={}) or {}
 
-    input_rel = args.input or manifest.get("assembled_path") or "assembled.md"
-    input_path = workspace / input_rel
-    if not input_path.exists():
-        input_path = workspace / (manifest.get("article_path") or "article.md")
+    if args.input:
+        input_path = workspace / str(args.input)
+    else:
+        assembled_path = workspace / str(manifest.get("assembled_path") or "assembled.md")
+        publication_path = workspace / str(manifest.get("publication_path") or "publication.md")
+        article_path = workspace / str(manifest.get("article_path") or "article.md")
+        if assembled_path.exists() and (not publication_path.exists() or assembled_path.stat().st_mtime_ns >= publication_path.stat().st_mtime_ns):
+            input_path = assembled_path
+        elif publication_path.exists():
+            input_path = publication_path
+        else:
+            input_path = article_path
     if not input_path.exists():
         raise SystemExit(f"找不到待渲染文件：{input_path}")
 
@@ -177,29 +274,31 @@ def cmd_render(args: argparse.Namespace) -> int:
     fmt = detect_input_format(input_path.name, str(input_format_arg), body)
     if fmt == "md":
         body = normalize_publication_markdown(title, body)
-        content_source = highlight_technical_terms_markdown(body)
+        content_source = highlight_technical_terms_markdown(body, publication_report.get("technical_terms") or [])
         content_html = markdown_to_html(content_source)
+        content_html = _render_inline_citations_html(content_html)
     else:
         content_source = body
         content_html = content_source
 
-    content_html, rich_blocks = enhance_content_html(content_html, manifest)
+    publication_manifest = _lighten_publication_manifest(manifest)
+    content_html, rich_blocks = enhance_content_html(content_html, publication_manifest)
 
     signals = analyze_content_signals(content_source if fmt == "md" else content_html, fmt)
     raw_layout_style = getattr(args, "layout_style", None)
     requested_style = _normalize_layout_style_request(raw_layout_style)
     if raw_layout_style is None and requested_style == "auto":
         requested_style = _normalize_layout_style_request(manifest.get("layout_style_preference"))
-    layout_decision = choose_layout_style(requested_style, signals, manifest, rich_blocks=rich_blocks)
+    layout_decision = choose_layout_style(requested_style, signals, publication_manifest, rich_blocks=rich_blocks)
     chosen_style = layout_decision.style
 
     accent_arg = getattr(args, "accent_color", DEFAULT_ACCENT_COLOR) or DEFAULT_ACCENT_COLOR
-    accent_decision = choose_accent_color(chosen_style, str(accent_arg), manifest)
+    accent_decision = choose_accent_color(chosen_style, str(accent_arg), publication_manifest)
     raw_layout_skin = getattr(args, "layout_skin", None)
     requested_skin = normalize_layout_skin_request(raw_layout_skin)
     if raw_layout_skin is None and requested_skin == "auto":
         requested_skin = normalize_layout_skin_request(manifest.get("layout_skin_preference"))
-    skin_decision = choose_layout_skin(requested_skin, chosen_style, manifest, signals, rich_blocks=rich_blocks)
+    skin_decision = choose_layout_skin(requested_skin, chosen_style, publication_manifest, signals, rich_blocks=rich_blocks)
 
     theme = THEMES.get(chosen_style, THEMES["clean"])
 
@@ -254,13 +353,22 @@ def cmd_render(args: argparse.Namespace) -> int:
 
     # WeChat fragment uses full inline styles and a safe tag whitelist.
     wechat_header_mode = str(getattr(args, "wechat_header_mode", "") or manifest.get("wechat_header_mode") or "drop-title")
+    wechat_publication_style = choose_wechat_publication_style(
+        chosen_style,
+        publication_manifest,
+        rich_blocks=rich_blocks,
+        publication_report=publication_report,
+    )
+    reference_cards_html = build_reference_cards_html(workspace, manifest, wechat_publication_style)
+    if reference_cards_html:
+        content_html = content_html + "\n" + reference_cards_html
     wechat_fragment = render_wechat_fragment(
         content_html,
         title=title,
         summary=summary,
         theme=theme,
         accent=accent_decision.accent,
-        chosen_style=chosen_style,
+        chosen_style=wechat_publication_style,
         skin_key=skin_decision.key,
         header_mode=wechat_header_mode,
         hero_module=hero_module,
@@ -284,6 +392,9 @@ def cmd_render(args: argparse.Namespace) -> int:
     manifest["accent_color_reason"] = accent_decision.reason
     manifest["render_input_format"] = fmt
     manifest["wechat_header_mode"] = wechat_header_mode
+    manifest["publication_path"] = publication_report.get("output_path") or manifest.get("publication_path") or "publication.md"
+    manifest["publication_report_path"] = "publication-report.json"
+    manifest["wechat_publication_style"] = wechat_publication_style
     save_manifest(workspace, manifest)
     print(str(output_path))
     return 0

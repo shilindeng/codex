@@ -26,6 +26,8 @@
 - `review-report.json`：编辑评审结果
 - `review-report.md`：面向人读的评审摘要
 - `score-report.json`：启发式评分结果
+- `publication.md`：发布前整理后的公众号成品 Markdown
+- `publication-report.json`：发布前整理报告（图片限制、技术词、结构化块等）
 - `content-fingerprint.json`：当前稿件的结构与路线指纹
 - `layout-plan.json`：大纲阶段生成的公众号版式规划
 - `acceptance-report.json`：发布前成品验收结果
@@ -81,6 +83,8 @@
 - `content_fingerprint_path`
 - `layout_plan_path`
 - `acceptance_report_path`
+- `publication_path`
+- `publication_report_path`
 - `writing_persona`
 - `content_enhancement_path`
 - `editorial_anchor_plan_path`

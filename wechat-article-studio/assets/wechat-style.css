@@ -946,3 +946,237 @@ body.wx-theme-warm {
   background: #fff7ed;
   border-color: #f2dfc1;
 }
+
+.wx-article.wx-theme-magazine .wx-hero {
+  padding: 14px 0 16px;
+  border-top: 1px solid #d8c8b6;
+  border-bottom: 1px solid #d8c8b6;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.wx-article.wx-theme-magazine .wx-hero-kicker,
+.wx-article.wx-theme-magazine .wx-hero-title,
+.wx-article.wx-theme-magazine .wx-summary,
+.wx-article.wx-theme-magazine .wx-content h2,
+.wx-article.wx-theme-magazine .wx-content h3 {
+  font-family: Georgia, "Times New Roman", "Songti SC", "STSong", serif;
+}
+
+.wx-article.wx-theme-business .wx-hero {
+  background: #eff6ff;
+  border-left: 4px solid var(--accent);
+  border-top: 1px solid #d7e5fb;
+  border-right: 1px solid #d7e5fb;
+  border-bottom: 1px solid #d7e5fb;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-warm .wx-hero {
+  background: #fff8f1;
+  border: 1px solid #f0dcc2;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-tech .wx-hero {
+  background: #0f172a;
+  border-top: 2px solid var(--accent);
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-tech .wx-hero-kicker {
+  color: #7dd3fc;
+  font-family: "Cascadia Code", Consolas, monospace;
+}
+
+.wx-article.wx-theme-tech .wx-hero-title {
+  color: #f8fafc;
+}
+
+.wx-article.wx-theme-tech .wx-hero-strap {
+  color: #cbd5e1;
+}
+
+.wx-article.wx-theme-business .wx-content h2,
+.wx-article.wx-theme-tech .wx-content h2,
+.wx-article.wx-theme-clean .wx-content h2 {
+  padding-left: 0;
+  border-left: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.wx-article.wx-theme-magazine .wx-content blockquote {
+  background: transparent;
+  border-top: 2px solid #1f1a15;
+  border-bottom: 1px solid #d8c8b6;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-business .wx-content blockquote {
+  background: #f4f8ff;
+  border-left: 4px solid var(--accent);
+  border-top: 1px solid #c9dcfb;
+  border-right: 1px solid #c9dcfb;
+  border-bottom: 1px solid #c9dcfb;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-warm .wx-content blockquote {
+  background: #fff8f1;
+  border: 1px solid #f0dcc2;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-tech .wx-content blockquote {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-top: 2px solid var(--accent);
+  border-left: 1px solid #1e293b;
+  border-right: 1px solid #1e293b;
+  border-bottom: 1px solid #1e293b;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-magazine .wx-content code {
+  background: #f7f0e6;
+  border-color: #eadfce;
+  color: #705744;
+  border-radius: 4px;
+}
+
+.wx-article.wx-theme-business .wx-content code {
+  background: #eef4ff;
+  border-color: #c9dcfb;
+  color: #173a67;
+  border-radius: 6px;
+}
+
+.wx-article.wx-theme-warm .wx-content code {
+  background: #fff3e6;
+  border-color: #f0dcc2;
+  color: #8a5a2b;
+  border-radius: 6px;
+}
+
+.wx-article.wx-theme-tech .wx-content code {
+  background: #eaf6fb;
+  border-color: #bfe3f2;
+  color: #0f5f75;
+  border-radius: 6px;
+}
+
+.wx-article.wx-theme-magazine .wx-content pre {
+  background: #1c1917;
+  color: #f5f1ea;
+  border-top: 2px solid var(--accent);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-business .wx-content pre {
+  background: #0f172a;
+  color: #eff6ff;
+  border-top: 2px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-warm .wx-content pre {
+  background: #3a2b1f;
+  color: #fff4e7;
+  border-top: 2px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-tech .wx-content pre {
+  background: #0b1220;
+  color: #dbeafe;
+  border-top: 2px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.wx-article.wx-theme-magazine .reference-card {
+  padding: 14px 0 12px;
+  border-top: 1px solid #1f1a15;
+  border-bottom: 1px solid #e8dbc8;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.wx-article.wx-theme-magazine .reference-link {
+  display: inline-block;
+  width: auto;
+  padding: 0;
+  text-align: left;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+}
+
+.wx-article.wx-theme-business .reference-card {
+  background: #eff6ff;
+  border-left: 4px solid var(--accent);
+  border-top: 1px solid #d7e5fb;
+  border-right: 1px solid #d7e5fb;
+  border-bottom: 1px solid #d7e5fb;
+  border-radius: 8px;
+}
+
+.wx-article.wx-theme-business .reference-link {
+  border: 1px solid var(--accent);
+  background: #ffffff;
+  border-radius: 8px;
+}
+
+.wx-article.wx-theme-warm .reference-card {
+  background: #fff8f1;
+  border-color: #f0dcc2;
+  border-radius: 10px;
+}
+
+.wx-article.wx-theme-warm .reference-link {
+  display: inline-block;
+  width: auto;
+  padding: 4px 0;
+  text-align: left;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #d8b48b;
+}
+
+.wx-article.wx-theme-tech .reference-card {
+  background: #f8fbfd;
+  border-top: 2px solid var(--accent);
+  border-left: 1px solid #cbd5e1;
+  border-right: 1px solid #cbd5e1;
+  border-bottom: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+.wx-article.wx-theme-tech .reference-link {
+  background: #0f172a;
+  color: #7dd3fc;
+  text-align: left;
+  border-radius: 8px;
+  font-family: "Cascadia Code", Consolas, monospace;
+}

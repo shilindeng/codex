@@ -441,12 +441,12 @@ def tag_style_override(skin_key: str, tag: str, attrs: dict[str, str], theme: An
 def _hero_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     mapping = {
         "elegant": f"margin:0 0 26px;padding:18px 20px;border-left:4px solid {accent};background:{theme.soft};border-radius:{theme.radius};border-top:none;border-right:none;border-bottom:none;box-shadow:none;",
-        "business": f"margin:0 0 26px;padding:18px 18px 20px;border-left:4px solid {accent};border-bottom:1px solid {theme.line};background:#ffffff;border-radius:0;box-shadow:none;",
-        "warm": f"margin:0 0 26px;padding:18px 18px 20px;border-top:1px solid {accent};border-bottom:1px solid {accent};background:{theme.soft};border-left:none;border-right:none;text-align:center;box-shadow:none;",
+        "business": f"margin:0 0 22px;padding:16px 18px 18px;border-left:4px solid {accent};border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};background:{theme.soft2};border-radius:8px;box-shadow:none;",
+        "warm": f"margin:0 0 22px;padding:18px 18px 20px;border:1px solid #f0dcc2;background:#fff8f1;border-radius:10px;text-align:left;box-shadow:none;",
         "sunrise": f"margin:0 0 26px;padding:18px 20px;border-left:5px solid {accent};background:{theme.soft2};border-radius:{theme.radius};border-top:none;border-right:none;border-bottom:none;box-shadow:none;",
-        "tech": f"margin:0 0 24px;padding:18px 18px 18px;border-bottom:2px solid {accent};background:#ffffff;border-left:none;border-right:none;border-top:none;border-radius:0;box-shadow:none;",
+        "tech": f"margin:0 0 22px;padding:16px 18px 18px;border-top:2px solid {accent};background:#0f172a;border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-bottom:1px solid #1e293b;border-radius:8px;box-shadow:none;",
         "chinese": f"margin:0 0 26px;padding:18px 18px 20px;border-top:1px solid {secondary};border-bottom:1px solid {secondary};background:#ffffff;text-align:center;border-left:none;border-right:none;box-shadow:none;",
-        "magazine": f"margin:0 0 24px;padding:0 0 18px;background:transparent;border:none;box-shadow:none;",
+        "magazine": f"margin:0 0 24px;padding:14px 0 16px;background:transparent;border-top:1px solid #d8c8b6;border-bottom:1px solid #d8c8b6;border-left:none;border-right:none;border-radius:0;box-shadow:none;",
         "forest": f"margin:0 0 26px;padding:18px 20px;border-left:5px solid {accent};background:{theme.soft};border-radius:{theme.radius};border-top:none;border-right:none;border-bottom:none;box-shadow:none;",
         "aurora": f"margin:0 0 26px;padding:18px 18px 20px;border-bottom:2px solid {accent};box-shadow:inset 0 -5px 0 {secondary};background:#ffffff;border-top:none;border-left:none;border-right:none;border-radius:0;",
         "morandi": f"margin:0 0 26px;padding:18px 18px 20px;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};background:#ffffff;text-align:center;border-left:none;border-right:none;box-shadow:none;",
@@ -459,34 +459,47 @@ def _hero_css(key: str, theme: Any, accent: str, secondary: str) -> str:
 def _hero_kicker_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     center = "text-align:center;" if key in {"warm", "chinese", "morandi"} else ""
     letter = "0.32em" if key == "chinese" else "0.18em"
-    color = accent if key not in {"magazine", "neon"} else (secondary if key == "magazine" else accent)
-    return f"margin:0 0 8px;color:{color};font-size:12px;line-height:1.4;font-weight:900;letter-spacing:{letter};text-transform:uppercase;{center}"
+    color = accent if key not in {"magazine", "neon", "tech"} else (secondary if key == "magazine" else "#7dd3fc" if key == "tech" else accent)
+    font = 'font-family:Georgia,"Songti SC","STSong",serif;' if key == "magazine" else 'font-family:Cascadia Code,Consolas,monospace;' if key == "tech" else ""
+    if key == "warm":
+        letter = "0.08em"
+        center = ""
+        font = 'font-family:Georgia,"Songti SC","STSong",serif;'
+    return f"margin:0 0 8px;color:{color};font-size:12px;line-height:1.4;font-weight:900;letter-spacing:{letter};text-transform:uppercase;{center}{font}"
 
 
 def _hero_title_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     center = "text-align:center;" if key in {"warm", "chinese", "morandi"} else ""
     size = "20px" if key == "magazine" else "30px"
     weight = "900"
-    color = accent if key == "neon" else theme.heading
+    color = accent if key == "neon" else "#f8fafc" if key == "tech" else theme.heading
     spacing = "4px" if key == "chinese" else ("1px" if key in {"magazine", "aurora"} else "0.04em")
-    return f"margin:0;color:{color};font-size:{size};line-height:1.3;font-weight:{weight};letter-spacing:{spacing};{center}"
+    font = ""
+    if key == "magazine":
+        font = 'font-family:Georgia,"Times New Roman","Songti SC","STSong",serif;'
+        weight = "700"
+    elif key == "warm":
+        font = 'font-family:Georgia,"Songti SC","STSong",serif;'
+        weight = "760"
+        center = ""
+    return f"margin:0;color:{color};font-size:{size};line-height:1.3;font-weight:{weight};letter-spacing:{spacing};{center}{font}"
 
 
 def _hero_strap_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     center = "text-align:center;" if key in {"warm", "chinese", "morandi"} else ""
-    color = theme.text if key not in {"magazine", "neon"} else (theme.muted if key == "magazine" else secondary)
+    color = theme.text if key not in {"magazine", "neon", "business", "tech", "warm"} else (theme.muted if key == "magazine" else "#425a78" if key == "business" else "#cbd5e1" if key == "tech" else "#7a6347" if key == "warm" else secondary)
     return f"margin:12px 0 0;color:{color};font-size:16px;line-height:1.9;font-weight:700;{center}"
 
 
 def _h2_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     mapping = {
         "elegant": f"margin:36px 0 20px;background:{theme.soft};border-left:4px solid {accent};padding:12px 18px;font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;letter-spacing:1px;",
-        "business": f"margin:36px 0 20px;border-bottom:1px solid {theme.line};border-left:3px solid {accent};padding:0 0 12px 16px;font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;",
-        "warm": f"margin:40px 0 20px;text-align:center;border-top:1px solid {accent};border-bottom:1px solid {accent};padding:16px 0;font-size:17px;font-weight:700;color:{accent};line-height:1.6;letter-spacing:3px;",
+        "business": f"margin:34px 0 18px;padding:0 0 8px;border-bottom:1px solid {theme.line};border-left:none;font-size:17px;font-weight:800;color:#173a67;line-height:1.6;letter-spacing:0.06em;",
+        "warm": f'margin:34px 0 18px;padding:8px 0 8px 12px;border-left:3px solid {accent};background:linear-gradient(90deg, rgba(196,125,90,0.10), rgba(196,125,90,0));font-size:17px;font-weight:720;color:{theme.heading};line-height:1.6;letter-spacing:0.04em;font-family:Georgia,"Songti SC","STSong",serif;',
         "sunrise": f"margin:36px 0 20px;background:{theme.soft2};border-left:5px solid {accent};padding:12px 18px;font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;letter-spacing:1px;",
-        "tech": f"margin:36px 0 20px;padding-bottom:10px;border-bottom:2px solid {accent};font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;",
+        "tech": f"margin:34px 0 18px;padding:0 0 8px;border-bottom:1px solid {theme.line};font-size:17px;font-weight:820;color:#105f78;line-height:1.6;letter-spacing:0.08em;",
         "chinese": f"margin:40px 0 20px;text-align:center;border-top:1px solid {secondary};border-bottom:1px solid {secondary};padding:16px 0;font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;letter-spacing:4px;",
-        "magazine": f"margin:36px 0 20px;padding:0 0 8px;border-bottom:4px solid {accent};font-size:20px;font-weight:900;color:{theme.heading};line-height:1.4;letter-spacing:1px;",
+        "magazine": f'margin:38px 0 18px;padding:0 0 8px;border-bottom:1px solid #e8dbc8;font-size:20px;font-weight:700;color:{theme.heading};line-height:1.4;letter-spacing:0.12em;font-family:Georgia,"Times New Roman","Songti SC","STSong",serif;',
         "forest": f"margin:36px 0 20px;background:{theme.soft};border-left:5px solid {accent};padding:12px 18px;font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;letter-spacing:1px;",
         "aurora": f"margin:36px 0 20px;padding:0 0 10px;border-bottom:2px solid {accent};box-shadow:inset 0 -5px 0 {secondary};font-size:17px;font-weight:700;color:{theme.heading};line-height:1.6;letter-spacing:1px;",
         "morandi": f"margin:36px 0 20px;text-align:center;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};padding:14px 0;font-size:16px;font-weight:600;color:{theme.heading};line-height:1.6;letter-spacing:2px;",
@@ -498,19 +511,20 @@ def _h2_css(key: str, theme: Any, accent: str, secondary: str) -> str:
 
 def _h3_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     center = "text-align:center;" if key in {"warm", "chinese", "morandi"} else ""
-    color = accent if key in {"warm", "neon"} else theme.heading
-    return f"margin:28px 0 14px;font-size:15px;font-weight:700;color:{color};line-height:1.6;letter-spacing:1px;{center}"
+    color = accent if key in {"warm", "neon"} else "#18355f" if key == "business" else "#11657f" if key == "tech" else theme.heading
+    font = 'font-family:Georgia,"Songti SC","STSong",serif;' if key in {"magazine", "warm"} else ""
+    return f"margin:28px 0 14px;font-size:15px;font-weight:700;color:{color};line-height:1.6;letter-spacing:1px;{center}{font}"
 
 
 def _blockquote_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     mapping = {
         "elegant": f"margin:24px 0;padding:18px 20px 18px 22px;background:{theme.soft};border-left:4px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
-        "business": f"margin:24px 0;padding:18px 22px;background:{theme.soft2};border-left:3px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
-        "warm": f"margin:24px 0;padding:18px 22px;background:{theme.soft};border-left:3px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
+        "business": f"margin:22px 0;padding:16px 18px;background:{theme.soft2};border-left:4px solid {accent};border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};border-radius:8px;color:{theme.text};box-shadow:none;",
+        "warm": f"margin:22px 0;padding:18px 20px;background:#fff8f1;border:1px solid #f0dcc2;border-radius:10px;color:{theme.text};box-shadow:none;",
         "sunrise": f"margin:24px 0;padding:18px 22px;background:{theme.soft2};border-left:4px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
-        "tech": f"margin:24px 0;padding:16px 20px;background:{theme.soft};border-left:3px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
+        "tech": f"margin:22px 0;padding:16px 18px;background:#0f172a;border-top:2px solid {accent};border-left:1px solid #1e293b;border-right:1px solid #1e293b;border-bottom:1px solid #1e293b;border-radius:8px;color:#e2e8f0;box-shadow:none;",
         "chinese": f"margin:24px 0;padding:18px 22px;background:{theme.soft};border-left:3px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
-        "magazine": f"margin:28px 0;padding:18px 0;border-top:3px solid #000;border-bottom:3px solid #000;border-left:none;border-right:none;border-radius:0;background:transparent;color:{accent};box-shadow:none;font-weight:700;",
+        "magazine": f"margin:28px 0;padding:18px 0;border-top:2px solid #1f1a15;border-bottom:1px solid #e8dbc8;border-left:none;border-right:none;border-radius:0;background:transparent;color:{theme.heading};box-shadow:none;font-weight:700;",
         "forest": f"margin:24px 0;padding:18px 22px;background:{theme.soft};border-left:4px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
         "aurora": f"margin:24px 0;padding:18px 22px;background:{theme.soft};border-left:3px solid {accent};border-right:3px solid {secondary};border-top:none;border-bottom:none;border-radius:0;color:{theme.text};box-shadow:none;",
         "morandi": f"margin:28px 0;padding:16px 0;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};border-left:none;border-right:none;border-radius:0;background:transparent;color:{theme.muted};box-shadow:none;text-align:center;font-style:italic;",
@@ -626,9 +640,9 @@ def _compare_right_css(key: str, theme: Any, accent: str, secondary: str) -> str
 
 def _quote_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     mapping = {
-        "magazine": "margin:28px 0;padding:20px 0;border-top:3px solid #000;border-bottom:3px solid #000;background:transparent;border-left:none;border-right:none;border-radius:0;box-shadow:none;",
-        "business": f"margin:24px 0;padding:18px 20px;background:{theme.soft2};border-left:3px solid {accent};border-top:none;border-right:none;border-bottom:none;border-radius:0;box-shadow:none;",
-        "warm": f"margin:24px 0;padding:20px 20px;background:{theme.soft};border-top:1px solid {accent};border-bottom:1px solid {accent};border-left:none;border-right:none;border-radius:0;box-shadow:none;text-align:center;",
+        "magazine": "margin:26px 0;padding:18px 0;border-top:2px solid #1f1a15;border-bottom:1px solid #e8dbc8;background:transparent;border-left:none;border-right:none;border-radius:0;box-shadow:none;",
+        "business": f"margin:22px 0;padding:16px 18px;background:{theme.soft2};border-left:4px solid {accent};border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};border-radius:8px;box-shadow:none;",
+        "warm": f"margin:22px 0;padding:18px 18px;background:#fff8f1;border:1px solid #f0dcc2;border-radius:10px;box-shadow:none;text-align:left;",
         "aurora": f"margin:24px 0;padding:18px 20px;background:#ffffff;border-bottom:2px solid {accent};box-shadow:inset 0 -5px 0 {secondary};border-radius:0;border-top:none;border-left:none;border-right:none;",
         "morandi": f"margin:28px 0;padding:18px 0;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};background:transparent;border-radius:0;box-shadow:none;text-align:center;",
         "neon": f"margin:24px 0;padding:18px 20px;background:#ffffff;border-bottom:2px solid {accent};box-shadow:inset 0 -5px 0 {secondary};border-radius:0;border-top:none;border-left:none;border-right:none;",
@@ -640,20 +654,23 @@ def _quote_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
 
 
 def _quote_mark_css(key: str, theme: Any, accent: str, secondary: str) -> str:
-    color = "#000000" if key == "magazine" else accent
-    return f"margin:0 0 8px;color:{color};font-size:28px;line-height:1;font-weight:800;"
+    color = "#1f1a15" if key == "magazine" else "#7dd3fc" if key == "tech" else accent
+    return f"margin:0 0 8px;color:{color};font-size:26px;line-height:1;font-weight:800;"
 
 
 def _quote_text_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     center = "text-align:center;" if key in {"warm", "morandi"} else ""
-    color = accent if key == "neon" else theme.heading
-    weight = "900" if key == "magazine" else "700"
-    return f"margin:0;color:{color};font-size:17px;line-height:1.9;font-weight:{weight};letter-spacing:0.08px;{center}"
+    color = accent if key == "neon" else "#16304e" if key == "business" else "#e2e8f0" if key == "tech" else theme.heading
+    weight = "700" if key == "magazine" else "700"
+    font = 'font-family:Georgia,"Songti SC","STSong",serif;' if key in {"magazine", "warm"} else ""
+    return f"margin:0;color:{color};font-size:17px;line-height:1.9;font-weight:{weight};letter-spacing:0.08px;{center}{font}"
 
 
 def _quote_author_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     center = "text-align:center;" if key in {"warm", "morandi"} else ""
-    return f"margin:10px 0 0;color:{theme.muted};font-size:13px;line-height:1.6;{center}"
+    color = "#6a5a49" if key == "magazine" else "#94a3b8" if key == "tech" else theme.muted
+    font = 'font-family:Cascadia Code,Consolas,monospace;' if key == "tech" else ""
+    return f"margin:10px 0 0;color:{color};font-size:13px;line-height:1.6;{center}{font}"
 
 
 def _stat_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
@@ -681,9 +698,9 @@ def _stat_label_css(key: str, theme: Any, accent: str, secondary: str) -> str:
 
 def _reference_card_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     mapping = {
-        "magazine": f"margin:16px 0 0;padding:16px 0 14px;border-top:1px solid #000;border-bottom:1px solid {theme.line};border-radius:0;background:transparent;border-left:none;border-right:none;box-shadow:none;",
-        "business": f"margin:14px 0 0;padding:16px 16px 14px;border-left:3px solid {accent};border-radius:0;background:#ffffff;border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};box-shadow:none;",
-        "tech": f"margin:14px 0 0;padding:16px 16px 14px;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-left:1px solid {theme.line};box-shadow:none;",
+        "magazine": f"margin:16px 0 0;padding:16px 0 14px;border-top:1px solid #1f1a15;border-bottom:1px solid #e8dbc8;border-radius:0;background:transparent;border-left:none;border-right:none;box-shadow:none;",
+        "business": f"margin:14px 0 0;padding:16px 16px 14px;border-left:4px solid {accent};border-radius:8px;background:{theme.soft2};border-top:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};box-shadow:none;",
+        "tech": f"margin:14px 0 0;padding:16px 16px 14px;border-top:2px solid {accent};border-radius:8px;background:#f8fbfd;border-left:1px solid {theme.line};border-right:1px solid {theme.line};border-bottom:1px solid {theme.line};box-shadow:none;",
         "aurora": f"margin:14px 0 0;padding:16px 16px 14px;border-bottom:2px solid {accent};border-radius:0;background:#ffffff;box-shadow:inset 0 -4px 0 {secondary};border-top:1px solid {theme.line};border-left:1px solid {theme.line};border-right:1px solid {theme.line};",
         "morandi": f"margin:16px 0 0;padding:16px 0 14px;border-top:1px solid {theme.line};border-bottom:1px solid {theme.line};border-radius:0;background:transparent;border-left:none;border-right:none;box-shadow:none;",
     }
@@ -695,5 +712,11 @@ def _reference_card_css(key: str, theme: Any, accent: str, secondary: str) -> st
 
 def _reference_link_css(key: str, theme: Any, accent: str, secondary: str) -> str:
     if key in {"magazine", "morandi", "chinese"}:
-        return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:10px 0;border-radius:0;background:transparent;color:{accent};text-align:left;font-size:14px;font-weight:800;text-decoration:none;border:none;"
+        return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:10px 0;border-radius:0;background:transparent;color:{accent};text-align:left;font-size:14px;font-weight:800;text-decoration:none;border:none;border-bottom:1px solid {accent};"
+    if key == "business":
+        return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:11px 14px;border-radius:8px;background:#ffffff;color:{accent};text-align:center;font-size:14px;font-weight:800;text-decoration:none;border:1px solid {accent};"
+    if key == "warm":
+        return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:8px 0;border-radius:0;background:transparent;color:{accent};text-align:left;font-size:14px;font-weight:800;text-decoration:none;border:none;border-bottom:1px solid #d8b48b;"
+    if key == "tech":
+        return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:11px 14px;border-radius:8px;background:#0f172a;color:#7dd3fc;text-align:left;font-size:14px;font-weight:800;text-decoration:none;border:none;font-family:Cascadia Code,Consolas,monospace;"
     return f"display:block;box-sizing:border-box;width:100%;margin:12px 0 0;padding:11px 14px;border-radius:999px;background:{theme.soft};color:{accent};text-align:center;font-size:14px;font-weight:800;text-decoration:none;border:1px solid {theme.line};"

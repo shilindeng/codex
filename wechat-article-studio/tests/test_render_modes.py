@@ -19,7 +19,7 @@ from core.layout_skin import choose_layout_skin  # noqa: E402
 from core.publication_cleanup import expand_compact_markdown_lists  # noqa: E402
 from core.workflow import apply_reference_policy, build_parser, normalize_publication_body  # noqa: E402
 from core.render import cmd_render, highlight_technical_terms_markdown  # noqa: E402
-from core.wechat_fragment import build_header_module_html  # noqa: E402
+from core.wechat_fragment import build_header_module_html, choose_wechat_publication_style  # noqa: E402
 
 
 class RenderModeTests(unittest.TestCase):
@@ -165,7 +165,7 @@ class RenderModeTests(unittest.TestCase):
         )
         self.assertEqual(decision.style, "magazine")
 
-    def test_render_keeps_references_internal_but_does_not_append_tail_cards(self):
+    def test_render_keeps_light_citations_and_appends_reference_cards(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / "manifest.json").write_text(
@@ -208,10 +208,12 @@ class RenderModeTests(unittest.TestCase):
             )
             wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
             preview_html = (workspace / "article.html").read_text(encoding="utf-8")
-            self.assertNotIn("参考资料", wechat_html)
-            self.assertNotIn("查看原文", wechat_html)
+            self.assertIn("参考资料", wechat_html)
+            self.assertIn("查看原文", wechat_html)
             self.assertIn("正文内容里有一个判断", wechat_html)
-            self.assertNotIn("[1]", wechat_html)
+            self.assertIn("<sup", wechat_html)
+            self.assertIn("[1]", wechat_html)
+            self.assertIn("reference-card", preview_html)
 
     def test_publication_cleanup_removes_quote_labels_and_manual_reference_block(self):
         body = "\n".join(
@@ -276,6 +278,15 @@ class RenderModeTests(unittest.TestCase):
         self.assertNotIn("行业判断", header)
         self.assertIn("深度观察", header)
 
+    def test_wechat_publication_style_preserves_explicit_theme_choice(self):
+        style = choose_wechat_publication_style(
+            "magazine",
+            {"viral_blueprint": {"article_archetype": "commentary"}},
+            rich_blocks=["quote"],
+            publication_report={"suggested_wechat_style": "clean"},
+        )
+        self.assertEqual(style, "magazine")
+
     def test_render_strips_gold_quote_labels_and_manual_reference_blocks_from_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
@@ -331,7 +342,8 @@ class RenderModeTests(unittest.TestCase):
             wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
             self.assertNotIn("金句 1：", wechat_html)
             self.assertNotIn("提示</strong> 参考资料", wechat_html)
-            self.assertNotIn("参考资料", wechat_html)
+            self.assertIn("参考资料", wechat_html)
+            self.assertIn("查看原文", wechat_html)
 
     def test_render_drop_title_summary_hides_hero_strap(self):
         with tempfile.TemporaryDirectory() as tmp:

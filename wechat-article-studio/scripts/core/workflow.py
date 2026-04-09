@@ -69,13 +69,18 @@ from core.layout_skin import LAYOUT_SKIN_CHOICES, normalize_layout_skin_request
 from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.persona import normalize_writing_persona
+from core.publication import (
+    apply_reference_policy as publication_apply_reference_policy,
+    build_references_payload as publication_build_references_payload,
+    normalize_publication_body as publication_normalize_publication_body,
+)
 from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
 from core.editorial_strategy import (
     generate_diverse_title_variants,
     normalize_editorial_blueprint,
     summarize_recent_corpus,
 )
-from core.render import cmd_render as legacy_render
+from core.render import cmd_render as legacy_render, prepare_publication_artifacts as render_prepare_publication_artifacts
 from core.rewrite import generate_revision_candidate
 from core.viral import (
     DEFAULT_THRESHOLD as VIRAL_SCORE_THRESHOLD,
@@ -941,117 +946,15 @@ def _extract_body_urls(body: str) -> list[str]:
 
 
 def normalize_publication_body(title: str, body: str) -> str:
-    normalized = body or ""
-    # Strip templated gold-quote labels while preserving the actual quote text.
-    normalized = re.sub(r"(?m)^(\s*>\s*)?金句\s*\d+\s*[：:]\s*", lambda m: m.group(1) or "", normalized)
-    normalized = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized)
-    normalized = re.sub(r"【\s*\d{1,2}\s*】", "", normalized)
-    normalized = strip_ai_label_phrases(normalized)
-    normalized = expand_compact_markdown_lists(normalized)
-
-    # Remove markdown callout reference blocks; the system will render a unified references section.
-    normalized = re.sub(
-        r"(?ms)^\s*>\s*\[!(?:TIP|NOTE)\]\s*(?:参考资料|参考来源|参考与延伸).*?(?=^\s*(?:#|$)|\Z)",
-        "",
-        normalized,
-    )
-
-    intro_blocks, sections = legacy.split_sections(normalized)
-    filtered_sections = [section for section in sections if not legacy.is_reference_heading(section.get("heading", ""))]
-    normalized = legacy.reconstruct_body(intro_blocks, filtered_sections).strip() + "\n"
-    return normalized
+    return publication_normalize_publication_body(title, body)
 
 
 def build_references_payload(workspace: Path, manifest: dict[str, Any], body: str) -> dict[str, Any]:
-    items: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    evidence_report = read_json(workspace / "evidence-report.json", default={}) or {}
-    for entry in (evidence_report.get("items") or []):
-        url = str(entry.get("url") or "").strip()
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        items.append(
-            {
-                "url": url,
-                "title": str(entry.get("page_title") or entry.get("title") or _reference_label(url)).strip(),
-                "domain": _reference_domain(url),
-                "note": extract_summary(str(entry.get("sentence") or entry.get("description") or ""), 72),
-                "source_type": "evidence",
-            }
-        )
-    research = load_research(workspace)
-    for entry in (research.get("sources") or []):
-        if isinstance(entry, dict):
-            url = str(entry.get("url") or entry.get("link") or "").strip()
-            title = str(entry.get("title") or entry.get("name") or "").strip()
-        else:
-            url = str(entry or "").strip()
-            title = ""
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        items.append(
-            {
-                "url": url,
-                "title": title or _reference_label(url),
-                "domain": _reference_domain(url),
-                "note": "",
-                "source_type": "research",
-            }
-        )
-    for url in normalize_urls(list(manifest.get("source_urls") or []) + _extract_body_urls(body)):
-        if not url or url in seen:
-            continue
-        seen.add(url)
-        items.append(
-            {
-                "url": url,
-                "title": _reference_label(url),
-                "domain": _reference_domain(url),
-                "note": "",
-                "source_type": "manifest",
-            }
-        )
-    normalized_items = []
-    for index, item in enumerate(items, start=1):
-        normalized_items.append({**item, "index": index})
-    payload = {"items": normalized_items, "generated_at": now_iso()}
-    write_json(workspace / "references.json", payload)
-    manifest["references_path"] = "references.json"
-    return payload
+    return publication_build_references_payload(workspace, manifest, body)
 
 
 def apply_reference_policy(workspace: Path, manifest: dict[str, Any], title: str, body: str) -> tuple[str, dict[str, Any]]:
-    payload = build_references_payload(workspace, manifest, body)
-    items = payload.get("items") or []
-    body_urls = _extract_body_urls(body)
-    title_map = {item["url"]: item["title"] for item in items}
-
-    def replace_markdown_link(match: re.Match[str]) -> str:
-        label = match.group(1).strip()
-        url = match.group(2).strip()
-        return label or title_map.get(url, _reference_label(url))
-
-    normalized_body = re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", replace_markdown_link, body)
-
-    def replace_raw_url(match: re.Match[str]) -> str:
-        url = match.group(0).strip()
-        return title_map.get(url, _reference_label(url))
-
-    normalized_body = re.sub(r"https?://[^\s)>\]]+", replace_raw_url, normalized_body)
-    normalized_body = re.sub(r"(?<!\w)\[(\d{1,2})\](?!\()", "", normalized_body)
-    normalized_body = re.sub(r"【\s*\d{1,2}\s*】", "", normalized_body)
-    # Preserve markdown structure while still collapsing accidental runs of spaces.
-    normalized_body = re.sub(r"[ \t]{2,}", " ", normalized_body)
-    findings = {
-        "raw_urls_before": len(body_urls),
-        "raw_urls_after": len(_extract_body_urls(normalized_body)),
-        "body_citation_count": len(re.findall(r"\[\d+\]|【\s*\d{1,2}\s*】", normalized_body)),
-        "reference_count": len(items),
-        "citation_policy_passed": len(_extract_body_urls(normalized_body)) == 0,
-    }
-    return normalized_body, findings
+    return publication_apply_reference_policy(workspace, manifest, title, body, keep_inline_citations=True)
 
 
 def sync_article_reference_policy(workspace: Path, manifest: dict[str, Any]) -> tuple[dict[str, str], str]:
@@ -2909,6 +2812,15 @@ def _merge_url_list(base: list[str], extra: list[str]) -> list[str]:
     return merged
 
 
+def cmd_prepare_publication(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace, args, include_corpus=False, include_author_memory=False)
+    payload = render_prepare_publication_artifacts(workspace, manifest, input_rel=getattr(args, "input", None))
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_evidence(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = load_manifest(workspace)
@@ -3580,23 +3492,35 @@ def _prepare_run_manifest(workspace: Path, args: argparse.Namespace) -> tuple[di
 
 
 def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    publication_report = render_prepare_publication_artifacts(workspace, manifest)
+    original_article_path = str(manifest.get("article_path") or "article.md")
+    publication_path = str(manifest.get("publication_path") or publication_report.get("output_path") or "publication.md")
+    requested_inline_count = int(getattr(args, "inline_count", 0) or 0)
+    inline_count = requested_inline_count or int(publication_report.get("inline_image_limit") or 0)
     ensure_layout_plan_artifacts(workspace, manifest, force=True)
     _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)
-    legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=args.inline_count))
-    manifest = load_manifest(workspace)
-    manifest["image_status"] = "planned"
+    manifest["article_path"] = publication_path
     save_manifest(workspace, manifest)
-    legacy_generate_images(
-        argparse.Namespace(
-            workspace=str(workspace),
-            provider=image_provider,
-            dry_run=args.dry_run_images,
-            gemini_model=args.gemini_model,
-            openai_model=args.openai_model,
+    try:
+        legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=inline_count))
+        manifest = load_manifest(workspace)
+        manifest["image_status"] = "planned"
+        save_manifest(workspace, manifest)
+        legacy_generate_images(
+            argparse.Namespace(
+                workspace=str(workspace),
+                provider=image_provider,
+                dry_run=args.dry_run_images,
+                gemini_model=args.gemini_model,
+                openai_model=args.openai_model,
+            )
         )
-    )
-    legacy_assemble(argparse.Namespace(workspace=str(workspace)))
+        legacy_assemble(argparse.Namespace(workspace=str(workspace)))
+    finally:
+        manifest = load_manifest(workspace)
+        manifest["article_path"] = original_article_path
+        save_manifest(workspace, manifest)
     legacy_render(
         argparse.Namespace(
             workspace=str(workspace),
@@ -4219,6 +4143,11 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument("--max-items", type=int, default=6, help="最多抽取的证据句条数")
     evidence.add_argument("--auto-search", action="store_true", help="启用 Tavily 自动搜索补来源（需要 TAVILY_API_KEY）")
     evidence.set_defaults(func=cmd_evidence)
+
+    prepare_publication = subparsers.add_parser("prepare-publication", help="在发布前整理 Markdown 成品，生成 publication.md")
+    prepare_publication.add_argument("--workspace", required=True)
+    prepare_publication.add_argument("--input")
+    prepare_publication.set_defaults(func=cmd_prepare_publication)
 
     build_playbook = subparsers.add_parser("build-playbook", help="从风格样本构建可复用的作者风格作战卡")
     build_playbook.add_argument("--workspace", required=True)
