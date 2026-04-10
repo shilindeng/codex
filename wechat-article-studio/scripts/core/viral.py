@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.ai_fingerprint import detect_ai_fingerprints, summarize_ai_fingerprints
 from core.editorial_strategy import (
     ending_pattern_key,
     heading_pattern_key,
@@ -312,6 +313,12 @@ SEVERE_AI_SMELL_TYPES = {
     "author_phrase",
     "author_starter",
     "prompt_leak",
+    "reader_strawman",
+    "opening_triad",
+    "dead_opening_self_intro",
+    "body_feeling_answer",
+    "blessing_close",
+    "fake_precision_emotion",
 }
 
 CRITICAL_QUALITY_GATES = (
@@ -1191,6 +1198,7 @@ def build_humanness_signals(body: str, manifest: dict[str, Any] | None = None, r
     sentences = [sentence for sentence in legacy.sentence_split(body) if sentence.strip()]
     sentence_lengths = [legacy.cjk_len(sentence) for sentence in sentences if legacy.cjk_len(sentence) > 0]
     depth = (review or {}).get("depth_signals") or _depth_signals(body, manifest if isinstance(manifest, dict) else None)
+    ai_fingerprint_summary = summarize_ai_fingerprints(detect_ai_fingerprints(body))
     adverb_hits = sum(sum(item.count(word) for word in COMMON_ADVERBS) for item in paragraphs)
     total_chars = max(1, legacy.cjk_len(body))
     self_corrections = len(re.findall(r"不对[，,]|准确说|更准确地说|算了|话说回来|不过话又说回来|——", body or ""))
@@ -1217,6 +1225,10 @@ def build_humanness_signals(body: str, manifest: dict[str, Any] | None = None, r
         risk_findings.append("段落像提纲拼接。")
     if depth.get("repeated_starter_count", 0) >= 2 or depth.get("repeated_sentence_opener_count", 0) >= 2:
         risk_findings.append("起手重复，容易暴露模板腔。")
+    if int(ai_fingerprint_summary.get("strong_count") or 0) >= 1:
+        risk_findings.append("命中了明显 AI 指纹。")
+    elif int(ai_fingerprint_summary.get("medium_count") or 0) >= 2:
+        risk_findings.append("AI 指纹开始叠加。")
     return {
         "sentence_length_range": sentence_range,
         "paragraph_length_range": paragraph_range,
@@ -1227,6 +1239,11 @@ def build_humanness_signals(body: str, manifest: dict[str, Any] | None = None, r
         "evidence_anchor_count": int(depth.get("evidence_paragraph_count") or 0),
         "counterpoint_anchor_count": int(depth.get("counterpoint_paragraph_count") or 0),
         "outline_like": bool(depth.get("outline_like")),
+        "ai_fingerprint_summary": ai_fingerprint_summary,
+        "ai_fingerprint_strong_count": int(ai_fingerprint_summary.get("strong_count") or 0),
+        "ai_fingerprint_medium_count": int(ai_fingerprint_summary.get("medium_count") or 0),
+        "ai_fingerprint_top_labels": list(ai_fingerprint_summary.get("top_labels") or []),
+        "ai_fingerprint_rewrite_hints": list(ai_fingerprint_summary.get("rewrite_hints") or []),
         "import_outline_risk": bool(depth.get("outline_like") and not review),
         "risk_findings": risk_findings[:6],
     }
@@ -1268,6 +1285,17 @@ def _humanness_score(signals: dict[str, Any], persona: dict[str, Any] | None = N
     if int(signals.get("counterpoint_anchor_count") or 0) < 1:
         score -= 1
         findings.append("缺少反方锚。")
+    strong_ai_fingerprint_hits = int(signals.get("ai_fingerprint_strong_count") or 0)
+    medium_ai_fingerprint_hits = int(signals.get("ai_fingerprint_medium_count") or 0)
+    ai_fingerprint_labels = [str(item).strip() for item in (signals.get("ai_fingerprint_top_labels") or []) if str(item).strip()]
+    if strong_ai_fingerprint_hits >= 1:
+        score -= min(3, strong_ai_fingerprint_hits * 2)
+        if ai_fingerprint_labels:
+            findings.append(f"明显 AI 指纹：{'、'.join(ai_fingerprint_labels[:2])}。")
+    elif medium_ai_fingerprint_hits >= 2:
+        score -= 1
+        if ai_fingerprint_labels:
+            findings.append(f"AI 指纹开始叠加：{'、'.join(ai_fingerprint_labels[:2])}。")
     if persona_name == "cold-analyst" and float(signals.get("adverb_density") or 0) <= 0.035:
         score += 1
     return max(0, min(score, 10)), findings[:6]
@@ -1528,8 +1556,17 @@ def _ai_smell_findings(body: str, manifest: dict[str, Any] | None = None) -> lis
         hits = sum(1 for item in paragraphs if _clean_block_text(item).startswith(compact))
         if hits:
             findings.append({"type": "author_starter", "pattern": compact, "count": hits, "evidence": f"作者记忆明确避开这种起手：{compact}"})
+    findings.extend(detect_ai_fingerprints(body))
     findings.extend(_prompt_leak_findings(body))
-    return findings
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in findings:
+        key = (str(item.get("type") or ""), str(item.get("evidence") or item.get("pattern") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def _workspace_from_manifest(manifest: dict[str, Any]) -> Path | None:
@@ -1821,6 +1858,7 @@ def build_heuristic_review(
     pain_point_sentences = _sentence_objects(body, _extract_sentences_by_markers(body, PAIN_POINT_MARKERS), "刺痛读者处境")
     signature_lines = _sentence_objects(body, _extract_signatures(body), "可截图传播")
     ai_smell_findings = _ai_smell_findings(body, manifest)
+    ai_fingerprint_summary = summarize_ai_fingerprints(ai_smell_findings)
     template_findings = _template_findings(title, body, manifest)
     perspective_shifts = _perspective_shifts(body, blueprint)
     emotion_curve = _emotion_curve_from_body(body, headings)
@@ -1885,6 +1923,10 @@ def build_heuristic_review(
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
         strengths.append("整体语言相对自然，没有明显模板腔堆积。")
+    if int(ai_fingerprint_summary.get("strong_count") or 0) >= 1:
+        issues.append("还在命中明显 AI 指纹，像在替读者完成思考。")
+    elif int(ai_fingerprint_summary.get("medium_count") or 0) >= 2:
+        issues.append("局部 AI 指纹开始叠加，读者会闻到答题模板味。")
     if humanness_findings:
         issues.append("真人感还不够稳，句长、段落或锚点分布仍然偏齐。")
     else:
@@ -1918,6 +1960,7 @@ def build_heuristic_review(
             "补反方、误判或适用边界，别把文章写成单向宣讲" if depth_signals.get("counterpoint_paragraph_count", 0) < 1 else "",
             "重写段落节奏，至少保留一两段真正展开的分析段" if depth_signals.get("outline_like") else "",
             "清理模板连接词，继续去 AI 味" if ai_smell_findings else "",
+            *list(ai_fingerprint_summary.get("rewrite_hints") or []),
             "把写前增强准备好的来源材料、场景细节和边界提醒真正写进正文" if enhancement_findings else "",
             "把语气、证据摆法和节奏重新拉回这篇既定的人格" if persona_findings else "",
             "打散固定开头和结尾套路，别再回到一句话结论 + 万能清单" if any("先说结论" in str(item.get("evidence") or "") or "最后给你一个可执行清单" in str(item.get("evidence") or "") for item in ai_smell_findings) else "",
@@ -1958,6 +2001,7 @@ def build_heuristic_review(
         "emotion_value_sentences": emotion_value_sentences[:8],
         "pain_point_sentences": pain_point_sentences[:8],
         "ai_smell_findings": ai_smell_findings,
+        "ai_fingerprint_summary": ai_fingerprint_summary,
         "template_findings": template_findings,
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
@@ -2693,12 +2737,14 @@ def build_score_report(
     humanness_signals = review.get("humanness_signals") or build_humanness_signals(body, manifest, {"depth_signals": depth_signals})
     humanness_score, derived_humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
     humanness_findings = _dedupe(_normalize_list(review.get("humanness_findings")) + derived_humanness_findings)
+    ai_fingerprint_summary = summarize_ai_fingerprints(review.get("ai_smell_findings") or [])
     evidence_readiness = _evidence_readiness(manifest, body, review | {"depth_signals": depth_signals})
     image_fit_expectation = _image_fit_expectation(title, body, manifest)
     material_signals = _material_signal_summary(body, manifest, review | {"depth_signals": depth_signals, "citation_findings": citation_findings})
     template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
         similarity_findings.get("repeated_phrases") or []
     )
+    template_penalty_hits += int(ai_fingerprint_summary.get("strong_count") or 0) * 2 + int(ai_fingerprint_summary.get("medium_count") or 0)
     effective_signatures = _effective_signature_lines(review)
     analysis = review.get("viral_analysis", {}) or {}
     ending_text = " ".join(legacy.list_paragraphs(body)[-2:])
@@ -2895,6 +2941,7 @@ def build_score_report(
             "先把标题和首屏钩子拉起来，别让读者在前两段就掉下去。" if not quality_gates["hook_quality_passed"] else "",
             "先把中段写顺，补出一段真正展开的分析，不要继续堆判断卡片。" if not quality_gates["reading_flow_passed"] else "",
             "继续清理模板腔，压低 AI 痕迹，别再靠固定反转句和硬互动提分。" if not quality_gates["naturalness_floor_passed"] else "",
+            *list(ai_fingerprint_summary.get("rewrite_hints") or []),
             "补来源、案例、对比或官方依据，让关键判断有托底。" if not quality_gates["credibility_passed"] else "",
             "把素材补到位：至少 4 类素材、1 张表格、2 处引用、1 段类比、1 段对比分析。" if not quality_gates["material_coverage_passed"] else "",
             "补一张服务判断的 Markdown 表格，让差异、趋势或成本一眼能看明白。" if not material_signals.get("has_table") else "",
@@ -2958,6 +3005,7 @@ def build_score_report(
                 "主动写出反方、误判或适用边界，文章才会更像真人判断。",
             ]
             + humanness_findings
+            + list(ai_fingerprint_summary.get("rewrite_hints") or [])
         ),
         "material_actions": _dedupe(
             [
@@ -3005,6 +3053,7 @@ def build_score_report(
         "pain_point_sentences": review.get("pain_point_sentences") or [],
         "ai_smell_findings": review.get("ai_smell_findings") or [],
         "ai_smell_hits": ai_smell_hits,
+        "ai_fingerprint_summary": ai_fingerprint_summary,
         "interaction_score": interaction_quality_score,
         "template_penalty_hits": template_penalty_hits,
         "template_findings": template_findings,

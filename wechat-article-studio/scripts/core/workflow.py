@@ -29,6 +29,7 @@ from core.artifacts import (
 )
 from core.acceptance import build_acceptance_report, markdown_acceptance_report
 from core.account_strategy import load_account_strategy, research_requirements_status
+from core.ai_fingerprint import summarize_ai_fingerprints
 from core.author_memory import (
     append_lesson_payload,
     build_author_memory_bundle,
@@ -1237,6 +1238,7 @@ def build_generation_preflight_report(
     blueprint = dict((outline_meta or {}).get("viral_blueprint") or manifest.get("viral_blueprint") or {})
     depth = generation_depth_signals(body, blueprint)
     ai_smell = generation_ai_smell_findings(body, manifest)
+    ai_fingerprint_summary = summarize_ai_fingerprints(ai_smell)
     template_findings = generation_template_findings(title, body, manifest)
     enhancement = content_enhancement or manifest.get("content_enhancement") or {}
     section_enhancements = list(enhancement.get("section_enhancements") or []) if isinstance(enhancement, dict) else []
@@ -1276,8 +1278,26 @@ def build_generation_preflight_report(
 
     if any(str(item.get("type") or "") == "prompt_leak" for item in ai_smell):
         missing_elements.append("正文里泄漏了内部提示语或写作说明。")
-    severe_types = {"author_phrase", "author_starter", "repeated_starter", "repeated_sentence_opener", "heading_monotony", "outline_like", "prompt_leak"}
-    severe_findings = [item for item in ai_smell if str(item.get("type") or "") in severe_types]
+    severe_types = {
+        "author_phrase",
+        "author_starter",
+        "repeated_starter",
+        "repeated_sentence_opener",
+        "heading_monotony",
+        "outline_like",
+        "prompt_leak",
+        "reader_strawman",
+        "opening_triad",
+        "dead_opening_self_intro",
+        "body_feeling_answer",
+        "blessing_close",
+        "fake_precision_emotion",
+    }
+    severe_findings = [
+        item
+        for item in ai_smell
+        if str(item.get("type") or "") in severe_types or str(item.get("severity") or "").lower() == "strong"
+    ]
     if any(str(item.get("pattern") or "").startswith(("ending-pattern:", "heading-pattern:", "author-starter:")) for item in template_findings):
         severe_findings.extend(
             [
@@ -1325,13 +1345,21 @@ def build_generation_preflight_report(
             ),
         ]
         + [f"删掉作者明确避开的句式：{item.get('pattern')}" for item in ai_smell if str(item.get("type") or "") in {"author_phrase", "author_starter"}]
+        + list(ai_fingerprint_summary.get("rewrite_hints") or [])
     )
-    issue_score = len(severe_findings) * 2 + len(missing_elements) + len(template_findings)
+    issue_score = (
+        len(severe_findings) * 2
+        + len(missing_elements)
+        + len(template_findings)
+        + int(ai_fingerprint_summary.get("strong_count") or 0) * 2
+        + int(ai_fingerprint_summary.get("medium_count") or 0)
+    )
     needs_hardening = bool(severe_findings or len(missing_elements) >= 2)
     return {
         "title": title,
         "generated_at": now_iso(),
         "ai_smell_findings": ai_smell,
+        "ai_fingerprint_summary": ai_fingerprint_summary,
         "template_findings": template_findings,
         "depth_signals": depth,
         "missing_elements": missing_elements,

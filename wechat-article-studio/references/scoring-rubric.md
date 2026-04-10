@@ -71,9 +71,17 @@
 - `naturalness_score`
 - `persona_fit_score`
 - `material_signals`
+- `ai_fingerprint_summary`
 - `quality_gates`
 - `mandatory_revisions`
 - `publish_blockers`
+
+## AI 指纹口径
+
+- 评分不再只看“有没有模板词”，还会看更像 `dbskill` 的 AI 指纹。
+- 强信号优先打：开头先自我介绍、开头三件套、替读者预设观点再纠正、结尾祝福腔、用身体感受代替论证。
+- 中信号继续压：翻译腔、连接词过密、概念命名仪式、深刻感用力过猛、故事只有壳没有细节。
+- 如果 `ai_fingerprint_summary.strong_count >= 1`，默认把这篇稿子视为还没过真人感底线，优先回炉，不要急着提分。
 
 ## 低分处理顺序
 
