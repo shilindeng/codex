@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import re
 import shutil
@@ -106,6 +107,7 @@ PUBLISH_MIN_CREDIBILITY_SCORE = 6
 CONTENT_MODE_CHOICES = ("tech-balanced", "tech-credible", "viral")
 WECHAT_HEADER_MODE_CHOICES = ("keep", "drop-title", "drop-title-summary")
 RECENT_CORPUS_LIMIT = 20
+PIPELINE_SCHEMA_VERSION = "2026-04-v3"
 KNOWN_TEMPLATE_PHRASES = [
     "这很正常，你不是一个人",
     "最难受的是",
@@ -283,22 +285,79 @@ def _update_research_requirements(workspace: Path, manifest: dict[str, Any], pay
 
 
 def collect_render_blockers(workspace: Path, manifest: dict[str, Any], score_report: dict[str, Any] | None = None) -> list[str]:
+    readiness = build_pipeline_readiness(workspace, manifest, score_report=score_report)
+    return list(readiness.get("render_blockers") or [])
+
+
+def _load_current_article_signature(workspace: Path, manifest: dict[str, Any]) -> str:
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    if not article_path.exists():
+        return ""
+    meta, body = split_frontmatter(read_text(article_path))
+    title = str(manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "").strip()
+    return article_body_signature(title, body)
+
+
+def _stale_report_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
+    current_signature = _load_current_article_signature(workspace, manifest)
+    if not current_signature:
+        return []
     blockers: list[str] = []
+    for name in ["review-report.json", "score-report.json", "acceptance-report.json"]:
+        payload = read_json(workspace / name, default={}) or {}
+        signature = str(payload.get("body_signature") or "").strip()
+        if payload and signature and signature != current_signature:
+            blockers.append(f"{name} 基于旧正文生成，需要重新生成。")
+    return blockers
+
+
+def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score_report: dict[str, Any] | None = None, acceptance_report: dict[str, Any] | None = None) -> dict[str, Any]:
+    stale_blockers = _stale_report_blockers(workspace, manifest)
+    title_blockers = collect_title_consistency_issues(workspace, manifest)
+    similarity_blockers = _similarity_blockers(workspace)
+    research_report = research_requirements_report(workspace, manifest)
     report = score_report or (read_json(workspace / "score-report.json", default={}) or {})
+    acceptance = acceptance_report or (read_json(workspace / "acceptance-report.json", default={}) or {})
+
+    score_blockers: list[str] = []
     if not report:
-        blockers.append("缺少 score-report.json，无法确认是否可继续正式产出。")
+        score_blockers.append("缺少 score-report.json，无法确认是否过线。")
     else:
         if not bool(report.get("passed", manifest.get("score_passed"))):
-            blockers.append("当前稿件评分未达继续产出阈值。")
+            score_blockers.append("当前稿件评分未达阈值。")
         failed_gates = [name for name, ok in (report.get("quality_gates") or {}).items() if not ok]
         if failed_gates:
-            blockers.append(f"评分硬门槛未通过：{'、'.join(failed_gates)}")
-    research_report = research_requirements_report(workspace, manifest)
+            score_blockers.append(f"评分硬门槛未通过：{'、'.join(failed_gates)}")
+        evidence_dimension = "事实/案例/对比托底" if has_score_dimension(report, "事实/案例/对比托底") else "可信度与检索支撑" if has_score_dimension(report, "可信度与检索支撑") else ""
+        evidence_score = score_dimension_value(report, evidence_dimension) if evidence_dimension else PUBLISH_MIN_CREDIBILITY_SCORE
+        if evidence_dimension and evidence_score < PUBLISH_MIN_CREDIBILITY_SCORE:
+            score_blockers.append(f"事实/案例/对比托底得分过低（{evidence_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
+
+    render_blockers: list[str] = []
     if research_report.get("requires_evidence") and not research_report.get("passed"):
-        blockers.append(f"调研门槛未通过：{'；'.join(research_report.get('reasons') or [])}")
-    blockers.extend(collect_title_consistency_issues(workspace, manifest))
-    blockers.extend(_similarity_blockers(workspace))
-    return blockers
+        render_blockers.append(f"调研门槛未通过：{'；'.join(research_report.get('reasons') or [])}")
+    render_blockers.extend(title_blockers)
+    render_blockers.extend(similarity_blockers)
+
+    publish_blockers: list[str] = []
+    publish_blockers.extend(placeholder_reasons(workspace, manifest))
+    if not acceptance:
+        publish_blockers.append("缺少 acceptance-report.json，无法确认成品验收是否通过")
+    elif not bool(acceptance.get("passed")):
+        failed = acceptance.get("failed_gates") or [name for name, ok in (acceptance.get("gates") or {}).items() if not ok]
+        publish_blockers.append(f"成品验收未通过：{'、'.join(str(item) for item in failed)}")
+
+    score_ready = not score_blockers and not stale_blockers
+    render_ready = score_ready and not render_blockers
+    publish_ready = render_ready and not publish_blockers and bool((acceptance.get("gates") or {}).get("publish_ready", False))
+    return {
+        "score_ready": score_ready,
+        "render_ready": render_ready,
+        "publish_ready": publish_ready,
+        "score_blockers": stale_blockers + score_blockers,
+        "render_blockers": stale_blockers + score_blockers + render_blockers,
+        "publish_blockers": stale_blockers + score_blockers + render_blockers + publish_blockers,
+    }
 
 
 def active_text_provider():
@@ -333,6 +392,10 @@ def score_dimension_value(report: dict[str, Any], dimension: str) -> int:
     return 0
 
 
+def has_score_dimension(report: dict[str, Any], dimension: str) -> bool:
+    return any(item.get("dimension") == dimension for item in report.get("score_breakdown", []))
+
+
 def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
     reasons: list[str] = []
     if str(manifest.get("text_model") or "").strip().lower() == "placeholder":
@@ -350,38 +413,11 @@ def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
 
 
 def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
-    blockers = placeholder_reasons(workspace, manifest)
-    blockers.extend(collect_title_consistency_issues(workspace, manifest))
-    blockers.extend(_similarity_blockers(workspace))
-    report = read_json(workspace / "score-report.json", default={}) or {}
-    if not report:
-        blockers.append("缺少 score-report.json，无法确认是否可发布")
-        return blockers
-    acceptance = read_json(workspace / "acceptance-report.json", default={}) or {}
-    if not acceptance:
-        blockers.append("缺少 acceptance-report.json，无法确认成品验收是否通过")
-    elif not bool(acceptance.get("passed")):
-        failed = acceptance.get("failed_gates") or [name for name, ok in (acceptance.get("gates") or {}).items() if not ok]
-        blockers.append(f"成品验收未通过：{'、'.join(str(item) for item in failed)}")
-    if not bool(report.get("passed", manifest.get("score_passed"))):
-        blockers.append("当前稿件评分未达发布阈值")
-    quality_gates = report.get("quality_gates") or {}
-    failed_gates = [name for name, ok in quality_gates.items() if not ok]
-    if failed_gates:
-        blockers.append(f"质量门槛未通过：{'、'.join(failed_gates)}")
-    if str(report.get("score_profile") or "") in {"tech-balanced", "tech-credible"}:
-        evidence_score = score_dimension_value(report, "技术准确与证据")
-        min_score = 12 if str(report.get("score_profile")) == "tech-balanced" else 14
-        if evidence_score < min_score:
-            blockers.append(f"技术准确与证据得分过低（{evidence_score}/{min_score}）")
-    else:
-        credibility_score = score_dimension_value(report, "可信度与检索支撑")
-        if credibility_score < PUBLISH_MIN_CREDIBILITY_SCORE:
-            blockers.append(f"可信度与检索支撑得分过低（{credibility_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
+    readiness = build_pipeline_readiness(workspace, manifest)
+    blockers = list(readiness.get("publish_blockers") or [])
     publish_result = read_json(workspace / "publish-result.json", default={}) or {}
-    if publish_result:
-        if not bool(acceptance.get("passed")) or not bool(report.get("passed", manifest.get("score_passed"))):
-            blockers.append("工作目录里已存在历史 publish-result.json，但对应稿件未满足当前发布前置条件。")
+    if publish_result and not readiness.get("publish_ready"):
+        blockers.append("工作目录里已存在历史 publish-result.json，但对应稿件未满足当前发布前置条件。")
     return blockers
 
 
@@ -405,21 +441,27 @@ def normalize_urls(values: list[str]) -> list[str]:
 
 
 def detect_corpus_roots(workspace: Path) -> list[Path]:
-    env_root = (legacy.os.getenv("WECHAT_JOBS_ROOT") or "").strip()
     candidates: list[Path] = []
-    if env_root:
+    env_roots = [
+        (legacy.os.getenv("WECHAT_JOBS_ROOT") or "").strip(),
+        (legacy.os.getenv("CODEX_WECHAT_JOBS_ROOT") or "").strip(),
+    ]
+    for env_root in env_roots:
+        if not env_root:
+            continue
         for raw in re.split(r"[;,]", env_root):
             item = raw.strip()
             if item:
                 candidates.append(Path(item).expanduser())
-    candidates.extend(
-        [
-            Path(r"D:\vibe-coding\codex\.wechat-jobs"),
-            Path(r"D:\vibe-coding\codex\wechat-jobs"),
-            workspace.parent / ".wechat-jobs",
-            workspace.parent / "wechat-jobs",
-        ]
-    )
+    parent = workspace
+    for _index in range(4):
+        parent = parent.parent
+        candidates.extend(
+            [
+                parent / ".wechat-jobs",
+                parent / "wechat-jobs",
+            ]
+        )
     seen: set[str] = set()
     roots: list[Path] = []
     for candidate in candidates:
@@ -440,6 +482,14 @@ def _normalize_phrase(text: str) -> str:
     compact = re.sub(r"\s+", " ", str(text or "")).strip()
     compact = compact.strip(" -•>\"'“”‘’")
     return compact
+
+
+def article_body_signature(title: str, body: str) -> str:
+    digest = hashlib.sha1()
+    digest.update(str(title or "").strip().encode("utf-8"))
+    digest.update(b"\n---\n")
+    digest.update(str(body or "").strip().encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _existing_path_signature(paths: list[str]) -> tuple[tuple[str, int], ...]:
@@ -1556,9 +1606,8 @@ def select_scored_title(
             ideation["selected_title_score"] = selected_candidate.get("title_score", 0)
             ideation["selected_title_gate_passed"] = False
         else:
-            selected_report = legacy.title_dimension_score(selected_title, audience, angle)
-            ideation["selected_title_score"] = min(selected_report["total_score"], int((integrity.get("score") or 0) * 10))
-            ideation["selected_title_gate_passed"] = selected_report["passed"] and bool(integrity.get("passed"))
+            ideation["selected_title_score"] = int((integrity.get("score") or 0) * 10)
+            ideation["selected_title_gate_passed"] = bool(integrity.get("passed"))
     elif selected:
         chosen_title = selected["title"]
         ideation["selected_title_score"] = selected.get("title_score", 0)
@@ -2134,6 +2183,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     payload["title"] = title
     payload["provider"] = review_source
     payload["model"] = model_name
+    payload["schema_version"] = PIPELINE_SCHEMA_VERSION
+    payload["body_signature"] = article_body_signature(title, body)
     payload["generated_at"] = now_iso()
     write_editorial_anchor_plan(workspace, manifest, title=title, review_report=payload, score_report=read_json(workspace / "score-report.json", default={}) or {})
     write_json(workspace / "review-report.json", payload)
@@ -2218,10 +2269,15 @@ def cmd_revise(args: argparse.Namespace) -> int:
     manifest["writing_persona"] = runtime.writing_persona
     manifest["content_enhancement"] = runtime.content_enhancement
     report = read_json(workspace / "score-report.json", default={}) or {}
+    current_signature = article_body_signature(title, body)
+    if report and str(report.get("body_signature") or "").strip() not in {"", current_signature}:
+        report = {}
     if not report:
         threshold = manifest.get("score_threshold") or legacy.DEFAULT_THRESHOLD
         report = legacy.build_score_report(title, body, manifest, threshold)
     report = apply_research_credibility_boost(report, load_research(workspace))
+    report["schema_version"] = PIPELINE_SCHEMA_VERSION
+    report["body_signature"] = current_signature
     write_json(workspace / "score-report.json", report)
     legacy.write_text(workspace / "score-report.md", legacy.markdown_report(report))
     manifest["score_report_path"] = "score-report.json"
@@ -3612,6 +3668,9 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest["content_enhancement"] = runtime.content_enhancement
     threshold = args.threshold or manifest.get("score_threshold")
     review = read_json(workspace / "review-report.json", default={}) or {}
+    current_signature = article_body_signature(title, body)
+    if review and str(review.get("body_signature") or "").strip() not in {"", current_signature}:
+        review = {}
     layout_plan = runtime.layout_plan
     if not review:
         blueprint = current_viral_blueprint(workspace, manifest)
@@ -3636,6 +3695,8 @@ def cmd_score(args: argparse.Namespace) -> int:
     write_similarity_artifacts(workspace, similarity_report)
     manifest["similarity_report_path"] = "similarity-report.json"
     report = apply_source_similarity_gate(report, similarity_report)
+    report["schema_version"] = PIPELINE_SCHEMA_VERSION
+    report["body_signature"] = current_signature
 
     if not report.get("passed") and not args.no_rewrite:
         if args.rewrite_output:

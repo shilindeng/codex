@@ -338,6 +338,16 @@ def cmd_render(args: argparse.Namespace) -> int:
         lead_text=lead_text,
     )
 
+    reference_cards_html = build_reference_cards_html(workspace, manifest, choose_wechat_publication_style(
+        chosen_style,
+        publication_manifest,
+        rich_blocks=rich_blocks,
+        publication_report=publication_report,
+    ))
+    final_content_html = content_html + ("\n" + reference_cards_html if reference_cards_html else "")
+    preview_html = apply_callout_blocks(final_content_html)
+    safe_preview_html = sanitize_html_fragment(preview_html)
+
     rendered = (
         template.replace("{{title}}", html.escape(title))
         .replace("{{style}}", themed_css)
@@ -359,11 +369,8 @@ def cmd_render(args: argparse.Namespace) -> int:
         rich_blocks=rich_blocks,
         publication_report=publication_report,
     )
-    reference_cards_html = build_reference_cards_html(workspace, manifest, wechat_publication_style)
-    if reference_cards_html:
-        content_html = content_html + "\n" + reference_cards_html
     wechat_fragment = render_wechat_fragment(
-        content_html,
+        final_content_html,
         title=title,
         summary=summary,
         theme=theme,

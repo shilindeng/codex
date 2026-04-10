@@ -14,7 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 from core.viral import build_score_report, default_viral_blueprint, infer_article_archetype, normalize_outline_payload  # noqa: E402
-from core.workflow import apply_research_credibility_boost, collect_publish_blockers, collect_render_blockers, _run_revision_loop  # noqa: E402
+from core.workflow import apply_research_credibility_boost, build_pipeline_readiness, collect_publish_blockers, collect_render_blockers, _run_revision_loop  # noqa: E402
 import legacy_studio as legacy  # noqa: E402
 from providers.text.openai_compatible import placeholder_article, placeholder_outline  # noqa: E402
 
@@ -462,7 +462,34 @@ class ViralEngineTests(unittest.TestCase):
                 encoding="utf-8",
             )
             blockers = collect_publish_blockers(workspace, manifest)
-            self.assertTrue(any("质量门槛未通过" in item for item in blockers))
+            self.assertTrue(any("评分硬门槛未通过" in item or "评分未达阈值" in item for item in blockers))
+
+    def test_publish_blockers_flag_stale_score_or_review_reports(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            manifest = {"selected_title": "测试标题", "article_path": "article.md", "source_urls": []}
+            (workspace / "article.md").write_text("---\ntitle: 测试标题\nsummary: 摘要\n---\n\n新的正文。", encoding="utf-8")
+            (workspace / "review-report.json").write_text(json.dumps({"body_signature": "old-review"}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "score-report.json").write_text(json.dumps({"body_signature": "old-score", "passed": True, "quality_gates": {}}, ensure_ascii=False), encoding="utf-8")
+            blockers = collect_publish_blockers(workspace, manifest)
+            self.assertTrue(any("review-report.json" in item for item in blockers))
+            self.assertTrue(any("score-report.json" in item for item in blockers))
+
+    def test_pipeline_readiness_uses_single_blocker_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            manifest = {"selected_title": "测试标题", "article_path": "article.md", "source_urls": []}
+            (workspace / "article.md").write_text("---\ntitle: 测试标题\nsummary: 摘要\n---\n\n正文。", encoding="utf-8")
+            (workspace / "score-report.json").write_text(
+                json.dumps({"body_signature": "old-score", "passed": False, "quality_gates": {"credibility_passed": False}, "score_breakdown": [{"dimension": "事实/案例/对比托底", "score": 2}]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            readiness = build_pipeline_readiness(workspace, manifest)
+            render_blockers = collect_render_blockers(workspace, manifest)
+            publish_blockers = collect_publish_blockers(workspace, manifest)
+            self.assertFalse(readiness.get("score_ready"))
+            self.assertTrue(any("score-report.json" in item for item in render_blockers))
+            self.assertTrue(any("score-report.json" in item for item in publish_blockers))
 
     def test_revision_loop_writes_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:

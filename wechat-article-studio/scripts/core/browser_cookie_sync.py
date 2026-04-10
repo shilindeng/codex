@@ -80,20 +80,45 @@ def _decrypt_cookie(encrypted_value: bytes, master_key: bytes) -> str:
 
 def _browser_sources() -> list[tuple[str, Path, Path]]:
     sources: list[tuple[str, Path, Path]] = []
-    chrome_root = legacy.local_chrome_user_data_root()
-    if chrome_root:
-        local_state = chrome_root / "Local State"
-        for profile_name in ["Default", "Profile 1", "Profile 2", "Profile 3"]:
-            cookies = chrome_root / profile_name / "Network" / "Cookies"
-            if local_state.exists() and cookies.exists():
-                sources.append((f"chrome:{profile_name}", local_state, cookies))
-    edge_root = Path(r"C:\Users\dsl\AppData\Local\Microsoft\Edge\User Data")
-    if edge_root.exists():
-        local_state = edge_root / "Local State"
-        for profile_name in ["Default", "Profile 1", "Profile 2", "Profile 3"]:
-            cookies = edge_root / profile_name / "Network" / "Cookies"
-            if local_state.exists() and cookies.exists():
-                sources.append((f"edge:{profile_name}", local_state, cookies))
+
+    def candidate_roots() -> list[tuple[str, Path]]:
+        roots: list[tuple[str, Path]] = []
+        local_app_data = legacy.os.getenv("LOCALAPPDATA")
+        browser_envs = {
+            "chrome": [
+                legacy.os.getenv("CHROME_USER_DATA_ROOT") or "",
+                str(Path(local_app_data) / "Google" / "Chrome" / "User Data") if local_app_data else "",
+            ],
+            "edge": [
+                legacy.os.getenv("EDGE_USER_DATA_ROOT") or "",
+                str(Path(local_app_data) / "Microsoft" / "Edge" / "User Data") if local_app_data else "",
+            ],
+        }
+        for browser, values in browser_envs.items():
+            seen: set[str] = set()
+            for raw in values:
+                item = str(raw or "").strip()
+                if not item:
+                    continue
+                path = Path(item).expanduser()
+                key = str(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                roots.append((browser, path))
+        return roots
+
+    for browser, root in candidate_roots():
+        if not root.exists():
+            continue
+        local_state = root / "Local State"
+        if not local_state.exists():
+            continue
+        profile_dirs = [item for item in root.iterdir() if item.is_dir() and (item.name == "Default" or item.name.startswith("Profile "))]
+        for profile_dir in sorted(profile_dirs, key=lambda item: item.name):
+            cookies = profile_dir / "Network" / "Cookies"
+            if cookies.exists():
+                sources.append((f"{browser}:{profile_dir.name}", local_state, cookies))
     return sources
 
 

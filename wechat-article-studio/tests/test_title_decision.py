@@ -112,6 +112,58 @@ class TitleDecisionTests(unittest.TestCase):
             self.assertGreaterEqual(len(payload.get("candidates") or []), 5)
             self.assertTrue(str(ideation.get("selected_title") or "").strip())
 
+    def test_title_decision_dedupes_near_duplicate_titles_and_keeps_groups(self):
+        manifest = {
+            "recent_article_titles": [],
+            "recent_corpus_summary": {},
+            "author_memory": {},
+            "editorial_blueprint": {"style_key": "case-memo"},
+            "account_strategy": {},
+        }
+        report = build_title_decision_report(
+            topic="企业 AI Agent 落地",
+            audience="创业者",
+            angle="交付链路",
+            candidates=[
+                {"title": "企业 AI Agent 落地：团队一提速，为什么后面反而更难交付？"},
+                {"title": "企业 AI Agent 落地：团队一提速，为什么后面反而更难交付"},
+                {"title": "企业 AI Agent 落地，真正该先看的是交付链路"},
+                {"title": "企业 AI Agent 落地，别被参数热闹带着走"},
+            ],
+            manifest=manifest,
+            research={"sources": [{"url": "https://example.com"}], "evidence_items": ["一处官方说明"]},
+            editorial_blueprint=manifest["editorial_blueprint"],
+            account_strategy=manifest["account_strategy"],
+        )
+        titles = [item["title"] for item in report.get("candidates") or []]
+        self.assertLess(len(titles), 4)
+        self.assertIn("candidate_groups", report)
+        self.assertTrue(any(report.get("candidate_groups", {}).get(key) for key in ["强打开型", "强判断型", "强传播型", "稳妥保底型"]))
+
+    def test_select_scored_title_manual_title_does_not_fall_back_to_legacy_side_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            manifest = {
+                "recent_article_titles": [],
+                "recent_corpus_summary": {},
+                "editorial_blueprint": {"style_key": "case-memo"},
+                "account_strategy": {},
+            }
+            ideation = {"titles": [{"title": "企业 AI Agent 落地，别被参数热闹带着走"}]}
+            manual_title = "企业 AI Agent 落地：团队一提速，为什么后面反而更难交付？"
+            ideation, _selected = select_scored_title(
+                workspace,
+                manifest,
+                ideation,
+                "企业 AI Agent 落地",
+                "创业者",
+                "交付链路",
+                manual_title,
+            )
+            payload = json.loads((workspace / "title-decision-report.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(item.get("title") == manual_title for item in payload.get("candidates") or []))
+            self.assertIsInstance(ideation.get("selected_title_score"), int)
+
 
 if __name__ == "__main__":
     unittest.main()

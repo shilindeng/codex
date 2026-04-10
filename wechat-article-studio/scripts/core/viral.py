@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import Counter
@@ -53,6 +54,7 @@ SCORE_DIMENSIONS: list[tuple[str, int, str]] = [
 ]
 
 DEFAULT_THRESHOLD = 86
+SCORE_SCHEMA_VERSION = "2026-04-v3"
 
 EMOTION_VALUE_THRESHOLD = 6
 PAIN_POINT_THRESHOLD = 4
@@ -2148,6 +2150,14 @@ def _score_item(name: str, score: int | float, note: str) -> dict[str, Any]:
     }
 
 
+def _body_signature(title: str, body: str) -> str:
+    digest = hashlib.sha1()
+    digest.update(str(title or "").strip().encode("utf-8"))
+    digest.update(b"\n---\n")
+    digest.update(str(body or "").strip().encode("utf-8"))
+    return digest.hexdigest()
+
+
 def _effective_signature_lines(review: dict[str, Any]) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
@@ -2962,9 +2972,11 @@ def build_score_report(
     }
     ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     report = {
+        "schema_version": SCORE_SCHEMA_VERSION,
         "title": title,
         "threshold": threshold,
         "total_score": total,
+        "body_signature": _body_signature(title, body),
         "score_breakdown": breakdown,
         "score_groups": score_groups,
         "virality_score": virality_score,

@@ -205,6 +205,26 @@ class EditorialDiversityTests(unittest.TestCase):
             self.assertIn(str(root_a.resolve()), root_values)
             self.assertIn(str(root_b.resolve()), root_values)
 
+    def test_detect_corpus_roots_falls_back_to_relative_workspace_ancestors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "tool" / "jobs" / "case"
+            jobs_root = root / "tool" / ".wechat-jobs"
+            workspace.mkdir(parents=True, exist_ok=True)
+            jobs_root.mkdir(parents=True, exist_ok=True)
+            old_env = os.environ.get("WECHAT_JOBS_ROOT")
+            old_alt = os.environ.get("CODEX_WECHAT_JOBS_ROOT")
+            os.environ.pop("WECHAT_JOBS_ROOT", None)
+            os.environ.pop("CODEX_WECHAT_JOBS_ROOT", None)
+            try:
+                roots = detect_corpus_roots(workspace)
+            finally:
+                if old_env is not None:
+                    os.environ["WECHAT_JOBS_ROOT"] = old_env
+                if old_alt is not None:
+                    os.environ["CODEX_WECHAT_JOBS_ROOT"] = old_alt
+            self.assertIn(str(jobs_root.resolve()), {str(path) for path in roots})
+
     def test_summarize_recent_corpus_collects_pattern_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

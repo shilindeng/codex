@@ -17,6 +17,18 @@
 10. `assemble` / `render`
 11. `publish` / `verify-draft`
 
+## 可移植性约定
+
+- 工作目录和历史语料目录不允许依赖某一台机器的固定盘符。
+- 近期语料根目录优先级：
+  1. 显式参数
+  2. `WECHAT_JOBS_ROOT` / `CODEX_WECHAT_JOBS_ROOT`
+  3. 当前工作目录向上查找 `.wechat-jobs` / `wechat-jobs`
+- 浏览器用户目录优先级：
+  1. `CHROME_USER_DATA_ROOT` / `EDGE_USER_DATA_ROOT`
+  2. 系统 `LOCALAPPDATA` 下的通用默认目录
+- `.wechat-jobs` 只作为开发期可选回归输入，不作为运行前提。
+
 ## 必须停下来确认的节点
 
 - `discover-topics` 产出的候选方向未经用户确认前，不进入正式正文生成

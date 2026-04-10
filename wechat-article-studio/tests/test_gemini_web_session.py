@@ -14,10 +14,39 @@ if str(SCRIPTS) not in sys.path:
 
 
 from core import gemini_web_session  # noqa: E402
+from core import browser_cookie_sync  # noqa: E402
 import legacy_studio as legacy  # noqa: E402
 
 
 class GeminiWebSessionTests(unittest.TestCase):
+    def test_browser_cookie_sync_uses_env_roots_without_hardcoded_user_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            chrome_root = root / "Chrome" / "User Data"
+            profile = chrome_root / "Default" / "Network"
+            profile.mkdir(parents=True, exist_ok=True)
+            (chrome_root / "Local State").write_text("{}", encoding="utf-8")
+            (profile / "Cookies").write_text("", encoding="utf-8")
+            old_local = os.environ.get("LOCALAPPDATA")
+            old_chrome = os.environ.get("CHROME_USER_DATA_ROOT")
+            old_edge = os.environ.get("EDGE_USER_DATA_ROOT")
+            os.environ["CHROME_USER_DATA_ROOT"] = str(chrome_root)
+            os.environ["EDGE_USER_DATA_ROOT"] = str(root / "Missing" / "Edge")
+            if old_local is not None:
+                os.environ["LOCALAPPDATA"] = old_local
+            try:
+                sources = browser_cookie_sync._browser_sources()
+            finally:
+                if old_chrome is None:
+                    os.environ.pop("CHROME_USER_DATA_ROOT", None)
+                else:
+                    os.environ["CHROME_USER_DATA_ROOT"] = old_chrome
+                if old_edge is None:
+                    os.environ.pop("EDGE_USER_DATA_ROOT", None)
+                else:
+                    os.environ["EDGE_USER_DATA_ROOT"] = old_edge
+            self.assertTrue(any(name.startswith("chrome:Default") for name, _state, _cookies in sources))
+
     def test_prepare_session_env_prefers_saved_recovery_cookie(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

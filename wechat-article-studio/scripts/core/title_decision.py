@@ -109,6 +109,62 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     return len(left & right) / len(union)
 
 
+def _title_similarity_score(left: str, right: str) -> float:
+    left_tokens = _title_tokens(left)
+    right_tokens = _title_tokens(right)
+    token_overlap = _jaccard(left_tokens, right_tokens)
+    compact_left = _normalize_text(left)
+    compact_right = _normalize_text(right)
+    if not compact_left or not compact_right:
+        return token_overlap
+    prefix_bonus = 0.2 if compact_left[:10] and compact_left[:10] == compact_right[:10] else 0.0
+    family_bonus = 0.1 if title_template_key(left) == title_template_key(right) else 0.0
+    return min(1.0, token_overlap + prefix_bonus + family_bonus)
+
+
+def _candidate_bucket(candidate: dict[str, Any]) -> str:
+    breakdown = candidate.get("decision_breakdown") or {}
+    if float(breakdown.get("传播性") or 0) >= 8 and float(breakdown.get("高预期") or 0) >= 7:
+        return "强打开型"
+    if float(breakdown.get("信息差") or 0) >= 8 and float(breakdown.get("反常识") or 0) >= 7:
+        return "强判断型"
+    if float(breakdown.get("传播性") or 0) >= 7 and float(breakdown.get("情绪共鸣") or 0) >= 7:
+        return "强传播型"
+    return "稳妥保底型"
+
+
+def _dedupe_near_duplicate_titles(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for item in candidates:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        duplicate = False
+        for existing in output:
+            if _title_similarity_score(title, str(existing.get("title") or "")) >= 0.82:
+                duplicate = True
+                break
+        if not duplicate:
+            output.append(item)
+    return output
+
+
+def _diversify_title_candidates(candidates: list[dict[str, Any]], *, top_window: int = 6, same_family_cap: int = 2) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    family_counts: dict[str, int] = {}
+    deferred: list[dict[str, Any]] = []
+    for item in candidates:
+        family = str(item.get("title_family") or "viewpoint-direct")
+        current_count = int(family_counts.get(family) or 0)
+        if len(selected) < top_window and current_count >= same_family_cap:
+            deferred.append(item)
+            continue
+        selected.append(item)
+        family_counts[family] = current_count + 1
+    selected.extend(deferred)
+    return selected
+
+
 def _first_hit(items: list[dict[str, Any]], key: str) -> int:
     for item in items:
         if str(item.get("key") or "").strip() == key:
@@ -554,6 +610,10 @@ def build_title_decision_report(
         ),
         reverse=True,
     )
+    normalized_candidates = _dedupe_near_duplicate_titles(normalized_candidates)
+    normalized_candidates = _diversify_title_candidates(normalized_candidates)
+    for item in normalized_candidates:
+        item["title_bucket"] = _candidate_bucket(item)
     selected = normalized_candidates[0] if normalized_candidates else None
     selected_title_value = str(selected.get("title") or topic) if selected else topic
     selected_reason: list[str] = []
@@ -588,6 +648,12 @@ def build_title_decision_report(
         "selected_reason": selected_reason[:5],
         "selected_explainer": selected_explainer,
         "candidates": normalized_candidates,
+        "candidate_groups": {
+            "强打开型": [item for item in normalized_candidates if item.get("title_bucket") == "强打开型"][:3],
+            "强判断型": [item for item in normalized_candidates if item.get("title_bucket") == "强判断型"][:3],
+            "强传播型": [item for item in normalized_candidates if item.get("title_bucket") == "强传播型"][:3],
+            "稳妥保底型": [item for item in normalized_candidates if item.get("title_bucket") == "稳妥保底型"][:3],
+        },
         "title_rewrite_round": title_rewrite_round,
         "generated_at": legacy.now_iso(),
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Any
 
 import legacy_studio as legacy
 from core.content_fingerprint import build_article_fingerprint, summarize_collisions
+
+ACCEPTANCE_SCHEMA_VERSION = "2026-04-v3"
 
 
 def _normalize_text(value: str) -> str:
@@ -24,6 +27,14 @@ def _jaccard(left: set[str], right: set[str]) -> float:
     if not union:
         return 0.0
     return len(left & right) / len(union)
+
+
+def _body_signature(title: str, body: str) -> str:
+    digest = hashlib.sha1()
+    digest.update(str(title or "").strip().encode("utf-8"))
+    digest.update(b"\n---\n")
+    digest.update(str(body or "").strip().encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _selected_title_issues(workspace: Path, manifest: dict[str, Any], body_title: str) -> list[str]:
@@ -88,6 +99,10 @@ def build_acceptance_report(
         or {}
     )
     title_consistency_issues = _selected_title_issues(workspace, manifest, title)
+    reference_tail_present = 'data-wx-role="reference-card"' in wechat_html or 'data-wx-role="reference-list"' in wechat_html
+    compare_block_present = any(marker in wechat_html for marker in ['data-wx-role="compare-grid"', 'data-wx-role="compare-header"', '<table'])
+    code_block_present = "<pre" in wechat_html or "<code" in wechat_html
+    score_failed_gates = [name for name, ok in quality_gates.items() if not ok]
     gates = {
         "score_passed": bool(score_report.get("passed")),
         "title_novelty_passed": bool(collisions.get("route_similarity_passed", True)),
@@ -100,15 +115,23 @@ def build_acceptance_report(
         "ending_natural_passed": str(editorial_review.get("ending_naturalness") or "medium") != "low",
         "summary_alignment_passed": bool(summary.strip()) and summary_length_ok and (summary_overlap >= 0.03 or summary_keyword_hit or len(summary_tokens) <= 2),
         "layout_plan_passed": len(layout_plan.get("section_plans") or []) >= 3 and bool(layout_plan.get("recommended_style")),
-        "wechat_render_passed": bool(wechat_html.strip()) and ("<h1" not in wechat_html if str(manifest.get("wechat_header_mode") or "drop-title") == "drop-title" else True),
-        "reference_tail_passed": True,
+        "wechat_render_passed": bool(wechat_html.strip()) and ("<h1" not in wechat_html if str(manifest.get("wechat_header_mode") or "drop-title") == "drop-title" else True) and bool(compare_block_present or code_block_present or "<p" in wechat_html),
+        "reference_tail_passed": reference_count == 0 or reference_tail_present,
+        "quality_gates_passed": not score_failed_gates,
     }
-    gates["publish_chain_ready"] = bool(
-        gates["score_passed"]
+    gates["score_ready"] = bool(gates["score_passed"] and gates["quality_gates_passed"])
+    gates["render_ready"] = bool(
+        gates["score_ready"]
         and gates["title_consistency_passed"]
         and gates["evidence_minimum_passed"]
-        and gates["wechat_render_passed"]
     )
+    gates["publish_ready"] = bool(
+        gates["render_ready"]
+        and gates["wechat_render_passed"]
+        and gates["reference_tail_passed"]
+        and gates["summary_alignment_passed"]
+    )
+    gates["publish_chain_ready"] = bool(gates["publish_ready"])
     failed = [name for name, ok in gates.items() if not ok]
     highlights = []
     if gates["opening_scene_passed"]:
@@ -132,13 +155,20 @@ def build_acceptance_report(
         risks.append("摘要和正文前半段不够贴合。")
     if not gates["wechat_render_passed"]:
         risks.append("公众号片段还不够干净，发布前需要重新渲染。")
+    if not gates["reference_tail_passed"]:
+        risks.append("来源卡片没有真正落到公众号成品里。")
+    if score_failed_gates:
+        risks.append("评分硬门槛和成品验收还没有完全对齐。")
     passed = all(gates.values())
     return {
+        "schema_version": ACCEPTANCE_SCHEMA_VERSION,
         "title": title,
         "summary": summary,
+        "body_signature": _body_signature(title, body),
         "passed": passed,
         "gates": gates,
         "failed_gates": failed,
+        "blockers": failed,
         "highlights": highlights[:5],
         "risks": risks[:5],
         "content_fingerprint": fingerprint,

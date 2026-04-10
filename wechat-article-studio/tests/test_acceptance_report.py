@@ -18,7 +18,7 @@ class AcceptanceReportTests(unittest.TestCase):
     def test_acceptance_report_passes_for_balanced_article(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            (workspace / "article.wechat.html").write_text("<section><p>摘要</p><p>正文片段</p></section>", encoding="utf-8")
+            (workspace / "article.wechat.html").write_text('<section><p>摘要</p><p>正文片段</p><section data-wx-role="reference-list"><section data-wx-role="reference-card"></section></section></section>', encoding="utf-8")
             (workspace / "references.json").write_text(
                 json.dumps({"items": [{"index": 1, "url": "https://example.com", "title": "官方文档"}]}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -71,6 +71,39 @@ class AcceptanceReportTests(unittest.TestCase):
             self.assertTrue(payload["gates"]["reference_tail_passed"])
             self.assertTrue(payload["gates"]["title_consistency_passed"])
             self.assertTrue(payload["gates"]["evidence_minimum_passed"])
+            self.assertTrue(payload["gates"]["score_ready"])
+            self.assertTrue(payload["gates"]["render_ready"])
+            self.assertTrue(payload.get("body_signature"))
+            self.assertEqual(payload.get("schema_version"), "2026-04-v3")
+
+    def test_acceptance_report_fails_when_reference_cards_not_rendered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.wechat.html").write_text("<section><p>正文片段</p></section>", encoding="utf-8")
+            (workspace / "references.json").write_text(
+                json.dumps({"items": [{"index": 1, "url": "https://example.com", "title": "官方文档"}]}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            manifest = {
+                "selected_title": "测试标题",
+                "wechat_html_path": "article.wechat.html",
+                "references_path": "references.json",
+                "wechat_header_mode": "drop-title",
+                "research_requirements": {"requires_evidence": True, "passed": True},
+            }
+            payload = build_acceptance_report(
+                workspace,
+                manifest,
+                title="测试标题",
+                summary="摘要",
+                body="那天会议室里，大家第一次认真讨论 AI 要替团队扛什么结果。\n\n一份官方文档已经把边界写得很明白。",
+                score_report={"passed": True, "depth_signals": {"scene_paragraph_count": 1, "evidence_paragraph_count": 1, "counterpoint_paragraph_count": 1, "long_paragraph_count": 1, "paragraph_count": 3}, "quality_gates": {"credibility_passed": True}},
+                review_report={"editorial_review": {"ending_naturalness": "high"}},
+                layout_plan={"recommended_style": "business", "section_plans": [{"module_type": "summary-card"}] * 3},
+                recent_fingerprints=[],
+            )
+            self.assertFalse(payload["gates"]["reference_tail_passed"])
+            self.assertFalse(payload["gates"]["publish_ready"])
 
 
 if __name__ == "__main__":

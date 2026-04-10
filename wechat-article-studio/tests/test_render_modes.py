@@ -213,7 +213,7 @@ class RenderModeTests(unittest.TestCase):
             self.assertIn("正文内容里有一个判断", wechat_html)
             self.assertIn("<sup", wechat_html)
             self.assertIn("[1]", wechat_html)
-            self.assertIn("reference-card", preview_html)
+            self.assertIn('data-wx-role="reference-card"', preview_html)
 
     def test_publication_cleanup_removes_quote_labels_and_manual_reference_block(self):
         body = "\n".join(

@@ -32,6 +32,18 @@ python -m pytest -q
 C:\Users\dsl\.codex\skills\wechat-article-studio
 ```
 
+## 可移植性
+
+- 运行时不再要求固定依赖 `D:\...\ .wechat-jobs` 这类本机目录。
+- 历史工作目录发现优先读取：
+  - 显式参数
+  - `WECHAT_JOBS_ROOT` / `CODEX_WECHAT_JOBS_ROOT`
+  - 当前工作目录向上查找 `.wechat-jobs` / `wechat-jobs`
+- 浏览器用户目录优先读取：
+  - `CHROME_USER_DATA_ROOT`
+  - `EDGE_USER_DATA_ROOT`
+  - 系统 `LOCALAPPDATA` 下的通用默认目录
+
 ## Viral Pipeline
 
 - 新增爆款采集链路：`discover-viral -> select-viral -> collect-viral -> analyze-viral -> viral-run -> adapt-platforms`

@@ -193,6 +193,24 @@ def choose_layout_skin(
     if req != "auto" and req in SKINS:
         return LayoutSkinDecision(key=req, reason="explicit_layout_skin")
 
+    style_defaults = {
+        "clean": "elegant",
+        "business": "business",
+        "warm": "warm",
+        "tech": "tech",
+        "magazine": "magazine",
+        "chinese": "chinese",
+        "forest": "forest",
+        "aurora": "aurora",
+        "morandi": "morandi",
+        "mint": "mint",
+        "neon": "neon",
+        "sunrise": "sunrise",
+    }
+    normalized_style = (chosen_style or "").strip().lower()
+    if req == "auto" and normalized_style in style_defaults and normalized_style not in {"magazine"}:
+        return LayoutSkinDecision(key=style_defaults[normalized_style], reason="style_family_default")
+
     layout_plan = manifest.get("layout_plan") or {}
     archetype = str(
         layout_plan.get("layout_archetype") or (manifest.get("viral_blueprint") or {}).get("article_archetype") or ""
