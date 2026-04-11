@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 from core.ai_fingerprint import detect_ai_fingerprints  # noqa: E402
 from core.content_fingerprint import build_article_fingerprint, summarize_batch_collisions  # noqa: E402
 from core.quality_checks import metadata_integrity_report  # noqa: E402
+from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report  # noqa: E402
 from core.workflow import build_pipeline_readiness  # noqa: E402
 
 
@@ -115,6 +116,36 @@ class QualityPipelineGuardTests(unittest.TestCase):
             readiness = build_pipeline_readiness(workspace, manifest)
             self.assertFalse(readiness["render_ready"])
             self.assertTrue(any("acceptance-report.json" in item for item in readiness["render_blockers"]))
+            self.assertIn("artifact_contract", readiness)
+
+    def test_build_pipeline_readiness_requires_publication_artifacts_before_publish(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.md").write_text(
+                "---\ntitle: 测试标题\nsummary: 那天会议室里大家第一次认真讨论 AI 要替团队扛什么结果，真正该先补的是责任和流程。\n---\n\n那天会议室里，大家第一次认真讨论 AI 要替团队扛什么结果。\n",
+                encoding="utf-8",
+            )
+            (workspace / "score-report.json").write_text(
+                json.dumps({"title": "测试标题", "passed": True, "quality_gates": {}}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (workspace / "acceptance-report.json").write_text(
+                json.dumps({"title": "测试标题", "passed": True, "gates": {"acceptance_ready_passed": True, "publish_ready": True}}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            manifest = {
+                "workspace": str(workspace),
+                "selected_title": "测试标题",
+                "article_path": "article.md",
+                "score_report_path": "score-report.json",
+                "acceptance_report_path": "acceptance-report.json",
+                "score_passed": True,
+                "score_status": "done",
+                "stage": "render",
+            }
+            readiness = build_pipeline_readiness(workspace, manifest)
+            self.assertFalse(readiness["publish_ready"])
+            self.assertTrue(any("publication.md" in item or "article.wechat.html" in item for item in readiness["publish_blockers"]))
 
     def test_detect_ai_fingerprints_catches_structural_templates(self):
         body = "\n\n".join(
@@ -132,6 +163,57 @@ class QualityPipelineGuardTests(unittest.TestCase):
         self.assertIn("overused_this_is_more_like", findings)
         self.assertIn("didactic_softener", findings)
         self.assertIn("two_sentence_protocol_close", findings)
+
+    def test_first_screen_signal_report_requires_scene_conflict_and_stakes(self):
+        passed = first_screen_signal_report(
+            "\n\n".join(
+                [
+                    "周一早上九点，会议室里大家都在等老板开口。",
+                    "真正的问题不是要不要上 AI，而是这件事接下来会先让谁来买单。",
+                    "后面再慢慢展开。",
+                ]
+            )
+        )
+        failed = first_screen_signal_report(
+            "\n\n".join(
+                [
+                    "AI 正在快速发展。",
+                    "这件事值得关注。",
+                ]
+            )
+        )
+        self.assertTrue(passed["passed"])
+        self.assertFalse(failed["passed"])
+
+    def test_template_frequency_report_flags_title_and_ending_same_family(self):
+        report = template_frequency_report(
+            "这件事真正危险的不是成本，而是判断顺序",
+            "\n\n".join(
+                [
+                    "那天办公室里大家都在讨论这件事。",
+                    "中段正常展开。",
+                    "真正危险的不是工具不够，而是判断顺序一直在反着来。",
+                ]
+            ),
+        )
+        self.assertFalse(report["passed"])
+        self.assertTrue(report["same_family_repeat"])
+
+    def test_abnormal_text_report_flags_suspicious_short_bullets(self):
+        report = abnormal_text_report(
+            "正常标题",
+            "这是正常摘要，至少能把场景和判断说清楚。",
+            "\n".join(
+                [
+                    "- 还挖出了一个埋了：27年",
+                    "- 级测试里，它还在：10个",
+                    "",
+                    "正文继续。",
+                ]
+            ),
+        )
+        self.assertFalse(report["passed"])
+        self.assertTrue(report["suspicious_bullets"])
 
 
 if __name__ == "__main__":

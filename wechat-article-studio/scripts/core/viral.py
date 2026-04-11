@@ -24,6 +24,7 @@ from core.quality_checks import (
     lead_paragraph_count,
     metadata_integrity_report,
 )
+from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report
 from core.title_decision import title_integrity_report
 
 
@@ -375,8 +376,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
             "一旦只盯表面信号，就会在关键分水岭上慢半拍。",
         ],
         "emotion_value_goals": ["让读者觉得被点醒", "让读者获得新判断", "让读者愿意转发给同类人"],
-        "opening_modes": ["场景切口", "反差判断", "新闻切口"],
-        "ending_modes": ["判断收束", "余味回扣", "风险提醒"],
+        "opening_modes": ["人物/场景切口", "反常识冲突切口", "代价先行切口", "具体事件倒挂切口"],
+        "ending_modes": ["可转述判断", "站队式问题", "风险提醒"],
         "voice_guardrails": ["少自我解释", "少模板连接词", "别把文章写成讲义", "让判断落在具体事实上"],
         "avoid_patterns": ["先说结论", "接下来我会", "最后给你一个可执行清单", "如果你只想记住一句话"],
         "like_triggers": ["文末判断升华", "可截图金句", "让人点头的认知拨云见日"],
@@ -416,8 +417,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
             "如果关键顺序没理清，努力只会继续消耗耐心。",
         ],
         "emotion_value_goals": ["让读者觉得终于讲明白了", "让读者知道先做哪一步", "让读者愿意保存备用"],
-        "opening_modes": ["卡点共鸣", "误区切口", "场景切口"],
-        "ending_modes": ["行动提示", "关键提醒", "适用边界"],
+        "opening_modes": ["人物/场景切口", "反常识冲突切口", "代价先行切口", "具体事件倒挂切口"],
+        "ending_modes": ["动作建议", "风险提醒", "适用边界"],
         "voice_guardrails": ["讲步骤但别像说明书", "每个动作都要解释为什么", "别堆砌空泛 checklist"],
         "avoid_patterns": ["先说结论", "这篇文章将", "综上所述", "万能清单"],
         "like_triggers": ["讲清楚读者一直没弄明白的关键卡点", "在结尾给一个低门槛获得感", "把复杂动作说简单"],
@@ -457,8 +458,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
             "最可惜的不是没看见案例，而是只看见热闹没有看见方法。",
         ],
         "emotion_value_goals": ["让读者觉得案例真的有启发", "让读者带走一层更稳的判断", "让读者愿意转给同类同行"],
-        "opening_modes": ["人物/场景切口", "结果倒叙", "关键细节起笔"],
-        "ending_modes": ["判断回扣", "迁移建议", "风险提醒"],
+        "opening_modes": ["人物/场景切口", "反常识冲突切口", "代价先行切口", "具体事件倒挂切口"],
+        "ending_modes": ["可转述判断", "动作建议", "风险提醒"],
         "voice_guardrails": ["别把案例写成流水账", "先抓关键细节再下判断", "避免硬凑 checklist"],
         "avoid_patterns": ["先说结论", "第一第二第三机械平铺", "最后给你一个清单"],
         "like_triggers": ["案例细节说到位", "关键判断说得准", "结尾有一记回扣"],
@@ -498,8 +499,8 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
             "读者要的不是说教，而是被看见之后再被轻轻推一把。",
         ],
         "emotion_value_goals": ["让读者觉得被理解", "让读者放下自责", "让读者愿意收藏给以后看"],
-        "opening_modes": ["场景切口", "人物细节", "一句不响亮但刺心的话"],
-        "ending_modes": ["轻回扣", "余味", "温和提醒"],
+        "opening_modes": ["人物/场景切口", "反常识冲突切口", "代价先行切口", "具体事件倒挂切口"],
+        "ending_modes": ["可转述判断", "站队式问题", "风险提醒"],
         "voice_guardrails": ["少大词", "少立刻下定义", "少做教练式发号施令"],
         "avoid_patterns": ["先说结论", "最后给你一个可执行清单", "鸡汤式鼓励"],
         "like_triggers": ["一句替读者说中心事的话", "结尾温柔但不廉价的回扣", "细节共鸣"],
@@ -818,6 +819,52 @@ def normalize_viral_blueprint(payload: Any, context: dict[str, Any]) -> dict[str
     return merged
 
 
+def _mode_pattern_key(mode: str, *, kind: str) -> str:
+    value = str(mode or "").strip()
+    if not value:
+        return "generic"
+    if kind == "opening":
+        if any(word in value for word in ["人物", "场景"]):
+            return "scene-cut"
+        if any(word in value for word in ["反常识", "冲突", "误区", "反差"]):
+            return "many-people-misread"
+        if any(word in value for word in ["代价", "成本", "风险"]):
+            return "cost-upfront"
+        if any(word in value for word in ["事件", "新闻", "倒挂", "发布"]):
+            return "news-hook"
+        return opening_pattern_key(value)
+    if any(word in value for word in ["站队", "问题", "提问"]):
+        return "stance-question-close"
+    if any(word in value for word in ["动作", "建议"]):
+        return "action-close"
+    if any(word in value for word in ["风险", "提醒"]):
+        return "risk-close"
+    if any(word in value for word in ["判断", "回扣", "余味"]):
+        return "judgment-close"
+    return ending_pattern_key(value)
+
+
+def _pick_diverse_mode(
+    explicit_mode: str,
+    candidates: list[str],
+    *,
+    blocked_patterns: list[str],
+    kind: str,
+) -> str:
+    ordered = []
+    for item in [explicit_mode, *candidates]:
+        text = str(item or "").strip()
+        if text and text not in ordered:
+            ordered.append(text)
+    if not ordered:
+        return ""
+    blocked = {str(item or "").strip() for item in blocked_patterns if str(item or "").strip()}
+    for item in ordered:
+        if _mode_pattern_key(item, kind=kind) not in blocked:
+            return item
+    return ordered[0]
+
+
 def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload, dict):
         output = dict(payload)
@@ -867,10 +914,26 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
             "article_archetype": output["viral_blueprint"].get("article_archetype") or profile["article_archetype"],
         },
     )
+    blocked_opening_patterns = list((output.get("editorial_blueprint") or {}).get("blocked_opening_patterns") or [])
+    blocked_ending_patterns = list((output.get("editorial_blueprint") or {}).get("blocked_ending_patterns") or [])
+    preferred_opening_modes = _normalize_list((output.get("editorial_blueprint") or {}).get("preferred_opening_modes"))
+    preferred_ending_modes = _normalize_list((output.get("editorial_blueprint") or {}).get("preferred_ending_modes"))
+    opening_candidates = preferred_opening_modes + _normalize_list(output["viral_blueprint"].get("opening_modes")) + _normalize_list(profile.get("opening_modes"))
+    ending_candidates = preferred_ending_modes + _normalize_list(output["viral_blueprint"].get("ending_modes")) + _normalize_list(profile.get("ending_modes"))
     author_memory = context.get("author_memory") or {}
     output.setdefault("article_archetype", output["viral_blueprint"].get("article_archetype") or profile["article_archetype"])
-    output.setdefault("opening_mode", (output["viral_blueprint"].get("opening_modes") or profile.get("opening_modes") or ["场景切口"])[0])
-    output.setdefault("ending_mode", (output["viral_blueprint"].get("ending_modes") or profile.get("ending_modes") or ["判断收束"])[0])
+    output["opening_mode"] = _pick_diverse_mode(
+        str(output.get("opening_mode") or ""),
+        opening_candidates or ["人物/场景切口"],
+        blocked_patterns=blocked_opening_patterns,
+        kind="opening",
+    )
+    output["ending_mode"] = _pick_diverse_mode(
+        str(output.get("ending_mode") or ""),
+        ending_candidates or ["可转述判断"],
+        blocked_patterns=blocked_ending_patterns,
+        kind="ending",
+    )
     output.setdefault("voice_guardrails", output["viral_blueprint"].get("voice_guardrails") or profile.get("voice_guardrails") or [])
     output.setdefault("avoid_patterns", output["viral_blueprint"].get("avoid_patterns") or profile.get("avoid_patterns") or [])
     output.setdefault("interaction_formula", output["viral_blueprint"].get("interaction_formula") or profile.get("interaction_formula") or "")
@@ -1738,6 +1801,14 @@ def _template_findings(title: str, body: str, manifest: dict[str, Any]) -> list[
         hits = sum(1 for item in _body_paragraphs(body) if _clean_block_text(item).startswith(compact))
         if hits:
             findings.append({"pattern": f"author-starter:{compact}", "count": hits, "evidence": compact})
+    frequency_report = template_frequency_report(title, body, str(manifest.get("summary") or ""))
+    for key, count in (frequency_report.get("counts") or {}).items():
+        if int(count or 0) > 0:
+            findings.append({"pattern": f"template-frequency:{key}", "count": int(count or 0), "evidence": key})
+    if frequency_report.get("same_family_repeat"):
+        findings.append({"pattern": "template-frequency:title-ending-same-family", "count": 1, "evidence": "标题和结尾重复使用同一类反转收束"})
+    for starter, count in (frequency_report.get("repeated_starters") or {}).items():
+        findings.append({"pattern": f"template-starter:{starter}", "count": int(count or 0), "evidence": starter})
     return findings
 
 
@@ -1745,8 +1816,21 @@ def _similarity_findings(title: str, body: str, manifest: dict[str, Any]) -> dic
     current_intro = " ".join(_first_paragraphs(body, limit=2))
     current_end = " ".join(legacy.list_paragraphs(body)[-2:])
     current_headings = " ".join(item.get("text") or "" for item in legacy.extract_headings(body)[:6])
+    current_opening_pattern = opening_pattern_key(_first_paragraphs(body, limit=1)[0]) if _first_paragraphs(body, limit=1) else "none"
+    current_ending_pattern = ending_pattern_key(legacy.list_paragraphs(body)[-1]) if legacy.list_paragraphs(body) else "none"
+    current_title_family = title_template_key(title)
     similar_articles: list[dict[str, Any]] = []
-    repeated_phrases = [item["pattern"] for item in _template_findings(title, body, manifest)]
+    template_frequency = template_frequency_report(title, body, str(manifest.get("summary") or ""))
+    repeated_phrases: list[str] = []
+    counts = template_frequency.get("counts") or {}
+    if int(counts.get("worth_write_not_but") or 0) > 0:
+        repeated_phrases.append("worth_write_not_but")
+    if int(counts.get("not_but") or 0) > 2:
+        repeated_phrases.append("not_but")
+    if int(counts.get("dont_rush") or 0) > 1:
+        repeated_phrases.append("dont_rush")
+    if template_frequency.get("same_family_repeat"):
+        repeated_phrases.append("title_ending_same_family")
     max_similarity = 0.0
     for path in _recent_corpus_articles(manifest):
         try:
@@ -1759,16 +1843,28 @@ def _similarity_findings(title: str, body: str, manifest: dict[str, Any]) -> dic
         end_score = _jaccard_similarity(current_end, " ".join(legacy.list_paragraphs(other_body)[-2:]))
         heading_score = _jaccard_similarity(current_headings, " ".join(item.get("text") or "" for item in legacy.extract_headings(other_body)[:6]))
         body_score = _jaccard_similarity(body, other_body)
-        score = max(intro_score, end_score, heading_score, body_score)
+        opening_bonus = 0.08 if current_opening_pattern == opening_pattern_key(_first_paragraphs(other_body, limit=1)[0]) and current_opening_pattern not in {"none", ""} else 0.0
+        ending_bonus = 0.08 if current_ending_pattern == ending_pattern_key(legacy.list_paragraphs(other_body)[-1]) and current_ending_pattern not in {"none", ""} else 0.0
+        title_family_bonus = 0.08 if current_title_family == title_template_key(other_title) and current_title_family not in {"", "generic"} else 0.0
+        score = min(1.0, max(intro_score, end_score, heading_score, body_score) + opening_bonus + ending_bonus + title_family_bonus)
         max_similarity = max(max_similarity, score)
         if score >= 0.25:
-            similar_articles.append({"title": other_title, "path": str(path.parent), "score": score})
+            similar_articles.append(
+                {
+                    "title": other_title,
+                    "path": str(path.parent),
+                    "score": score,
+                    "opening_pattern": opening_pattern_key(_first_paragraphs(other_body, limit=1)[0]) if _first_paragraphs(other_body, limit=1) else "none",
+                    "ending_pattern": ending_pattern_key(legacy.list_paragraphs(other_body)[-1]) if legacy.list_paragraphs(other_body) else "none",
+                    "title_family": title_template_key(other_title),
+                }
+            )
     similar_articles.sort(key=lambda item: item["score"], reverse=True)
     return {
         "max_similarity": round(max_similarity, 3),
         "similar_articles": similar_articles[:5],
         "repeated_phrases": repeated_phrases[:10],
-        "similarity_passed": max_similarity <= 0.38 and len(repeated_phrases) <= 1,
+        "similarity_passed": max_similarity <= 0.34 and len(repeated_phrases) <= 1,
     }
 
 
@@ -2397,13 +2493,27 @@ def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
     updated["reading_flow_passed"] = bool((updated.get("quality_gates") or {}).get("reading_flow_passed", True))
     updated["hook_quality_passed"] = bool((updated.get("quality_gates") or {}).get("hook_quality_passed", True))
     updated["ending_naturalness_passed"] = bool((updated.get("quality_gates") or {}).get("ending_naturalness_passed", True))
+    quality_gates = dict(updated.get("quality_gates") or {})
+    if len(updated.get("emotion_value_sentences") or []) == 0:
+        total_score = min(total_score, 89)
+    if not bool(quality_gates.get("interaction_passed", True)):
+        total_score = min(total_score, 84)
+    if not bool(quality_gates.get("first_screen_passed", True)):
+        total_score = min(total_score, 82)
+    if not bool(quality_gates.get("template_diversity_passed", True)):
+        total_score = min(total_score, 80)
+    if not bool(quality_gates.get("body_integrity_passed", True)):
+        total_score = min(total_score, 76)
     updated["total_score"] = total_score
     threshold = int(updated.get("threshold") or DEFAULT_THRESHOLD)
-    quality_gates = dict(updated.get("quality_gates") or {})
     updated["quality_gates"] = quality_gates
     required_gate_names = {
         "metadata_integrity_passed",
+        "body_integrity_passed",
         "batch_uniqueness_passed",
+        "first_screen_passed",
+        "interaction_passed",
+        "template_diversity_passed",
         "title_integrity_passed",
         "credibility_passed",
         "evidence_minimum_passed",
@@ -2706,6 +2816,17 @@ def _build_quality_gates(
     ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     editorial = review.get("editorial_review") or {}
     depth = review.get("depth_signals") or {}
+    first_screen = first_screen_signal_report(body)
+    template_frequency = template_frequency_report(
+        str(review.get("manifest_context", {}).get("selected_title") or ""),
+        body,
+        summary,
+    )
+    abnormal_text = abnormal_text_report(
+        str(review.get("manifest_context", {}).get("selected_title") or ""),
+        summary,
+        body,
+    )
     prompt_leak_hits = [item for item in (review.get("ai_smell_findings") or []) if str(item.get("type") or "") == "prompt_leak"]
     flow_metrics = _reading_flow_metrics(body, review, editorial)
     summary_integrity = metadata_integrity_report(title=str(review.get("manifest_context", {}).get("selected_title") or ""), summary=summary)
@@ -2728,9 +2849,12 @@ def _build_quality_gates(
         )
     return {
         "metadata_integrity_passed": bool(metadata_integrity.get("passed")),
+        "body_integrity_passed": bool(abnormal_text.get("passed")),
         "batch_uniqueness_passed": bool(batch_uniqueness.get("passed", True)),
         "viral_blueprint_complete": blueprint_complete(blueprint),
-        "interaction_passed": interaction_score >= 4,
+        "first_screen_passed": bool(first_screen.get("passed")),
+        "interaction_passed": interaction_score >= 5,
+        "template_diversity_passed": bool(template_frequency.get("passed")) and bool(similarity_findings.get("similarity_passed", True)),
         "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD and severe_naturalness_hits == 0,
         "credibility_passed": credibility_score >= 6,
         "title_integrity_passed": bool(title_integrity.get("passed")),
@@ -2758,11 +2882,12 @@ def _build_quality_gates(
         "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
         "naturalness_floor_passed": severe_naturalness_hits == 0 and editorial.get("template_risk") != "high" and int(review.get("humanness_score") or 0) >= 6,
         "reading_flow_passed": bool(flow_metrics.get("flow_ok")) and int(structural_metrics.get("lead_paragraph_count") or 0) <= 4 and cost_present and discussion_present and depth.get("scene_paragraph_count", 0) >= 1,
-        "hook_quality_passed": bool(title_integrity.get("passed")) and hot_intro_score >= 8 and editorial.get("opening_hook_strength") != "low",
+        "hook_quality_passed": bool(title_integrity.get("passed")) and hot_intro_score >= 8 and editorial.get("opening_hook_strength") != "low" and bool(first_screen.get("passed")),
         "ending_naturalness_passed": editorial.get("ending_naturalness") != "low" and hard_cta_hits == 0 and question_bait_hits <= 1,
         "material_coverage_passed": material_coverage_passed,
         "editorial_review_passed": (
             bool(metadata_integrity.get("passed"))
+            and bool(abnormal_text.get("passed"))
             and bool(batch_uniqueness.get("passed", True))
             and editorial.get("opening_hook_strength") != "low"
             and editorial.get("middle_flow_strength") != "low"
@@ -2771,6 +2896,7 @@ def _build_quality_gates(
             and cost_present
             and discussion_present
             and depth.get("scene_paragraph_count", 0) >= 1
+            and bool(first_screen.get("passed"))
         ),
     }
 
@@ -2828,7 +2954,11 @@ def build_score_report(
     humanness_findings = _dedupe(_normalize_list(review.get("humanness_findings")) + derived_humanness_findings)
     ai_fingerprint_summary = summarize_ai_fingerprints(review.get("ai_smell_findings") or [])
     structural_metrics = review.get("structural_template_metrics") or _structural_template_metrics(body, review)
-    metadata_integrity = metadata_integrity_report(title, str(manifest.get("summary") or build_article_summary(title, body)))
+    summary_text = str(manifest.get("summary") or build_article_summary(title, body))
+    metadata_integrity = metadata_integrity_report(title, summary_text)
+    first_screen = first_screen_signal_report(body)
+    template_frequency = template_frequency_report(title, body, summary_text)
+    abnormal_text = abnormal_text_report(title, summary_text, body)
     batch_uniqueness = _batch_uniqueness_report(title, body, manifest, review)
     evidence_readiness = _evidence_readiness(manifest, body, review | {"depth_signals": depth_signals})
     image_fit_expectation = _image_fit_expectation(title, body, manifest)
@@ -2993,7 +3123,7 @@ def build_score_report(
         blueprint,
         evidence_backbone_score,
         body=body,
-        summary=str(manifest.get("summary") or build_article_summary(title, body)),
+        summary=summary_text,
         hot_intro_score=opening_hook_score,
         interaction_score=interaction_quality_score,
         material_signals=material_signals,
@@ -3029,12 +3159,23 @@ def build_score_report(
         strengths.append("正文里的来源化表达已经能托住关键判断。")
     else:
         weaknesses.append("正文里的引用或来源化表达还不够。")
+    if first_screen.get("passed"):
+        strengths.append("首屏已经同时给出场景、冲突和继续读下去的理由。")
+    else:
+        weaknesses.append("首屏还没同时把场景、冲突和阅读代价交代清楚。")
+    if abnormal_text.get("passed"):
+        strengths.append("成品文本没有明显乱码、异常字符或可疑 bullet。")
+    else:
+        weaknesses.append("成品里还有异常字符或可疑 bullet，读者会直接出戏。")
     failed_gates = [name for name, ok in quality_gates.items() if not ok]
     mandatory_revisions = _dedupe(
         [
             "补齐爆款蓝图，先把主观点、副观点、情绪触发点和论证方式定下来。" if not quality_gates["viral_blueprint_complete"] else "",
             "修复标题或摘要里的乱码、问号替换和异常字符，再继续后面的流程。" if not quality_gates["metadata_integrity_passed"] else "",
+            "修复正文里的异常字符、坏字和可疑 bullet，先保证读者不会一眼出戏。" if not quality_gates["body_integrity_passed"] else "",
             "这篇和同批稿件太像了，必须换角度重写，不要再微调句子。" if not quality_gates["batch_uniqueness_passed"] else "",
+            "前两段必须同时补出具体场景、真实冲突和为什么现在值得读。" if not quality_gates["first_screen_passed"] else "",
+            "标题、开头和结尾还在重复同一类模板路数，必须换骨架重写。" if not quality_gates["template_diversity_passed"] else "",
             "先把标题和首屏钩子拉起来，别让读者在前两段就掉下去。" if not quality_gates["hook_quality_passed"] else "",
             "先把中段写顺，补出一段真正展开的分析，不要继续堆判断卡片。" if not quality_gates["reading_flow_passed"] else "",
             "继续清理模板腔，压低 AI 痕迹，别再靠固定反转句和硬互动提分。" if not quality_gates["naturalness_floor_passed"] else "",
@@ -3064,7 +3205,7 @@ def build_score_report(
     )
     opening_continue_read_risk = (
         "high"
-        if editorial_review.get("opening_hook_strength") == "low" or opening_hook_score <= 7
+        if editorial_review.get("opening_hook_strength") == "low" or opening_hook_score <= 7 or not first_screen.get("passed")
         else "medium"
         if opening_hook_score <= 10
         else "low"
@@ -3133,11 +3274,14 @@ def build_score_report(
         "persona_fit_score": _persona_fit_score(manifest, review, editorial_review),
         "strengths": strengths[:5],
         "weaknesses": weaknesses[:5],
-        "mandatory_revisions": mandatory_revisions[:7],
+        "mandatory_revisions": mandatory_revisions[:10],
         "suggestions": suggestions,
         "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
         "quality_gates": quality_gates,
         "metadata_integrity": metadata_integrity,
+        "first_screen": first_screen,
+        "template_frequency": template_frequency,
+        "abnormal_text": abnormal_text,
         "batch_uniqueness": batch_uniqueness,
         "naturalness_floor_passed": quality_gates.get("naturalness_floor_passed", True),
         "reading_flow_passed": quality_gates.get("reading_flow_passed", True),

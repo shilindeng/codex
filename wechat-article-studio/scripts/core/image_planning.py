@@ -64,6 +64,8 @@ def enrich_plan_items(
         item["provider"] = provider
         item["article_visual_strategy"] = {
             "visual_direction": article_strategy.get("visual_direction", ""),
+            "visual_route": article_strategy.get("visual_route", ""),
+            "visual_route_label": article_strategy.get("visual_route_label", ""),
             "style_family": article_strategy.get("style_family", ""),
             "content_mode": article_strategy.get("content_mode", ""),
             "type_bias": article_strategy.get("type_bias", {}),
@@ -135,6 +137,9 @@ def build_plan_payload(
         "user_image_controls": user_controls,
         "article_visual_strategy": {
             "visual_direction": article_strategy.get("visual_direction", ""),
+            "visual_route": article_strategy.get("visual_route", ""),
+            "visual_route_label": article_strategy.get("visual_route_label", ""),
+            "visual_route_reason": article_strategy.get("visual_route_reason", ""),
             "style_family": article_strategy.get("style_family", ""),
             "content_mode": article_strategy.get("content_mode", ""),
             "style_mode": article_strategy.get("style_mode", ""),

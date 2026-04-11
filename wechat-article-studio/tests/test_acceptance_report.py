@@ -19,6 +19,20 @@ class AcceptanceReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / "article.wechat.html").write_text('<section><p>摘要</p><p>正文片段</p><section data-wx-role="reference-list"><section data-wx-role="reference-card"></section></section></section>', encoding="utf-8")
+            (workspace / "image-plan.json").write_text(
+                json.dumps(
+                    {
+                        "article_visual_strategy": {"visual_route": "cold-hard"},
+                        "items": [
+                            {"id": "cover-01", "type": "封面图", "text_policy": "none", "article_visual_strategy": {"visual_route": "cold-hard"}},
+                            {"id": "inline-01", "type": "正文插图", "text_policy": "none", "article_visual_strategy": {"visual_route": "cold-hard"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             (workspace / "references.json").write_text(
                 json.dumps({"items": [{"index": 1, "url": "https://example.com", "title": "官方文档"}]}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -27,6 +41,7 @@ class AcceptanceReportTests(unittest.TestCase):
                 "selected_title": "企业 AI 转型真正要先讲清楚的，不是工具",
                 "wechat_html_path": "article.wechat.html",
                 "references_path": "references.json",
+                "image_plan_path": "image-plan.json",
                 "wechat_header_mode": "drop-title",
                 "viral_blueprint": {"article_archetype": "commentary", "primary_interaction_goal": "comment/share", "secondary_interaction_goal": "like"},
                 "editorial_blueprint": {"style_key": "signal-briefing"},
@@ -71,6 +86,8 @@ class AcceptanceReportTests(unittest.TestCase):
             self.assertTrue(payload["gates"]["reference_tail_passed"])
             self.assertTrue(payload["gates"]["title_consistency_passed"])
             self.assertTrue(payload["gates"]["evidence_minimum_passed"])
+            self.assertTrue(payload["gates"]["first_screen_passed"])
+            self.assertTrue(payload["gates"]["image_text_density_passed"])
             self.assertTrue(payload["gates"]["score_ready"])
             self.assertTrue(payload["gates"]["render_ready"])
             self.assertTrue(payload.get("body_signature"))
@@ -80,6 +97,19 @@ class AcceptanceReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             (workspace / "article.wechat.html").write_text("<section><p>正文片段</p></section>", encoding="utf-8")
+            (workspace / "image-plan.json").write_text(
+                json.dumps(
+                    {
+                        "article_visual_strategy": {"visual_route": "data-explainer"},
+                        "items": [
+                            {"id": "cover-01", "type": "封面图", "text_policy": "short-any", "article_visual_strategy": {"visual_route": "data-explainer"}},
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
             (workspace / "references.json").write_text(
                 json.dumps({"items": [{"index": 1, "url": "https://example.com", "title": "官方文档"}]}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
@@ -88,6 +118,7 @@ class AcceptanceReportTests(unittest.TestCase):
                 "selected_title": "测试标题",
                 "wechat_html_path": "article.wechat.html",
                 "references_path": "references.json",
+                "image_plan_path": "image-plan.json",
                 "wechat_header_mode": "drop-title",
                 "research_requirements": {"requires_evidence": True, "passed": True},
             }
@@ -103,6 +134,7 @@ class AcceptanceReportTests(unittest.TestCase):
                 recent_fingerprints=[],
             )
             self.assertFalse(payload["gates"]["reference_tail_passed"])
+            self.assertFalse(payload["gates"]["image_text_density_passed"])
             self.assertFalse(payload["gates"]["publish_ready"])
 
 

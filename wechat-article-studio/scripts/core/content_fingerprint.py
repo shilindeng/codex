@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
-from core.editorial_strategy import ending_pattern_key, heading_pattern_key, opening_pattern_key
+from core.editorial_strategy import ending_pattern_key, heading_pattern_key, opening_pattern_key, title_template_key
 from core.quality_checks import (
     cost_signal_present,
     discussion_trigger_present,
@@ -94,18 +94,20 @@ def build_outline_fingerprint(title: str, outline_meta: dict[str, Any], manifest
     route_features = [
         _article_archetype(title, blueprint, manifest),
         _normalize_key(str((manifest.get("editorial_blueprint") or {}).get("style_key") or (outline_meta.get("editorial_blueprint") or {}).get("style_key") or "")),
-        _normalize_key(opening_mode),
-        _normalize_key(ending_mode),
+        f"title:{title_template_key(title)}",
+        f"opening:{_normalize_key(opening_mode)}",
+        f"ending:{_normalize_key(ending_mode)}",
         _normalize_key(interaction_goal),
         _normalize_key(secondary_goal),
     ]
     return {
         "title": title,
         "kind": "outline",
+        "title_family": title_template_key(title),
         "article_archetype": route_features[0],
         "editorial_style_key": route_features[1],
-        "opening_pattern": route_features[2] or "planned-opening",
-        "ending_pattern": route_features[3] or "planned-ending",
+        "opening_pattern": _normalize_key(opening_mode) or "planned-opening",
+        "ending_pattern": _normalize_key(ending_mode) or "planned-ending",
         "heading_patterns": _heading_patterns_from_sections(sections),
         "argument_modes": [str(item).strip() for item in (blueprint.get("argument_modes") or []) if str(item).strip()],
         "evidence_modes": _evidence_modes_from_sections(sections),
@@ -156,22 +158,26 @@ def build_article_fingerprint(
     route_features = [
         _article_archetype(title, blueprint, manifest),
         _normalize_key(str((manifest.get("editorial_blueprint") or {}).get("style_key") or "")),
-        opening_pattern,
-        second_opening,
-        ending_pattern,
+        f"title:{title_template_key(title)}",
+        f"opening:{opening_pattern}",
+        f"opening2:{second_opening}",
+        f"ending:{ending_pattern}",
         _normalize_key(str(blueprint.get("primary_interaction_goal") or "")),
         _normalize_key(str(blueprint.get("secondary_interaction_goal") or "")),
     ]
     layout_modules = [str(item.get("module_type") or "") for item in (layout_plan.get("section_plans") or []) if str(item.get("module_type") or "").strip()]
+    summary = str(manifest.get("summary") or "").strip()
     return {
         "title": title,
         "kind": "article",
         "batch_key": workspace_batch_key(workspace_value),
+        "title_family": title_template_key(title),
         "article_archetype": route_features[0],
         "editorial_style_key": route_features[1],
         "opening_pattern": opening_pattern,
         "second_opening_pattern": second_opening,
         "ending_pattern": ending_pattern,
+        "summary_signature": opening_excerpt_signature(summary),
         "opening_excerpt_signature": opening_excerpt_signature(body),
         "ending_excerpt_signature": ending_excerpt_signature(body),
         "lead_paragraph_count": lead_paragraph_count(body),
@@ -187,8 +193,9 @@ def build_article_fingerprint(
         "primary_interaction_goal": str(blueprint.get("primary_interaction_goal") or ""),
         "secondary_interaction_goal": str(blueprint.get("secondary_interaction_goal") or ""),
         "layout_modules": layout_modules,
-        "keywords": sorted(_tokens(title) | _tokens(" ".join(paragraphs[:3])) | _tokens(" ".join(item.get("text") or "" for item in headings[:4]))),
-        "route_features": [item for item in route_features if item and item not in {"none", "generic"}],
+        "summary_keywords": sorted(_tokens(summary)),
+        "keywords": sorted(_tokens(title) | _tokens(summary) | _tokens(" ".join(paragraphs[:3])) | _tokens(" ".join(item.get("text") or "" for item in headings[:4]))),
+        "route_features": [item for item in route_features if item],
         "generated_at": legacy.now_iso(),
     }
 
@@ -283,6 +290,10 @@ def summarize_batch_collisions(
             matched_rules.append("route_similarity")
         if title_similarity > title_threshold:
             matched_rules.append("title_token_similarity")
+        if current.get("title_family") and current.get("title_family") == other_fp.get("title_family"):
+            matched_rules.append("title_family")
+        if current.get("summary_signature") and current.get("summary_signature") == other_fp.get("summary_signature"):
+            matched_rules.append("summary_signature")
         if int(overlap.get("shared_paragraph_count") or 0) >= 2:
             matched_rules.append("shared_paragraphs")
         if int(overlap.get("shared_opening_paragraph_count") or 0) >= 1:
@@ -333,15 +344,18 @@ def compare_fingerprints(current: dict[str, Any], other: dict[str, Any]) -> floa
         score += value * factor
         weight += factor
 
-    add(1.0 if current.get("article_archetype") == other.get("article_archetype") else 0.0, 0.18)
+    add(1.0 if current.get("article_archetype") == other.get("article_archetype") else 0.0, 0.16)
     add(1.0 if current.get("editorial_style_key") == other.get("editorial_style_key") and current.get("editorial_style_key") else 0.0, 0.10)
-    add(1.0 if current.get("opening_pattern") == other.get("opening_pattern") and current.get("opening_pattern") not in {"", "none", "generic"} else 0.0, 0.10)
-    add(1.0 if current.get("ending_pattern") == other.get("ending_pattern") and current.get("ending_pattern") not in {"", "none", "generic"} else 0.0, 0.10)
+    add(1.0 if current.get("title_family") == other.get("title_family") and current.get("title_family") else 0.0, 0.10)
+    add(1.0 if current.get("opening_pattern") == other.get("opening_pattern") and current.get("opening_pattern") not in {"", "none"} else 0.0, 0.10)
+    add(1.0 if current.get("ending_pattern") == other.get("ending_pattern") and current.get("ending_pattern") not in {"", "none"} else 0.0, 0.10)
     add(_jaccard(set(current.get("heading_patterns") or []), set(other.get("heading_patterns") or [])), 0.14)
     add(_jaccard(set(current.get("argument_modes") or []), set(other.get("argument_modes") or [])), 0.14)
     add(_jaccard(set(current.get("evidence_modes") or []), set(other.get("evidence_modes") or [])), 0.08)
     add(1.0 if current.get("primary_interaction_goal") == other.get("primary_interaction_goal") and current.get("primary_interaction_goal") else 0.0, 0.06)
     add(_jaccard(set(current.get("layout_modules") or []), set(other.get("layout_modules") or [])), 0.05)
+    add(1.0 if current.get("summary_signature") and current.get("summary_signature") == other.get("summary_signature") else 0.0, 0.06)
+    add(_jaccard(set(current.get("summary_keywords") or []), set(other.get("summary_keywords") or [])), 0.06)
     add(_jaccard(set(current.get("route_features") or []), set(other.get("route_features") or [])), 0.14)
     add(_jaccard(set(current.get("keywords") or []), set(other.get("keywords") or [])), 0.10)
     if weight <= 0:

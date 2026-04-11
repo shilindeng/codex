@@ -259,7 +259,13 @@ class ViralEngineTests(unittest.TestCase):
         report = build_score_report(title, body, {"topic": title, "audience": "大众读者", "direction": "", "source_urls": []}, threshold=70)
         self.assertTrue(all(int(item["score"]) <= int(item["weight"]) for item in report.get("score_breakdown", [])))
         self.assertFalse(report.get("quality_gates", {}).get("naturalness_floor_passed"))
+        self.assertFalse(report.get("quality_gates", {}).get("first_screen_passed"))
+        self.assertTrue(
+            (not report.get("quality_gates", {}).get("template_diversity_passed"))
+            or (not report.get("quality_gates", {}).get("template_penalty_passed"))
+        )
         self.assertFalse(report.get("quality_gates", {}).get("ending_naturalness_passed"))
+        self.assertLessEqual(int(report.get("total_score") or 0), 82)
         self.assertFalse(report.get("passed"))
 
     def test_score_report_exposes_material_signals_and_flags_missing_materials(self):

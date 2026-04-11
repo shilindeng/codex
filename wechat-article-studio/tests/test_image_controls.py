@@ -101,6 +101,8 @@ class ImageControlTests(unittest.TestCase):
             self.assertTrue(plan["items"][0].get("visual_reason"))
             self.assertEqual(plan["image_controls"].get("preset"), "notion")
             self.assertEqual(plan["image_controls"].get("preset_label"), "知识卡片")
+            self.assertIn(plan["article_visual_strategy"].get("visual_route"), {"cold-hard", "people-emotion", "data-explainer", "conflict-alert"})
+            self.assertEqual(plan["items"][0].get("text_policy"), "none")
 
     def test_generate_images_falls_back_to_local_card_when_gemini_web_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

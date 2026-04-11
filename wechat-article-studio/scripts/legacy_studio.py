@@ -3812,6 +3812,22 @@ def infer_article_visual_strategy(
         content_mode = "structural"
     elif narrative_score <= 2 and (technical_score >= 4 or business_score >= 4):
         content_mode = "conceptual"
+    if narrative_score >= max(explanatory_score, business_score, technical_score) + 1:
+        visual_route = "people-emotion"
+        visual_route_label = "人物情绪型"
+        visual_route_reason = "正文更依赖人物处境和情绪代入，视觉应先服务读者共感。"
+    elif data_score >= max(narrative_score, 4) or explanatory_score >= 7:
+        visual_route = "data-explainer"
+        visual_route_label = "数据解释型"
+        visual_route_reason = "正文更依赖结构、对比和信息压缩，视觉应先服务理解。"
+    elif count_keyword_hits(lowered, ("风险", "代价", "警报", "踩空", "边界", "失控", "误判", "冲突")) >= 3:
+        visual_route = "conflict-alert"
+        visual_route_label = "冲突警报型"
+        visual_route_reason = "正文的主要张力来自风险、边界或冲突，视觉应先放大警报感。"
+    else:
+        visual_route = "cold-hard"
+        visual_route_label = "冷硬判断型"
+        visual_route_reason = "正文更偏判断和观点，需要克制、冷静、可扫读的视觉路线。"
 
     explicit_overrides = [
         name
@@ -3821,6 +3837,7 @@ def infer_article_visual_strategy(
     reasons = [
         f"文章视觉方向判定为“{profile['label']}”，因为内容中 {('叙事/情绪表达' if narrative_score >= max(explanatory_score, 3) else '解释/结构化信息' if explanatory_score >= 4 else '观点/趋势分析')} 更强。",
         f"内容模式为 `{content_mode}`，正文默认偏向 `{max(type_bias, key=type_bias.get)}`。",
+        f"整篇视觉路线采用“{visual_route_label}”，避免封面和正文换频道。",
     ]
     if explicit_overrides:
         reasons.append("检测到显式图片参数覆盖：" + "、".join(explicit_overrides) + "。")
@@ -3829,6 +3846,9 @@ def infer_article_visual_strategy(
         "profile_key": profile_key,
         "profile": profile,
         "visual_direction": visual_direction,
+        "visual_route": visual_route,
+        "visual_route_label": visual_route_label,
+        "visual_route_reason": visual_route_reason,
         "style_family": profile["label"],
         "content_mode": content_mode,
         "style_mode": style_mode,
@@ -3845,6 +3865,7 @@ def infer_article_visual_strategy(
         "decision_reasoning": reasons,
         "explicit_overrides": explicit_overrides,
         "audience": audience,
+        "diversity_tags": [visual_route, layout_family, max(type_bias, key=type_bias.get), profile_key],
     }
 
 
@@ -4202,6 +4223,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "decision_source": "required-cover",
             "type_reason": "封面图是整篇文章的固定入口图，用于公众号封面与缩略图。",
             "style_reason": "封面图按整篇文章的自动视觉策略选择主视觉语言。",
+            "text_policy": "none",
         },
         {
             "id": "closing-01",
@@ -4219,6 +4241,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "decision_source": closing_decision["decision_source"],
             "type_reason": closing_decision["reason"],
             "style_reason": "收束图沿用整篇自动视觉策略，并根据结尾章节是否结构化决定是否转为信息图。",
+            "text_policy": "short-zh" if closing_decision["type"] in {"信息图", "对比图", "流程图"} else "none",
         },
     ]
     type_occurrence: dict[str, int] = {}
@@ -4261,6 +4284,11 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
                 "decision_source": section.get("image_type_source") or "auto-default",
                 "type_reason": section.get("image_type_reason") or "按章节内容自动判定。",
                 "style_reason": "正文插图风格由整篇文章的自动视觉策略决定；若图片类型特殊，再按用途做轻微分化。",
+                "text_policy": (
+                    "none"
+                    if image_type in {"正文插图", "分隔图"}
+                    else "short-zh-numeric" if image_type in {"信息图", "流程图"} else "short-zh"
+                ),
             }
         )
         type_occurrence[image_type] = occurrence_index + 1

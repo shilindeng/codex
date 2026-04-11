@@ -68,6 +68,8 @@ def title_template_key(title: str) -> str:
     text = _normalize_text(title)
     if not text:
         return "generic"
+    if re.search(r"真正值得(?:写|看|聊|讨论|警惕|说明)的不是", text):
+        return "worthwrite-not-but"
     if re.search(r"(真正关键的是|更该看清|真正会拉开差距的|真正会带来代价的|真正要重估的)", text):
         return "viewpoint-direct"
     if re.search(r"(最容易卡住的|最容易让人卡住的|背后缺的其实是|总在后面失控的)", text):
@@ -105,6 +107,10 @@ def opening_pattern_key(text: str) -> str:
     value = _normalize_text(text)
     if not value:
         return "none"
+    if re.search(r"(会议室|办公室|工位|白板|那天|凌晨|晚上|中午|刚坐下|窗口里|头像)", value):
+        return "scene-cut"
+    if re.search(r"(代价|成本|返工|吃亏|买单|损失|后果|最贵的一笔)", value):
+        return "cost-upfront"
     if value.startswith("你可能") or value.startswith("你大概"):
         return "reader-scene"
     if value.startswith("很多人") or "很多人一提到" in value or "很多人听到" in value:
@@ -117,7 +123,7 @@ def opening_pattern_key(text: str) -> str:
         return "direct-conclusion"
     if "这种场景" in value or "那个瞬间" in value:
         return "scene-cut"
-    if "这次" in value or "刚刚" in value or "今天" in value or "本周" in value:
+    if re.search(r"(\d{1,2}\s*月\s*\d{1,2}\s*日|这次|刚刚|今天|本周|消息|报道|发布|披露|宣布)", value):
         return "news-hook"
     return "generic"
 
@@ -132,6 +138,10 @@ def ending_pattern_key(text: str) -> str:
         return "question-close"
     if "评论区" in value:
         return "comment-invite"
+    if re.search(r"(风险|代价|迟早|别把|最先塌掉|不能默认|后果)", value):
+        return "risk-close"
+    if re.search(r"(如果是你|你会怎么|你更认同|该不该|到底)", value):
+        return "stance-question-close"
     if "真正该问的问题" in value or "最后的判断" in value:
         return "judgment-close"
     if "可执行清单" in value or "只记住这一个动作" in value:
@@ -159,6 +169,7 @@ def heading_pattern_key(text: str) -> str:
 
 
 TITLE_PATTERN_LABELS = {
+    "worthwrite-not-but": "“真正值得写/看/聊的不是…”",
     "viewpoint-direct": "观点直述型",
     "pain-truth": "痛点真相型",
     "counterintuitive": "反常识拆解型",
@@ -183,6 +194,7 @@ OPENING_PATTERN_LABELS = {
     "enterprise-trend": "“这两年企业…”趋势式开头",
     "direct-conclusion": "直接结论式开头",
     "scene-cut": "具体场景切口",
+    "cost-upfront": "代价先行切口",
     "news-hook": "新闻切口",
 }
 
@@ -190,6 +202,8 @@ ENDING_PATTERN_LABELS = {
     "question-close": "提问式结尾",
     "comment-invite": "评论区邀请式结尾",
     "judgment-close": "判断收束式结尾",
+    "risk-close": "风险提醒式结尾",
+    "stance-question-close": "站队式提问结尾",
     "action-close": "动作/清单式结尾",
 }
 

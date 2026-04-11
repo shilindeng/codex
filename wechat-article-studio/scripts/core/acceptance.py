@@ -9,6 +9,7 @@ from typing import Any
 import legacy_studio as legacy
 from core.content_fingerprint import build_article_fingerprint, load_batch_article_items, summarize_batch_collisions, summarize_collisions
 from core.quality_checks import discussion_trigger_present, lead_paragraph_count, metadata_integrity_report
+from core.reader_gates import abnormal_text_report, first_screen_signal_report, image_plan_gate_report
 
 ACCEPTANCE_SCHEMA_VERSION = "2026-04-v3"
 
@@ -90,6 +91,10 @@ def build_acceptance_report(
     editorial_review = review_report.get("editorial_review") or score_report.get("editorial_review") or {}
     wechat_html_path = workspace / str(manifest.get("wechat_html_path") or "article.wechat.html")
     wechat_html = legacy.read_text(wechat_html_path) if wechat_html_path.exists() else ""
+    publication_path = workspace / str(manifest.get("publication_path") or "publication.md")
+    publication_meta, publication_body = ({}, "")
+    if publication_path.exists():
+        publication_meta, publication_body = legacy.split_frontmatter(legacy.read_text(publication_path))
     references = workspace / str(manifest.get("references_path") or "references.json")
     reference_count = 0
     if references.exists():
@@ -97,6 +102,7 @@ def build_acceptance_report(
             reference_count = len((json.loads(references.read_text(encoding="utf-8")) or {}).get("items") or [])
         except (OSError, json.JSONDecodeError):
             reference_count = 0
+    image_plan = legacy.read_json(workspace / str(manifest.get("image_plan_path") or "image-plan.json"), default={}) or {}
     fingerprint = build_article_fingerprint(
         title,
         body,
@@ -115,6 +121,15 @@ def build_acceptance_report(
         title_threshold=0.72,
     )
     metadata = metadata_integrity_report(title, summary)
+    first_screen = first_screen_signal_report(body)
+    abnormal_text = abnormal_text_report(title, summary, body)
+    publication_text = abnormal_text_report(
+        str(publication_meta.get("title") or title),
+        str(publication_meta.get("summary") or summary),
+        publication_body,
+    ) if publication_body.strip() else {"passed": True, "suspicious_bullets": [], "suspicious_lines": []}
+    rendered_text_integrity_passed = ("????" not in wechat_html) and ("\uFFFD" not in wechat_html)
+    image_plan_report = image_plan_gate_report(image_plan, workspace=workspace)
     summary_overlap = _jaccard(_tokens(summary), _tokens(title + " " + " ".join(legacy.list_paragraphs(body)[:3])))
     summary_tokens = list(_tokens(summary))
     summary_keyword_hit = any(token in _normalize_text(body).lower() for token in summary_tokens[:4])
@@ -136,16 +151,23 @@ def build_acceptance_report(
         first_img = wechat_html.find("<img")
         first_h2 = wechat_html.find("<h2")
         lead_visual_passed = first_img != -1 and (first_h2 == -1 or first_img < first_h2)
+    lead_visual_deadline_ratio = float(layout_plan.get("lead_visual_deadline_ratio") or 0.25)
+    lead_visual_window_passed = True
+    if "<img" in wechat_html:
+        first_img = wechat_html.find("<img")
+        lead_visual_window_passed = first_img != -1 and (first_img / max(1, len(wechat_html))) <= lead_visual_deadline_ratio
     score_failed_gates = [name for name, ok in quality_gates.items() if not ok]
     state_consistency_issues = _state_consistency_issues(workspace, manifest, title, score_report, False)
     gates = {
         "metadata_integrity_passed": bool(metadata.get("passed")),
+        "body_integrity_passed": bool(abnormal_text.get("passed")) and bool(publication_text.get("passed", True)) and rendered_text_integrity_passed,
         "batch_uniqueness_passed": bool(batch_collisions.get("passed", True)),
         "state_consistency_passed": not state_consistency_issues,
         "score_passed": bool(score_report.get("passed")),
         "title_novelty_passed": bool(collisions.get("route_similarity_passed", True)),
         "title_consistency_passed": not title_consistency_issues,
         "evidence_minimum_passed": bool(research_requirements.get("passed", True)),
+        "first_screen_passed": bool(first_screen.get("passed")),
         "opening_scene_passed": int(depth.get("scene_paragraph_count") or 0) >= 1,
         "evidence_passed": int(depth.get("evidence_paragraph_count") or 0) >= 1 and bool(quality_gates.get("credibility_passed", True)),
         "boundary_passed": int(depth.get("counterpoint_paragraph_count") or 0) >= 1,
@@ -157,6 +179,9 @@ def build_acceptance_report(
         "pre_h2_length_passed": lead_paragraph_count(body) <= 4,
         "layout_hierarchy_passed": not (h2_count >= 4 and h3_count == 0 and int(depth.get("paragraph_count") or 0) >= 18),
         "lead_visual_passed": lead_visual_passed,
+        "lead_visual_window_passed": lead_visual_window_passed,
+        "image_text_density_passed": bool(image_plan_report.get("passed", True)),
+        "visual_batch_uniqueness_passed": bool(image_plan_report.get("visual_batch_uniqueness_passed", True)),
         "wechat_render_passed": bool(wechat_html.strip()) and ("<h1" not in wechat_html if str(manifest.get("wechat_header_mode") or "drop-title") == "drop-title" else True) and bool(compare_block_present or code_block_present or "<p" in wechat_html),
         "reference_tail_passed": reference_count == 0 or reference_tail_present,
         "source_block_visible_passed": reference_count == 0 or reference_tail_present,
@@ -169,6 +194,8 @@ def build_acceptance_report(
         and gates["title_novelty_passed"]
         and gates["title_consistency_passed"]
         and gates["evidence_minimum_passed"]
+        and gates["body_integrity_passed"]
+        and gates["first_screen_passed"]
         and gates["opening_scene_passed"]
         and gates["boundary_passed"]
         and gates["analysis_passed"]
@@ -189,6 +216,9 @@ def build_acceptance_report(
         and gates["source_block_visible_passed"]
         and gates["reference_tail_passed"]
         and gates["lead_visual_passed"]
+        and gates["lead_visual_window_passed"]
+        and gates["image_text_density_passed"]
+        and gates["visual_batch_uniqueness_passed"]
         and gates["summary_alignment_passed"]
     )
     gates["publish_chain_ready"] = bool(gates["publish_ready"])
@@ -196,6 +226,8 @@ def build_acceptance_report(
     highlights = []
     if gates["opening_scene_passed"]:
         highlights.append("首屏已经有具体场景或动作。")
+    if gates["first_screen_passed"]:
+        highlights.append("前两段已经同时给出场景、冲突和继续读下去的理由。")
     if gates["title_consistency_passed"]:
         highlights.append("标题真源已经统一到同一个结果。")
     if gates["evidence_passed"]:
@@ -209,6 +241,8 @@ def build_acceptance_report(
         risks.append("和近期文章的路线仍然太近，容易像旧稿换皮。")
     if not gates["metadata_integrity_passed"]:
         risks.append("标题或摘要本身存在乱码、问号替换或空值。")
+    if not gates["body_integrity_passed"]:
+        risks.append("正文里还有异常字符、坏字或可疑 bullet。")
     if not gates["batch_uniqueness_passed"]:
         risks.append("同批次里已经有结构或正文高度相近的稿子，当前稿件像换皮重写。")
     if not gates["state_consistency_passed"]:
@@ -217,6 +251,8 @@ def build_acceptance_report(
         risks.append("标题在多个产物之间不一致，后续容易出现选题、成稿和渲染错位。")
     if not gates["evidence_minimum_passed"]:
         risks.append("评论/案例类稿件还没满足最小证据门槛。")
+    if not gates["first_screen_passed"]:
+        risks.append("前两段还没同时把场景、冲突和阅读代价交代清楚。")
     if not gates["summary_alignment_passed"]:
         risks.append("摘要和正文前半段不够贴合。")
     if not gates["pre_h2_length_passed"]:
@@ -229,6 +265,12 @@ def build_acceptance_report(
         risks.append("来源卡片没有真正落到公众号成品里。")
     if not gates["lead_visual_passed"]:
         risks.append("有图片但没有在首屏形成视觉锚点。")
+    if not gates["lead_visual_window_passed"]:
+        risks.append("第一张图出现太晚，没有落在前四分之一阅读区间。")
+    if not gates["image_text_density_passed"]:
+        risks.append("图片计划里的文字密度或视觉路线还不够克制，容易把配图做成海报。")
+    if not gates["visual_batch_uniqueness_passed"]:
+        risks.append("同批文章的图片方案过于接近，读者会觉得只是换题不换视觉。")
     if score_failed_gates:
         risks.append("评分硬门槛和成品验收还没有完全对齐。")
     passed = all(gates.values())
@@ -248,6 +290,11 @@ def build_acceptance_report(
         "highlights": highlights[:5],
         "risks": risks[:5],
         "metadata_integrity": metadata,
+        "first_screen": first_screen,
+        "abnormal_text": abnormal_text,
+        "publication_text": publication_text,
+        "rendered_text_integrity_passed": rendered_text_integrity_passed,
+        "image_plan_report": image_plan_report,
         "content_fingerprint": fingerprint,
         "fingerprint_findings": collisions,
         "batch_uniqueness": batch_collisions,

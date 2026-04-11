@@ -78,6 +78,12 @@ from core.layout_skin import LAYOUT_SKIN_CHOICES, normalize_layout_skin_request
 from core.layout_plan import build_layout_plan, markdown_layout_plan
 from core.manifest import MANIFEST_STATUS_DEFAULTS, ensure_workspace, load_manifest, save_manifest, update_stage, workspace_path
 from core.persona import normalize_writing_persona
+from core.pipeline_readiness import (
+    artifact_contract_report,
+    compute_pipeline_readiness,
+    has_score_dimension as readiness_has_score_dimension,
+    score_dimension_value as readiness_score_dimension_value,
+)
 from core.publication import (
     apply_reference_policy as publication_apply_reference_policy,
     build_references_payload as publication_build_references_payload,
@@ -404,51 +410,25 @@ def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score
     research_report = research_requirements_report(workspace, manifest)
     report = score_report or (read_json(workspace / "score-report.json", default={}) or {})
     acceptance = acceptance_report or (read_json(workspace / "acceptance-report.json", default={}) or {})
-
-    score_blockers: list[str] = []
-    if not report:
-        score_blockers.append("缺少 score-report.json，无法确认是否过线。")
-    else:
-        if not bool(report.get("passed", manifest.get("score_passed"))):
-            score_blockers.append("当前稿件评分未达阈值。")
-        failed_gates = [name for name, ok in (report.get("quality_gates") or {}).items() if not ok]
-        if failed_gates:
-            score_blockers.append(f"评分硬门槛未通过：{'、'.join(failed_gates)}")
-        evidence_dimension = "事实/案例/对比托底" if has_score_dimension(report, "事实/案例/对比托底") else "可信度与检索支撑" if has_score_dimension(report, "可信度与检索支撑") else ""
-        evidence_score = score_dimension_value(report, evidence_dimension) if evidence_dimension else PUBLISH_MIN_CREDIBILITY_SCORE
-        if evidence_dimension and evidence_score < PUBLISH_MIN_CREDIBILITY_SCORE:
-            score_blockers.append(f"事实/案例/对比托底得分过低（{evidence_score}/{PUBLISH_MIN_CREDIBILITY_SCORE}）")
-
-    render_blockers: list[str] = []
-    if research_report.get("requires_evidence") and not research_report.get("passed"):
-        render_blockers.append(f"调研门槛未通过：{'；'.join(research_report.get('reasons') or [])}")
-    if not acceptance:
-        render_blockers.append("缺少 acceptance-report.json，无法确认 render 前置条件。")
-    elif not bool((acceptance.get("gates") or {}).get("acceptance_ready_passed", False)):
-        render_blockers.append("成品验收前置门槛未通过，当前稿件不满足 render 前置条件。")
-    render_blockers.extend(title_blockers)
-    render_blockers.extend(similarity_blockers)
-    render_blockers.extend(consistency_blockers)
-
-    publish_blockers: list[str] = []
-    publish_blockers.extend(placeholder_reasons(workspace, manifest))
-    if not acceptance:
-        publish_blockers.append("缺少 acceptance-report.json，无法确认成品验收是否通过")
-    elif not bool(acceptance.get("passed")):
-        failed = acceptance.get("failed_gates") or [name for name, ok in (acceptance.get("gates") or {}).items() if not ok]
-        publish_blockers.append(f"成品验收未通过：{'、'.join(str(item) for item in failed)}")
-
-    score_ready = not score_blockers and not stale_blockers and not consistency_blockers
-    render_ready = score_ready and not render_blockers
-    publish_ready = render_ready and not publish_blockers and bool((acceptance.get("gates") or {}).get("publish_ready", False))
-    return {
-        "score_ready": score_ready,
-        "render_ready": render_ready,
-        "publish_ready": publish_ready,
-        "score_blockers": stale_blockers + consistency_blockers + score_blockers,
-        "render_blockers": stale_blockers + consistency_blockers + score_blockers + render_blockers,
-        "publish_blockers": stale_blockers + consistency_blockers + score_blockers + render_blockers + publish_blockers,
-    }
+    contract_report = artifact_contract_report(
+        workspace,
+        manifest,
+        score_report=report,
+        acceptance_report=acceptance,
+    )
+    return compute_pipeline_readiness(
+        report=report,
+        acceptance=acceptance,
+        research_report=research_report,
+        placeholder_issues=placeholder_reasons(workspace, manifest),
+        stale_blockers=stale_blockers,
+        consistency_blockers=consistency_blockers,
+        title_blockers=title_blockers,
+        similarity_blockers=similarity_blockers,
+        contract_report=contract_report,
+        publish_result_exists=bool(read_json(workspace / "publish-result.json", default={}) or {}),
+        min_credibility_score=PUBLISH_MIN_CREDIBILITY_SCORE,
+    )
 
 
 def active_text_provider():
@@ -477,14 +457,11 @@ def require_live_text_provider(command_name: str):
 
 
 def score_dimension_value(report: dict[str, Any], dimension: str) -> int:
-    for item in report.get("score_breakdown", []):
-        if item.get("dimension") == dimension:
-            return int(item.get("score") or 0)
-    return 0
+    return readiness_score_dimension_value(report, dimension)
 
 
 def has_score_dimension(report: dict[str, Any], dimension: str) -> bool:
-    return any(item.get("dimension") == dimension for item in report.get("score_breakdown", []))
+    return readiness_has_score_dimension(report, dimension)
 
 
 def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
@@ -505,11 +482,7 @@ def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
 
 def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
     readiness = build_pipeline_readiness(workspace, manifest)
-    blockers = list(readiness.get("publish_blockers") or [])
-    publish_result = read_json(workspace / "publish-result.json", default={}) or {}
-    if publish_result and not readiness.get("publish_ready"):
-        blockers.append("工作目录里已存在历史 publish-result.json，但对应稿件未满足当前发布前置条件。")
-    return blockers
+    return list(readiness.get("publish_blockers") or [])
 
 
 def assert_publish_request_ready(args: argparse.Namespace) -> None:
