@@ -69,6 +69,38 @@ class PublicationPipelineTests(unittest.TestCase):
             self.assertEqual(len(payload.get("items") or []), 1)
             self.assertEqual((payload.get("items") or [])[0].get("title"), "官方文档")
 
+    def test_prepare_publication_keeps_normal_summary_and_expands_inline_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            manifest = {
+                "selected_title": "测试标题",
+                "summary": "这篇文章真正要看的，不是模型热度，而是交付链路和谁在为返工买单。",
+                "article_path": "article.md",
+                "viral_blueprint": {"article_archetype": "commentary"},
+            }
+            (workspace / "article.md").write_text(
+                "\n\n".join(
+                    [
+                        "---",
+                        "title: 测试标题",
+                        "summary: 这篇文章真正要看的，不是模型热度，而是交付链路和谁在为返工买单。",
+                        "---",
+                        "",
+                        "团队今天最容易误判的，不是模型不够强，而是返工已经开始吞掉节奏。",
+                        "",
+                        "| 常见做法 | 真正有效的做法 | 后果差别 | | --- | --- | --- | | 先上工具 | 先改流程 | 一个忙得热闹，一个真的出结果 |",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            payload = prepare_publication_artifacts(workspace, manifest)
+            publication = (workspace / "publication.md").read_text(encoding="utf-8")
+            self.assertIn("summary: 这篇文章真正要看的，不是模型热度，而是交付链路和谁在为返工买单。", publication)
+            self.assertIn("| 常见做法 | 真正有效的做法 | 后果差别 |", publication)
+            self.assertIn("| --- | --- | --- |", publication)
+            self.assertNotIn("- 会上把这个尴尬点", publication)
+            self.assertGreaterEqual(int(payload.get("lead_paragraph_count") or 0), 1)
+
     def test_render_uses_publication_whitelist_for_inline_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)

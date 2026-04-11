@@ -140,10 +140,15 @@ class EnhancementAndPersonaTests(unittest.TestCase):
         self.assertTrue(payload["section_enhancements"][0].get("analogy_targets"))
         self.assertTrue(payload["section_enhancements"][0].get("comparison_targets"))
         self.assertTrue(payload["section_enhancements"][0].get("citation_targets"))
+        self.assertTrue(payload["section_enhancements"][0].get("cost_targets"))
+        self.assertTrue(payload["section_enhancements"][0].get("discussion_targets"))
         self.assertTrue(payload.get("shared_materials", {}).get("source_cards"))
+        self.assertTrue(payload.get("shared_materials", {}).get("opening_requirements"))
+        self.assertTrue(payload.get("shared_materials", {}).get("summary_requirements"))
         material_requirements = payload.get("shared_materials", {}).get("material_requirements") or []
         self.assertTrue(any("表格" in item for item in material_requirements))
         self.assertTrue(any("类比" in item for item in material_requirements))
+        self.assertTrue(any("现实代价" in item for item in material_requirements))
 
     def test_cmd_enhance_writes_artifacts_and_persona(self):
         with tempfile.TemporaryDirectory() as tmp:

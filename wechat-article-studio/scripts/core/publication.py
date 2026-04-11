@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 import legacy_studio as legacy
 from core.artifacts import extract_summary, join_frontmatter, now_iso, read_json, read_text, split_frontmatter, strip_leading_h1, write_json, write_text
 from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
-from core.quality_checks import build_article_summary, lead_paragraph_count
+from core.quality_checks import build_article_summary, lead_paragraph_count, metadata_integrity_report
 
 COMMENTARY_ARCHETYPES = {"commentary", "case-study", "comparison", "narrative"}
 WECHAT_PUBLICATION_STYLE_CHOICES = ("clean", "cards", "magazine", "business", "warm", "poster", "tech", "blueprint")
@@ -73,6 +73,7 @@ def normalize_publication_body(title: str, body: str) -> str:
     normalized = strip_ai_label_phrases(normalized)
     normalized = expand_compact_markdown_lists(normalized)
     normalized = _REFERENCE_CALLOUT_RE.sub("", normalized)
+    normalized = re.sub(r"\s\|\s\|", " |\n| ", normalized)
     intro_blocks, sections = legacy.split_sections(normalized)
     filtered_sections = [section for section in sections if not legacy.is_reference_heading(section.get("heading", ""))]
     rebuilt = legacy.reconstruct_body(intro_blocks, filtered_sections).strip()
@@ -276,6 +277,12 @@ def _metric_label(value: str, prefix: str) -> str:
 
 def _extract_stats(block: str) -> list[tuple[str, str]]:
     plain = re.sub(r"\s+", " ", block.strip())
+    if len(plain) > 90:
+        return []
+    if re.search(r"[。！？!?]", plain) and len(plain) > 45:
+        return []
+    if any(word in plain for word in ["会议室", "老板", "员工", "客户", "团队", "公司", "这意味着", "问题在于"]):
+        return []
     results: list[tuple[str, str]] = []
     for match in _METRIC_VALUE_RE.finditer(plain):
         value = match.group(1).strip()
@@ -382,7 +389,8 @@ def prepare_publication_artifacts(workspace: Path, manifest: dict[str, Any], *, 
     blocks, rewrite_findings = _rewrite_blocks(blocks)
     publication_body = "\n\n".join(block.strip() for block in blocks if block.strip())
     publication_body = publication_body.strip() + ("\n" if publication_body.strip() else "")
-    summary = build_article_summary(title, publication_body)
+    if not metadata_integrity_report(title, summary).get("summary_passed"):
+        summary = build_article_summary(title, publication_body)
     technical_terms = _collect_technical_terms(title, summary, publication_body)
     wechat_style = _suggest_wechat_style(archetype, publication_body, technical_terms, manifest)
     pre_h2_count = lead_paragraph_count(publication_body)
