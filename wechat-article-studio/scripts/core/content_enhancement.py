@@ -220,6 +220,22 @@ def _counterpoint_targets(section: dict[str, Any], archetype: str) -> list[str]:
     ]
 
 
+def _cost_targets(title: str, section: dict[str, Any]) -> list[str]:
+    heading = _normalize_text(str(section.get("heading") or title or "这一节"))
+    return [
+        f"围绕“{heading}”补一段现实代价，写清谁在付、付在哪里、后果是什么。",
+        "不要只说成本很高，要把代价落到对象、时间、返工、损耗或风险上。",
+    ]
+
+
+def _discussion_targets(title: str, section: dict[str, Any]) -> list[str]:
+    heading = _normalize_text(str(section.get("heading") or title or "这一节"))
+    return [
+        f"围绕“{heading}”补一个会让读者想接话的问题、站队点或经验分歧。",
+        "评论点要来自正文判断本身，不要最后再硬塞一句“如果是你”。",
+    ]
+
+
 def _table_targets(title: str, section: dict[str, Any], archetype: str) -> list[str]:
     heading = _normalize_text(str(section.get("heading") or title or "这一节"))
     evidence_need = _normalize_text(str(section.get("evidence_need") or ""))
@@ -340,11 +356,22 @@ def _shared_materials(
         "core_judgment": core_judgment,
         "mainstream_views": secondary[:4],
         "counter_angles": counter_angles,
+        "opening_requirements": [
+            "前 300~400 字必须同时出现主判断和一个具体场景/动作。",
+            "第一个小标题前最多 4 段，不要先铺成长背景说明。",
+            "首屏至少让读者看见一个人、一个动作、一个代价，三项里至少占两项。",
+        ],
+        "summary_requirements": [
+            "摘要必须同时包含主判断和现实后果。",
+            "摘要长度控制在 45~90 个可见字符之间。",
+            "摘要要和正文前 3 段对齐，不要单独喊口号。",
+        ],
         "material_requirements": [
             "正文至少落下 4 类素材：数据、表格、引用、类比、案例、对比分析、反方/边界。",
             "至少补 1 个 Markdown 表格，而且表格必须帮助读者看懂差异、趋势或成本。",
             "至少补 2 处自然来源化表达或引用，不要只在文末堆来源。",
             "至少补 1 段类比分析和 1 段对比分析，把抽象问题讲直白。",
+            "正文至少补 1 段现实代价和 1 个可讨论分歧点。",
         ],
         "evidence_targets": [item.get("text") or "" for item in evidence_items[:4]],
         "source_cards": sources[:4],
@@ -391,8 +418,12 @@ def build_content_enhancement(
             "至少有一节明确补表格，帮助读者更快看懂差异、趋势或成本。",
             "至少有一节明确补类比分析，把抽象概念讲直白。",
             "至少有一节明确补对比分析，讲清表面像什么、实际差在哪。",
+            "至少有一节明确补现实代价，写清谁在付、付在哪里、会多出什么后果。",
+            "至少有一节明确补可讨论分歧点，给评论和转发留入口。",
             "正文至少出现 2 处自然来源化表达或引用。",
             "至少有一节明确补反方、误判或适用边界。",
+            "前 300~400 字必须同时给出主判断和具体场景。",
+            "第一个小标题前最多 4 段，不要把背景说明写成首屏主体。",
             "不要把所有段落都写成判断句卡片。",
         ]
         + [f"这篇稿子默认使用“{strategy_meta['label']}”策略。", strategy_meta["goal"]]
@@ -416,6 +447,8 @@ def build_content_enhancement(
                 "citation_targets": _citation_targets(section, research, evidence_report),
                 "detail_anchors": _detail_anchors(title, section, archetype),
                 "counterpoint_targets": _counterpoint_targets(section, archetype),
+                "cost_targets": _cost_targets(title, section),
+                "discussion_targets": _discussion_targets(title, section),
                 "support_quotes": matched_quotes,
                 "support_sources": matched_sources,
             }

@@ -9,12 +9,20 @@ from typing import Any
 
 import legacy_studio as legacy
 from core.ai_fingerprint import detect_ai_fingerprints, summarize_ai_fingerprints
+from core.content_fingerprint import build_article_fingerprint, load_batch_article_items, summarize_batch_collisions
 from core.editorial_strategy import (
     ending_pattern_key,
     heading_pattern_key,
     normalize_editorial_blueprint,
     opening_pattern_key,
     title_template_key,
+)
+from core.quality_checks import (
+    build_article_summary,
+    cost_signal_present,
+    discussion_trigger_present,
+    lead_paragraph_count,
+    metadata_integrity_report,
 )
 from core.title_decision import title_integrity_report
 
@@ -315,11 +323,14 @@ SEVERE_AI_SMELL_TYPES = {
     "prompt_leak",
     "reader_strawman",
     "opening_triad",
+    "judgment_first_opening",
     "protocol_close",
     "dead_opening_self_intro",
     "body_feeling_answer",
     "blessing_close",
     "fake_precision_emotion",
+    "overused_not_but",
+    "two_sentence_protocol_close",
 }
 
 CRITICAL_QUALITY_GATES = (
@@ -1423,6 +1434,43 @@ def _depth_signals(body: str, context: dict[str, Any] | None = None) -> dict[str
     }
 
 
+def _structural_template_metrics(body: str, review: dict[str, Any]) -> dict[str, Any]:
+    findings = review.get("ai_smell_findings") or []
+    counts = Counter(str(item.get("type") or "") for item in findings)
+    return {
+        "judgment_first_opening_count": int(counts.get("judgment_first_opening") or 0),
+        "not_but_chain_count": int(counts.get("overused_not_but") or 0),
+        "protocol_close_count": int(counts.get("two_sentence_protocol_close") or 0) + int(counts.get("protocol_close") or 0),
+        "this_is_more_like_count": int(counts.get("overused_this_is_more_like") or 0),
+        "didactic_softener_count": int(counts.get("didactic_softener") or 0),
+        "pre_h2_overlong_count": int(counts.get("pre_h2_overlong") or 0),
+        "lead_paragraph_count": lead_paragraph_count(body),
+    }
+
+
+def _batch_uniqueness_report(title: str, body: str, manifest: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    workspace_raw = str(manifest.get("workspace") or "").strip()
+    if not workspace_raw:
+        return {"passed": True, "batch_key": "", "batch_similar_items": [], "text_overlap_signals": []}
+    workspace = Path(workspace_raw)
+    fingerprint = build_article_fingerprint(
+        title,
+        body,
+        manifest,
+        review=review,
+        blueprint=manifest.get("viral_blueprint") or {},
+        layout_plan=manifest.get("layout_plan") or {},
+    )
+    return summarize_batch_collisions(
+        fingerprint,
+        current_title=title,
+        current_body=body,
+        batch_items=load_batch_article_items(workspace),
+        threshold=0.62,
+        title_threshold=0.72,
+    )
+
+
 def _prompt_leak_findings(body: str) -> list[dict[str, Any]]:
     findings: list[dict[str, Any]] = []
     for phrase in PROMPT_LEAK_PATTERNS:
@@ -1875,11 +1923,14 @@ def build_heuristic_review(
             "editorial_blueprint": manifest.get("editorial_blueprint") or {},
         },
     )
+    structural_metrics = _structural_template_metrics(body, {"ai_smell_findings": ai_smell_findings})
+    cost_present = cost_signal_present(body)
     humanness_signals = build_humanness_signals(body, manifest, {"depth_signals": depth_signals})
     humanness_score, humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
     enhancement_findings = _enhancement_alignment_findings(depth_signals, _content_enhancement(manifest))
     persona_findings = _persona_alignment_findings(body, depth_signals, manifest.get("writing_persona") or {})
     interaction_design = _interaction_design(body, blueprint, signature_lines)
+    discussion_present = discussion_trigger_present(body) or bool(interaction_design.get("comment_triggers")) or bool(interaction_design.get("controversy_anchors"))
     similarity_findings = _similarity_findings(title, body, manifest)
     citation_findings = _citation_findings(body, manifest)
     strengths: list[str] = []
@@ -1904,6 +1955,10 @@ def build_heuristic_review(
         strengths.append("文中有具体现场和细节，读者更容易代入。")
     else:
         issues.append("缺少能让人看见画面的现场和细节，读起来更像观点提纲。")
+    if cost_present:
+        strengths.append("正文已经把代价落到了具体对象和后果上。")
+    else:
+        issues.append("正文还缺少现实代价感，读者知道观点但感受不到后果。")
     if depth_signals.get("evidence_paragraph_count", 0) >= 2:
         strengths.append("关键判断有事实、案例或数字托底，不容易飘。")
     else:
@@ -1920,6 +1975,10 @@ def build_heuristic_review(
         strengths.append("文章已经具备评论触发点和转发谈资。")
     else:
         issues.append("互动设计偏弱，缺少让读者想评论、想转发的明确触发点。")
+    if discussion_present:
+        strengths.append("正文里已经有可讨论的分歧点或互动入口。")
+    else:
+        issues.append("正文还缺少可讨论的分歧点，分享欲和评论欲偏弱。")
     if ai_smell_findings:
         issues.append("模板化表达仍然明显，需要进一步去 AI 味。")
     else:
@@ -1942,6 +2001,8 @@ def build_heuristic_review(
         strengths.append("正文语气和节奏基本贴住了既定写作人格。")
     if depth_signals.get("repeated_starter_count", 0) >= 3:
         issues.append("段落起手反复撞在同一类句式上，读者很容易闻到 AI 味。")
+    if structural_metrics.get("lead_paragraph_count", 0) > 4:
+        issues.append("第一个小标题前铺垫过长，首屏像背景说明而不是切题开场。")
     if similarity_findings.get("max_similarity", 0) > 0.42:
         issues.append("与近期已生成文章相似度过高，存在明显同质化风险。")
     if citation_findings.get("raw_url_count", 0) > 0:
@@ -1957,13 +2018,16 @@ def build_heuristic_review(
             "补案例/对比/步骤，提升论证多样性" if len(argument_modes) < ARGUMENT_MODE_THRESHOLD else "",
             "补金句与可截图传播句" if len(signature_lines) < SIGNATURE_LINE_THRESHOLD else "",
             "补一个具体场景和几个带画面的细节，别让正文只剩观点" if depth_signals.get("scene_paragraph_count", 0) < 1 or depth_signals.get("detail_paragraph_count", 0) < 2 else "",
+            "补一段现实代价，写清谁在付、付在哪里、后果是什么" if not cost_present else "",
             "补真实案例、数字或来源，让关键判断有托底" if depth_signals.get("evidence_paragraph_count", 0) < 2 else "",
             "补反方、误判或适用边界，别把文章写成单向宣讲" if depth_signals.get("counterpoint_paragraph_count", 0) < 1 else "",
+            "补一个可讨论的分歧点，让读者有理由接话或站队" if not discussion_present else "",
             "重写段落节奏，至少保留一两段真正展开的分析段" if depth_signals.get("outline_like") else "",
             "清理模板连接词，继续去 AI 味" if ai_smell_findings else "",
             *list(ai_fingerprint_summary.get("rewrite_hints") or []),
             "把写前增强准备好的来源材料、场景细节和边界提醒真正写进正文" if enhancement_findings else "",
             "把语气、证据摆法和节奏重新拉回这篇既定的人格" if persona_findings else "",
+            "把首屏压到 4 段内，尽快进入主判断和第一个小标题" if structural_metrics.get("lead_paragraph_count", 0) > 4 else "",
             "打散固定开头和结尾套路，别再回到一句话结论 + 万能清单" if any("先说结论" in str(item.get("evidence") or "") or "最后给你一个可执行清单" in str(item.get("evidence") or "") for item in ai_smell_findings) else "",
             "去掉正文裸链接，把来源自然融进句子里，不要再挂 [1][2] 或文末参考资料尾卡" if citation_findings.get("raw_url_count", 0) else "",
             "重写开头和结尾，避开近期高频套路句与结构" if not similarity_findings.get("similarity_passed", True) else "",
@@ -2003,6 +2067,9 @@ def build_heuristic_review(
         "pain_point_sentences": pain_point_sentences[:8],
         "ai_smell_findings": ai_smell_findings,
         "ai_fingerprint_summary": ai_fingerprint_summary,
+        "structural_template_metrics": structural_metrics,
+        "cost_signal_present": cost_present,
+        "discussion_trigger_present": discussion_present,
         "template_findings": template_findings,
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
@@ -2262,13 +2329,13 @@ def _severe_naturalness_hits(review: dict[str, Any], editorial_review: dict[str,
     for item in review.get("ai_smell_findings") or []:
         finding_type = str(item.get("type") or "")
         count = int(item.get("count") or 0)
-        if finding_type in {"outline_like", "prompt_leak", "heading_monotony"}:
+        if finding_type in {"outline_like", "prompt_leak", "heading_monotony", "judgment_first_opening", "two_sentence_protocol_close"}:
             hits += 1
         elif finding_type in {"throat_clearing", "template_phrase"} and count >= 2:
             hits += 1
         elif finding_type in {"repeated_starter", "repeated_sentence_opener"} and count >= 3:
             hits += 1
-        elif finding_type == "binary_contrast" and count >= 15:
+        elif finding_type in {"binary_contrast", "overused_not_but"} and count >= 5:
             hits += 1
     return hits
 
@@ -2335,9 +2402,12 @@ def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
     quality_gates = dict(updated.get("quality_gates") or {})
     updated["quality_gates"] = quality_gates
     required_gate_names = {
+        "metadata_integrity_passed",
+        "batch_uniqueness_passed",
         "title_integrity_passed",
         "credibility_passed",
         "evidence_minimum_passed",
+        "summary_integrity_passed",
         "prompt_leak_passed",
         "similarity_passed",
         "citation_policy_passed",
@@ -2621,6 +2691,7 @@ def _build_quality_gates(
     credibility_score: int,
     *,
     body: str,
+    summary: str,
     hot_intro_score: int,
     interaction_score: int,
     material_signals: dict[str, Any],
@@ -2629,12 +2700,18 @@ def _build_quality_gates(
     citation_findings: dict[str, Any],
     evidence_readiness: dict[str, Any],
     title_integrity: dict[str, Any],
+    metadata_integrity: dict[str, Any],
+    batch_uniqueness: dict[str, Any],
 ) -> dict[str, bool]:
     ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     editorial = review.get("editorial_review") or {}
     depth = review.get("depth_signals") or {}
     prompt_leak_hits = [item for item in (review.get("ai_smell_findings") or []) if str(item.get("type") or "") == "prompt_leak"]
     flow_metrics = _reading_flow_metrics(body, review, editorial)
+    summary_integrity = metadata_integrity_report(title=str(review.get("manifest_context", {}).get("selected_title") or ""), summary=summary)
+    structural_metrics = review.get("structural_template_metrics") or _structural_template_metrics(body, review)
+    cost_present = bool(review.get("cost_signal_present", cost_signal_present(body)))
+    discussion_present = bool(review.get("discussion_trigger_present", discussion_trigger_present(body)))
     ending_text = " ".join(legacy.list_paragraphs(body)[-2:])
     hard_cta_hits = _explicit_interaction_cta_hits(ending_text)
     question_bait_hits = _question_bait_hits(ending_text)
@@ -2650,17 +2727,22 @@ def _build_quality_gates(
             and int(material_signals.get("comparison_count") or 0) >= 1
         )
     return {
+        "metadata_integrity_passed": bool(metadata_integrity.get("passed")),
+        "batch_uniqueness_passed": bool(batch_uniqueness.get("passed", True)),
         "viral_blueprint_complete": blueprint_complete(blueprint),
         "interaction_passed": interaction_score >= 4,
         "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD and severe_naturalness_hits == 0,
         "credibility_passed": credibility_score >= 6,
         "title_integrity_passed": bool(title_integrity.get("passed")),
+        "summary_integrity_passed": bool(summary_integrity.get("summary_passed")),
         "evidence_minimum_passed": bool(evidence_readiness.get("passed", True)),
         "prompt_leak_passed": not prompt_leak_hits,
         "depth_passed": bool(
             depth.get("scene_paragraph_count", 0) >= 1
             and depth.get("evidence_paragraph_count", 0) >= 1
             and depth.get("counterpoint_paragraph_count", 0) >= 1
+            and cost_present
+            and discussion_present
             and flow_metrics.get("has_expanded_middle")
             and not depth.get("outline_like")
         ),
@@ -2668,21 +2750,27 @@ def _build_quality_gates(
             depth.get("repeated_starter_count", 0) <= 1
             and depth.get("repeated_sentence_opener_count", 0) <= 1
             and not depth.get("heading_monotony")
+            and int(structural_metrics.get("lead_paragraph_count") or 0) <= 4
             and flow_metrics.get("has_expanded_middle")
         ),
         "template_penalty_passed": template_penalty_hits <= 2 and severe_naturalness_hits == 0,
         "similarity_passed": bool(similarity_findings.get("similarity_passed", True)),
         "citation_policy_passed": bool(citation_findings.get("citation_policy_passed", True)),
         "naturalness_floor_passed": severe_naturalness_hits == 0 and editorial.get("template_risk") != "high" and int(review.get("humanness_score") or 0) >= 6,
-        "reading_flow_passed": bool(flow_metrics.get("flow_ok")),
+        "reading_flow_passed": bool(flow_metrics.get("flow_ok")) and int(structural_metrics.get("lead_paragraph_count") or 0) <= 4 and cost_present and discussion_present and depth.get("scene_paragraph_count", 0) >= 1,
         "hook_quality_passed": bool(title_integrity.get("passed")) and hot_intro_score >= 8 and editorial.get("opening_hook_strength") != "low",
         "ending_naturalness_passed": editorial.get("ending_naturalness") != "low" and hard_cta_hits == 0 and question_bait_hits <= 1,
         "material_coverage_passed": material_coverage_passed,
         "editorial_review_passed": (
-            editorial.get("opening_hook_strength") != "low"
+            bool(metadata_integrity.get("passed"))
+            and bool(batch_uniqueness.get("passed", True))
+            and editorial.get("opening_hook_strength") != "low"
             and editorial.get("middle_flow_strength") != "low"
             and editorial.get("template_risk") != "high"
             and editorial.get("ending_naturalness") != "low"
+            and cost_present
+            and discussion_present
+            and depth.get("scene_paragraph_count", 0) >= 1
         ),
     }
 
@@ -2739,6 +2827,9 @@ def build_score_report(
     humanness_score, derived_humanness_findings = _humanness_score(humanness_signals, manifest.get("writing_persona") or {})
     humanness_findings = _dedupe(_normalize_list(review.get("humanness_findings")) + derived_humanness_findings)
     ai_fingerprint_summary = summarize_ai_fingerprints(review.get("ai_smell_findings") or [])
+    structural_metrics = review.get("structural_template_metrics") or _structural_template_metrics(body, review)
+    metadata_integrity = metadata_integrity_report(title, str(manifest.get("summary") or build_article_summary(title, body)))
+    batch_uniqueness = _batch_uniqueness_report(title, body, manifest, review)
     evidence_readiness = _evidence_readiness(manifest, body, review | {"depth_signals": depth_signals})
     image_fit_expectation = _image_fit_expectation(title, body, manifest)
     material_signals = _material_signal_summary(body, manifest, review | {"depth_signals": depth_signals, "citation_findings": citation_findings})
@@ -2902,6 +2993,7 @@ def build_score_report(
         blueprint,
         evidence_backbone_score,
         body=body,
+        summary=str(manifest.get("summary") or build_article_summary(title, body)),
         hot_intro_score=opening_hook_score,
         interaction_score=interaction_quality_score,
         material_signals=material_signals,
@@ -2910,6 +3002,8 @@ def build_score_report(
         citation_findings=citation_findings,
         evidence_readiness=evidence_readiness,
         title_integrity=title_integrity,
+        metadata_integrity=metadata_integrity,
+        batch_uniqueness=batch_uniqueness,
     )
     strengths = []
     weaknesses = []
@@ -2939,12 +3033,17 @@ def build_score_report(
     mandatory_revisions = _dedupe(
         [
             "补齐爆款蓝图，先把主观点、副观点、情绪触发点和论证方式定下来。" if not quality_gates["viral_blueprint_complete"] else "",
+            "修复标题或摘要里的乱码、问号替换和异常字符，再继续后面的流程。" if not quality_gates["metadata_integrity_passed"] else "",
+            "这篇和同批稿件太像了，必须换角度重写，不要再微调句子。" if not quality_gates["batch_uniqueness_passed"] else "",
             "先把标题和首屏钩子拉起来，别让读者在前两段就掉下去。" if not quality_gates["hook_quality_passed"] else "",
             "先把中段写顺，补出一段真正展开的分析，不要继续堆判断卡片。" if not quality_gates["reading_flow_passed"] else "",
             "继续清理模板腔，压低 AI 痕迹，别再靠固定反转句和硬互动提分。" if not quality_gates["naturalness_floor_passed"] else "",
             *list(ai_fingerprint_summary.get("rewrite_hints") or []),
             "补来源、案例、对比或官方依据，让关键判断有托底。" if not quality_gates["credibility_passed"] else "",
             "把素材补到位：至少 4 类素材、1 张表格、2 处引用、1 段类比、1 段对比分析。" if not quality_gates["material_coverage_passed"] else "",
+            "把首屏压到 4 段内，先给主判断和具体现场，再往下展开。" if int(structural_metrics.get("lead_paragraph_count") or 0) > 4 else "",
+            "补一个可讨论的分歧点，让读者有理由留言、转发或站队。" if not bool(review.get("discussion_trigger_present", discussion_trigger_present(body))) else "",
+            "补一段现实代价，写清谁在付、付在哪里、会多出什么后果。" if not bool(review.get("cost_signal_present", cost_signal_present(body))) else "",
             "补一张服务判断的 Markdown 表格，让差异、趋势或成本一眼能看明白。" if not material_signals.get("has_table") else "",
             "补一段类比分析，把抽象问题讲成读者一听就懂的画面。" if int(material_signals.get("analogy_count") or 0) < 1 else "",
             "补一段对比分析，讲清楚表面像什么、实际差在哪。" if int(material_signals.get("comparison_count") or 0) < 1 else "",
@@ -3038,6 +3137,8 @@ def build_score_report(
         "suggestions": suggestions,
         "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
         "quality_gates": quality_gates,
+        "metadata_integrity": metadata_integrity,
+        "batch_uniqueness": batch_uniqueness,
         "naturalness_floor_passed": quality_gates.get("naturalness_floor_passed", True),
         "reading_flow_passed": quality_gates.get("reading_flow_passed", True),
         "hook_quality_passed": quality_gates.get("hook_quality_passed", True),
@@ -3061,6 +3162,14 @@ def build_score_report(
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
         "material_signals": material_signals,
+        "structural_template_metrics": structural_metrics,
+        "structural_template_hits": sum(
+            int(structural_metrics.get(key) or 0)
+            for key in ["judgment_first_opening_count", "not_but_chain_count", "protocol_close_count", "this_is_more_like_count", "didactic_softener_count", "pre_h2_overlong_count"]
+        ),
+        "judgment_first_opening_count": int(structural_metrics.get("judgment_first_opening_count") or 0),
+        "not_but_chain_count": int(structural_metrics.get("not_but_chain_count") or 0),
+        "protocol_close_count": int(structural_metrics.get("protocol_close_count") or 0),
         "interaction_findings": interaction_findings,
         "depth_signals": depth_signals,
         "humanness_signals": humanness_signals,

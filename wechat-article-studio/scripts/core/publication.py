@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import legacy_studio as legacy
 from core.artifacts import extract_summary, join_frontmatter, now_iso, read_json, read_text, split_frontmatter, strip_leading_h1, write_json, write_text
 from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
+from core.quality_checks import build_article_summary, lead_paragraph_count
 
 COMMENTARY_ARCHETYPES = {"commentary", "case-study", "comparison", "narrative"}
 WECHAT_PUBLICATION_STYLE_CHOICES = ("clean", "cards", "magazine", "business", "warm", "poster", "tech", "blueprint")
@@ -370,7 +371,7 @@ def prepare_publication_artifacts(workspace: Path, manifest: dict[str, Any], *, 
     raw = read_text(source_path)
     meta, body = split_frontmatter(raw)
     title = str(manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "未命名文章").strip()
-    summary = str(meta.get("summary") or manifest.get("summary") or extract_summary(body)).strip()
+    summary = str(meta.get("summary") or manifest.get("summary") or build_article_summary(title, body)).strip()
     body = strip_leading_h1(body, title)
     body = normalize_publication_body(title, body)
     body, citation_findings = apply_reference_policy(workspace, manifest, title, body, keep_inline_citations=True)
@@ -381,8 +382,12 @@ def prepare_publication_artifacts(workspace: Path, manifest: dict[str, Any], *, 
     blocks, rewrite_findings = _rewrite_blocks(blocks)
     publication_body = "\n\n".join(block.strip() for block in blocks if block.strip())
     publication_body = publication_body.strip() + ("\n" if publication_body.strip() else "")
+    summary = build_article_summary(title, publication_body)
     technical_terms = _collect_technical_terms(title, summary, publication_body)
     wechat_style = _suggest_wechat_style(archetype, publication_body, technical_terms, manifest)
+    pre_h2_count = lead_paragraph_count(publication_body)
+    h2_count = len(re.findall(r"(?m)^\s*##\s+", publication_body))
+    h3_count = len(re.findall(r"(?m)^\s*###\s+", publication_body))
     payload = {
         "source_path": source_rel,
         "output_path": "publication.md",
@@ -396,6 +401,10 @@ def prepare_publication_artifacts(workspace: Path, manifest: dict[str, Any], *, 
         "reference_count": citation_findings.get("reference_count", 0),
         "citation_count": citation_findings.get("body_citation_count", 0),
         "suggested_wechat_style": wechat_style,
+        "lead_paragraph_count": pre_h2_count,
+        "h2_count": h2_count,
+        "h3_count": h3_count,
+        "summary_length": len(re.sub(r"\s+", "", summary)),
         **rewrite_findings,
         "generated_at": now_iso(),
     }

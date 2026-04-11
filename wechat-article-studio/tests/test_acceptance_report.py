@@ -57,7 +57,7 @@ class AcceptanceReportTests(unittest.TestCase):
                 workspace,
                 manifest,
                 title="企业 AI 转型真正要先讲清楚的，不是工具",
-                summary="先把团队真正要扛的结果讲清楚，再谈工具和流程。",
+                summary="那天会议室里大家第一次认真讨论 AI 要替团队扛什么结果，真正要先补的不是工具，而是责任归属和流程顺序。",
                 body=body,
                 score_report=score_report,
                 review_report=review_report,

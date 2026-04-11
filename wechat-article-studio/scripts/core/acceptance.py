@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
-from core.content_fingerprint import build_article_fingerprint, summarize_collisions
+from core.content_fingerprint import build_article_fingerprint, load_batch_article_items, summarize_batch_collisions, summarize_collisions
+from core.quality_checks import discussion_trigger_present, lead_paragraph_count, metadata_integrity_report
 
 ACCEPTANCE_SCHEMA_VERSION = "2026-04-v3"
 
@@ -56,6 +57,22 @@ def _selected_title_issues(workspace: Path, manifest: dict[str, Any], body_title
     return issues
 
 
+def _state_consistency_issues(workspace: Path, manifest: dict[str, Any], title: str, score_report: dict[str, Any], acceptance_passed: bool) -> list[str]:
+    issues: list[str] = []
+    manifest_title = str(manifest.get("selected_title") or "").strip()
+    score_title = str(score_report.get("title") or "").strip()
+    if manifest_title and manifest_title != title:
+        issues.append("manifest.json 和当前验收标题不一致")
+    if score_title and score_title != title:
+        issues.append("score-report.json 和当前验收标题不一致")
+    if score_report.get("passed") not in (None, "") and manifest.get("score_passed") not in (None, ""):
+        if bool(score_report.get("passed")) != bool(manifest.get("score_passed")):
+            issues.append("manifest.json 和 score-report.json 的通过状态不一致")
+    if manifest.get("acceptance_passed") not in (None, "") and bool(manifest.get("acceptance_passed")) != bool(acceptance_passed):
+        issues.append("manifest.json 里的 acceptance_passed 与当前验收结果不一致")
+    return issues
+
+
 def build_acceptance_report(
     workspace: Path,
     manifest: dict[str, Any],
@@ -89,10 +106,19 @@ def build_acceptance_report(
         layout_plan=layout_plan,
     )
     collisions = summarize_collisions(fingerprint, recent_fingerprints, threshold=0.74)
+    batch_collisions = summarize_batch_collisions(
+        fingerprint,
+        current_title=title,
+        current_body=body,
+        batch_items=load_batch_article_items(workspace),
+        threshold=0.62,
+        title_threshold=0.72,
+    )
+    metadata = metadata_integrity_report(title, summary)
     summary_overlap = _jaccard(_tokens(summary), _tokens(title + " " + " ".join(legacy.list_paragraphs(body)[:3])))
     summary_tokens = list(_tokens(summary))
     summary_keyword_hit = any(token in _normalize_text(body).lower() for token in summary_tokens[:4])
-    summary_length_ok = 10 <= len(_normalize_text(summary)) <= 90
+    summary_length_ok = 45 <= len(_normalize_text(summary)) <= 90
     research_requirements = (
         manifest.get("research_requirements")
         or (legacy.read_json(workspace / "research.json", default={}) or {}).get("minimum_requirements")
@@ -102,8 +128,20 @@ def build_acceptance_report(
     reference_tail_present = 'data-wx-role="reference-card"' in wechat_html or 'data-wx-role="reference-list"' in wechat_html
     compare_block_present = any(marker in wechat_html for marker in ['data-wx-role="compare-grid"', 'data-wx-role="compare-header"', '<table'])
     code_block_present = "<pre" in wechat_html or "<code" in wechat_html
+    first_h2_match = re.search(r"(?m)^\s*##\s+", body)
+    h3_count = len(re.findall(r"(?m)^\s*###\s+", body))
+    h2_count = len(re.findall(r"(?m)^\s*##\s+", body))
+    lead_visual_passed = True
+    if "<img" in wechat_html and re.search(r"<h2\b", wechat_html):
+        first_img = wechat_html.find("<img")
+        first_h2 = wechat_html.find("<h2")
+        lead_visual_passed = first_img != -1 and (first_h2 == -1 or first_img < first_h2)
     score_failed_gates = [name for name, ok in quality_gates.items() if not ok]
+    state_consistency_issues = _state_consistency_issues(workspace, manifest, title, score_report, False)
     gates = {
+        "metadata_integrity_passed": bool(metadata.get("passed")),
+        "batch_uniqueness_passed": bool(batch_collisions.get("passed", True)),
+        "state_consistency_passed": not state_consistency_issues,
         "score_passed": bool(score_report.get("passed")),
         "title_novelty_passed": bool(collisions.get("route_similarity_passed", True)),
         "title_consistency_passed": not title_consistency_issues,
@@ -113,22 +151,44 @@ def build_acceptance_report(
         "boundary_passed": int(depth.get("counterpoint_paragraph_count") or 0) >= 1,
         "analysis_passed": int(depth.get("long_paragraph_count") or 0) >= 1 or int(depth.get("paragraph_count") or 0) <= 4,
         "ending_natural_passed": str(editorial_review.get("ending_naturalness") or "medium") != "low",
+        "summary_integrity_passed": not metadata.get("summary_issues"),
         "summary_alignment_passed": bool(summary.strip()) and summary_length_ok and (summary_overlap >= 0.03 or summary_keyword_hit or len(summary_tokens) <= 2),
         "layout_plan_passed": len(layout_plan.get("section_plans") or []) >= 3 and bool(layout_plan.get("recommended_style")),
+        "pre_h2_length_passed": lead_paragraph_count(body) <= 4,
+        "layout_hierarchy_passed": not (h2_count >= 4 and h3_count == 0 and int(depth.get("paragraph_count") or 0) >= 18),
+        "lead_visual_passed": lead_visual_passed,
         "wechat_render_passed": bool(wechat_html.strip()) and ("<h1" not in wechat_html if str(manifest.get("wechat_header_mode") or "drop-title") == "drop-title" else True) and bool(compare_block_present or code_block_present or "<p" in wechat_html),
         "reference_tail_passed": reference_count == 0 or reference_tail_present,
+        "source_block_visible_passed": reference_count == 0 or reference_tail_present,
         "quality_gates_passed": not score_failed_gates,
     }
-    gates["score_ready"] = bool(gates["score_passed"] and gates["quality_gates_passed"])
-    gates["render_ready"] = bool(
-        gates["score_ready"]
+    gates["acceptance_ready_passed"] = bool(
+        gates["metadata_integrity_passed"]
+        and gates["batch_uniqueness_passed"]
+        and gates["state_consistency_passed"]
+        and gates["title_novelty_passed"]
         and gates["title_consistency_passed"]
         and gates["evidence_minimum_passed"]
+        and gates["opening_scene_passed"]
+        and gates["boundary_passed"]
+        and gates["analysis_passed"]
+        and gates["summary_integrity_passed"]
+        and gates["summary_alignment_passed"]
+        and gates["layout_plan_passed"]
+        and gates["pre_h2_length_passed"]
+        and gates["layout_hierarchy_passed"]
+        and gates["quality_gates_passed"]
+    )
+    gates["score_ready"] = bool(gates["score_passed"] and gates["quality_gates_passed"])
+    gates["render_ready"] = bool(
+        gates["score_ready"] and gates["acceptance_ready_passed"]
     )
     gates["publish_ready"] = bool(
         gates["render_ready"]
         and gates["wechat_render_passed"]
+        and gates["source_block_visible_passed"]
         and gates["reference_tail_passed"]
+        and gates["lead_visual_passed"]
         and gates["summary_alignment_passed"]
     )
     gates["publish_chain_ready"] = bool(gates["publish_ready"])
@@ -147,19 +207,35 @@ def build_acceptance_report(
     risks = []
     if not gates["title_novelty_passed"]:
         risks.append("和近期文章的路线仍然太近，容易像旧稿换皮。")
+    if not gates["metadata_integrity_passed"]:
+        risks.append("标题或摘要本身存在乱码、问号替换或空值。")
+    if not gates["batch_uniqueness_passed"]:
+        risks.append("同批次里已经有结构或正文高度相近的稿子，当前稿件像换皮重写。")
+    if not gates["state_consistency_passed"]:
+        risks.append("状态单、评分单和验收结果没有对齐，当前工作目录不可信。")
     if not gates["title_consistency_passed"]:
         risks.append("标题在多个产物之间不一致，后续容易出现选题、成稿和渲染错位。")
     if not gates["evidence_minimum_passed"]:
         risks.append("评论/案例类稿件还没满足最小证据门槛。")
     if not gates["summary_alignment_passed"]:
         risks.append("摘要和正文前半段不够贴合。")
+    if not gates["pre_h2_length_passed"]:
+        risks.append("首屏铺垫过长，第一个二级标题前的段落太多。")
+    if not gates["layout_hierarchy_passed"]:
+        risks.append("层级过于扁平，长文扫读路径不够清楚。")
     if not gates["wechat_render_passed"]:
         risks.append("公众号片段还不够干净，发布前需要重新渲染。")
-    if not gates["reference_tail_passed"]:
+    if not gates["reference_tail_passed"] or not gates["source_block_visible_passed"]:
         risks.append("来源卡片没有真正落到公众号成品里。")
+    if not gates["lead_visual_passed"]:
+        risks.append("有图片但没有在首屏形成视觉锚点。")
     if score_failed_gates:
         risks.append("评分硬门槛和成品验收还没有完全对齐。")
     passed = all(gates.values())
+    if passed:
+        state_consistency_issues = _state_consistency_issues(workspace, manifest, title, score_report, True)
+        gates["state_consistency_passed"] = not state_consistency_issues
+        passed = all(gates.values())
     return {
         "schema_version": ACCEPTANCE_SCHEMA_VERSION,
         "title": title,
@@ -171,8 +247,11 @@ def build_acceptance_report(
         "blockers": failed,
         "highlights": highlights[:5],
         "risks": risks[:5],
+        "metadata_integrity": metadata,
         "content_fingerprint": fingerprint,
         "fingerprint_findings": collisions,
+        "batch_uniqueness": batch_collisions,
+        "state_consistency_issues": state_consistency_issues,
         "title_consistency_issues": title_consistency_issues,
         "research_requirements": research_requirements,
         "layout_plan_overview": {

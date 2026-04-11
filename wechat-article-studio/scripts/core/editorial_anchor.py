@@ -49,6 +49,16 @@ def build_editorial_anchor_plan(
         }
     )
 
+    pressure_reason = "如果读者看不到谁在付代价、为什么值得讨论，传播力会掉得很快。"
+    anchors.append(
+        {
+            "slot": "pressure",
+            "goal": "补现实代价和讨论点",
+            "reason": pressure_reason,
+            "suggestion": "补一句谁在付出什么代价，再补一个会让读者想接话的问题或分歧点。",
+        }
+    )
+
     ending_reason = "结尾再收得准一点，文章会更有余味。"
     if any("结尾" in item or "判断" in item for item in mandatory_revisions):
         ending_reason = "结尾还不够稳，应该再压一句更能带走的判断。"
@@ -63,7 +73,7 @@ def build_editorial_anchor_plan(
     return {
         "title": title,
         "generated_at": now_iso(),
-        "anchors": anchors[:3],
+        "anchors": anchors[:4],
         "source_signals": {
             "humanness_findings": humanness_findings[:4],
             "mandatory_revisions": mandatory_revisions[:4],

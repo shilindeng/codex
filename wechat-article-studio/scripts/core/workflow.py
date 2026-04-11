@@ -37,7 +37,14 @@ from core.author_memory import (
     compute_edit_lesson_payload,
     write_playbook_artifacts,
 )
-from core.content_fingerprint import build_article_fingerprint, build_outline_fingerprint, load_fingerprint, summarize_collisions
+from core.content_fingerprint import (
+    build_article_fingerprint,
+    build_outline_fingerprint,
+    load_batch_article_items,
+    load_fingerprint,
+    summarize_batch_collisions,
+    summarize_collisions,
+)
 from core.content_enhancement import (
     build_content_enhancement,
     enhancement_strategy_for_archetype,
@@ -77,6 +84,8 @@ from core.publication import (
     normalize_publication_body as publication_normalize_publication_body,
 )
 from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
+from core.quality_checks import build_article_summary, metadata_integrity_report, workspace_batch_key
+from core.quality_checks import cost_signal_present, discussion_trigger_present, lead_paragraph_count
 from core.editorial_strategy import (
     generate_diverse_title_variants,
     normalize_editorial_blueprint,
@@ -267,6 +276,81 @@ def collect_title_consistency_issues(workspace: Path, manifest: dict[str, Any]) 
     return issues
 
 
+def collect_state_consistency_issues(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    score_report: dict[str, Any] | None = None,
+    acceptance_report: dict[str, Any] | None = None,
+) -> list[str]:
+    issues: list[str] = []
+    score_report = score_report or (read_json(workspace / "score-report.json", default={}) or {})
+    acceptance_report = acceptance_report or (read_json(workspace / "acceptance-report.json", default={}) or {})
+    manifest_title = str(manifest.get("selected_title") or "").strip()
+    if score_report:
+        report_title = str(score_report.get("title") or "").strip()
+        if manifest_title and report_title and manifest_title != report_title:
+            issues.append("manifest.json 与 score-report.json 的标题不一致。")
+        if "score_passed" in manifest and score_report.get("passed") not in (None, "") and bool(manifest.get("score_passed")) != bool(score_report.get("passed")):
+            issues.append("manifest.json 与 score-report.json 的 passed 状态不一致。")
+        if str(manifest.get("stage") or "") in {"initialized", "title", "outline", "draft", "review"}:
+            issues.append("score-report.json 已存在，但 manifest.stage 仍停在前置阶段。")
+    if acceptance_report:
+        acceptance_title = str(acceptance_report.get("title") or "").strip()
+        if manifest_title and acceptance_title and manifest_title != acceptance_title:
+            issues.append("manifest.json 与 acceptance-report.json 的标题不一致。")
+        if "acceptance_passed" in manifest and acceptance_report.get("passed") not in (None, "") and bool(manifest.get("acceptance_passed")) != bool(acceptance_report.get("passed")):
+            issues.append("manifest.json 与 acceptance-report.json 的 passed 状态不一致。")
+        if str(manifest.get("stage") or "") in {"initialized", "title", "outline", "draft", "review"}:
+            issues.append("acceptance-report.json 已存在，但 manifest.stage 仍停在前置阶段。")
+    publish_result = read_json(workspace / "publish-result.json", default={}) or {}
+    if publish_result and str(manifest.get("stage") or "") not in {"publish", "verify"}:
+        issues.append("publish-result.json 已存在，但 manifest.stage 不是 publish/verify。")
+    deduped: list[str] = []
+    for item in issues:
+        if item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
+def _update_manifest_quality_status(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    title: str,
+    summary: str,
+    body: str,
+    review: dict[str, Any] | None = None,
+    layout_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    metadata = metadata_integrity_report(title, summary)
+    manifest["metadata_integrity_status"] = metadata.get("status") or "failed"
+    manifest["metadata_integrity_reasons"] = list(metadata.get("reasons") or [])
+    batch_key = workspace_batch_key(workspace)
+    manifest["batch_key"] = batch_key
+    fingerprint = build_article_fingerprint(
+        title,
+        body,
+        manifest | {"summary": summary, "workspace": str(workspace.resolve())},
+        review=review,
+        layout_plan=layout_plan or {},
+    )
+    batch_report = summarize_batch_collisions(
+        fingerprint,
+        current_title=title,
+        current_body=body,
+        batch_items=load_batch_article_items(workspace),
+        threshold=0.62,
+        title_threshold=0.72,
+    )
+    manifest["batch_uniqueness_status"] = "passed" if batch_report.get("passed", True) else "failed"
+    manifest["batch_uniqueness_reasons"] = [
+        f"{item.get('title') or item.get('workspace')}: {', '.join(item.get('matched_rules') or [])}"
+        for item in (batch_report.get("batch_similar_items") or [])
+    ]
+    return {"metadata": metadata, "batch": batch_report, "fingerprint": fingerprint}
+
+
 def research_requirements_report(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     existing = manifest.get("research_requirements")
     if isinstance(existing, dict) and existing:
@@ -316,6 +400,7 @@ def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score
     stale_blockers = _stale_report_blockers(workspace, manifest)
     title_blockers = collect_title_consistency_issues(workspace, manifest)
     similarity_blockers = _similarity_blockers(workspace)
+    consistency_blockers = collect_state_consistency_issues(workspace, manifest, score_report=score_report, acceptance_report=acceptance_report)
     research_report = research_requirements_report(workspace, manifest)
     report = score_report or (read_json(workspace / "score-report.json", default={}) or {})
     acceptance = acceptance_report or (read_json(workspace / "acceptance-report.json", default={}) or {})
@@ -337,8 +422,13 @@ def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score
     render_blockers: list[str] = []
     if research_report.get("requires_evidence") and not research_report.get("passed"):
         render_blockers.append(f"调研门槛未通过：{'；'.join(research_report.get('reasons') or [])}")
+    if not acceptance:
+        render_blockers.append("缺少 acceptance-report.json，无法确认 render 前置条件。")
+    elif not bool((acceptance.get("gates") or {}).get("acceptance_ready_passed", False)):
+        render_blockers.append("成品验收前置门槛未通过，当前稿件不满足 render 前置条件。")
     render_blockers.extend(title_blockers)
     render_blockers.extend(similarity_blockers)
+    render_blockers.extend(consistency_blockers)
 
     publish_blockers: list[str] = []
     publish_blockers.extend(placeholder_reasons(workspace, manifest))
@@ -348,16 +438,16 @@ def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score
         failed = acceptance.get("failed_gates") or [name for name, ok in (acceptance.get("gates") or {}).items() if not ok]
         publish_blockers.append(f"成品验收未通过：{'、'.join(str(item) for item in failed)}")
 
-    score_ready = not score_blockers and not stale_blockers
+    score_ready = not score_blockers and not stale_blockers and not consistency_blockers
     render_ready = score_ready and not render_blockers
     publish_ready = render_ready and not publish_blockers and bool((acceptance.get("gates") or {}).get("publish_ready", False))
     return {
         "score_ready": score_ready,
         "render_ready": render_ready,
         "publish_ready": publish_ready,
-        "score_blockers": stale_blockers + score_blockers,
-        "render_blockers": stale_blockers + score_blockers + render_blockers,
-        "publish_blockers": stale_blockers + score_blockers + render_blockers + publish_blockers,
+        "score_blockers": stale_blockers + consistency_blockers + score_blockers,
+        "render_blockers": stale_blockers + consistency_blockers + score_blockers + render_blockers,
+        "publish_blockers": stale_blockers + consistency_blockers + score_blockers + render_blockers + publish_blockers,
     }
 
 
@@ -761,6 +851,7 @@ def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dic
     write_text(workspace / "acceptance-report.md", markdown_acceptance_report(payload))
     manifest["acceptance_report_path"] = "acceptance-report.json"
     manifest["acceptance_passed"] = bool(payload.get("passed"))
+    manifest["acceptance_ready_status"] = "passed" if (payload.get("gates") or {}).get("acceptance_ready_passed") else "failed"
     return payload
 
 
@@ -1019,7 +1110,7 @@ def sync_article_reference_policy(workspace: Path, manifest: dict[str, Any]) -> 
     body = strip_leading_h1(body, title)
     body = normalize_publication_body(title, body)
     normalized_body, findings = apply_reference_policy(workspace, manifest, title, body)
-    summary = meta.get("summary") or manifest.get("summary") or extract_summary(normalized_body)
+    summary = meta.get("summary") or manifest.get("summary") or build_article_summary(title, normalized_body)
     if normalized_body != body or not (workspace / "references.json").exists():
         write_text(article_path, join_frontmatter({"title": title, "summary": summary}, normalized_body))
     manifest["references_path"] = "references.json"
@@ -1245,6 +1336,9 @@ def build_generation_preflight_report(
     has_table = _has_markdown_table(body)
     analogy_count = _analogy_signal_count(body)
     comparison_count = _comparison_signal_count(body)
+    lead_paras = lead_paragraph_count(body)
+    has_cost_signal = cost_signal_present(body)
+    has_discussion_trigger = discussion_trigger_present(body)
     missing_elements: list[str] = []
     if depth.get("scene_paragraph_count", 0) < 1:
         missing_elements.append("开头缺少具体场景、动作或瞬间。")
@@ -1260,6 +1354,12 @@ def build_generation_preflight_report(
         missing_elements.append("全文缺少反方、误判或适用边界。")
     if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4:
         missing_elements.append("缺少真正展开的分析段，段落太碎。")
+    if lead_paras > 4:
+        missing_elements.append("第一个小标题前铺垫过长，首屏还没尽快切题。")
+    if not has_cost_signal:
+        missing_elements.append("正文缺少现实代价，读者还感受不到后果。")
+    if not has_discussion_trigger:
+        missing_elements.append("正文缺少可讨论的分歧点，评论和转发入口还不够。")
     if section_enhancements:
         if depth.get("evidence_paragraph_count", 0) < 1 and any(item.get("support_quotes") or item.get("support_sources") for item in section_enhancements):
             missing_elements.append("写前增强已经准备了来源材料，但正文还没把证据真正写进去。")
@@ -1317,6 +1417,9 @@ def build_generation_preflight_report(
             "补一段对比分析，讲清楚表面像什么、实际差在哪。" if comparison_count < 1 else "",
             "补一处反方、误判或适用边界。" if depth.get("counterpoint_paragraph_count", 0) < 1 else "",
             "把卡片段落合并成至少一段真正展开的分析。" if depth.get("long_paragraph_count", 0) < 1 and depth.get("paragraph_count", 0) > 4 else "",
+            "把首屏压到 4 段内，尽快给出主判断和第一个小标题。" if lead_paras > 4 else "",
+            "补一段现实代价，写清谁在付、付在哪里、后果是什么。" if not has_cost_signal else "",
+            "补一个可讨论的分歧点，让读者有理由接话或转发。" if not has_discussion_trigger else "",
             "删除内部提示语、写作说明和蓝图口吻。" if any(str(item.get("type") or "") == "prompt_leak" for item in ai_smell) else "",
             (
                 f"优先把这一条来源材料写进正文：{((section_enhancements[0].get('support_quotes') or [{}])[0].get('text') or (section_enhancements[0].get('support_sources') or [{}])[0].get('title') or '')}"
@@ -1362,6 +1465,9 @@ def build_generation_preflight_report(
         "ai_fingerprint_summary": ai_fingerprint_summary,
         "template_findings": template_findings,
         "depth_signals": depth,
+        "lead_paragraph_count": lead_paras,
+        "cost_signal_present": has_cost_signal,
+        "discussion_trigger_present": has_discussion_trigger,
         "missing_elements": missing_elements,
         "severe_findings": severe_findings,
         "rewrite_focus": rewrite_focus,
@@ -2110,15 +2216,15 @@ def cmd_write(args: argparse.Namespace) -> int:
         workspace,
         manifest,
         selected_title,
-        extract_summary(body),
+        build_article_summary(selected_title, body),
         body,
         outline_meta=outline_meta,
         allow_model_repair=True,
     )
     article_path = workspace / "article.md"
-    write_text(article_path, join_frontmatter({"title": selected_title, "summary": extract_summary(body)}, body))
+    write_text(article_path, join_frontmatter({"title": selected_title, "summary": build_article_summary(selected_title, body)}, body))
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
-    summary = synced_meta.get("summary") or extract_summary(synced_body or body)
+    summary = synced_meta.get("summary") or build_article_summary(selected_title, synced_body or body)
     manifest.update(
         {
             "selected_title": selected_title,
@@ -2134,6 +2240,14 @@ def cmd_write(args: argparse.Namespace) -> int:
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
             "content_enhancement_path": "content-enhancement.json",
         }
+    )
+    _apply_article_quality_status(
+        workspace,
+        manifest,
+        title=selected_title,
+        summary=summary,
+        body=synced_body or body,
+        layout_plan=layout_plan,
     )
     write_content_fingerprint_artifact(workspace, selected_title, synced_body or body, manifest, layout_plan=layout_plan)
     update_stage(manifest, "draft", "draft_status")
@@ -2277,6 +2391,28 @@ def _mark_publish_intent(workspace: Path) -> None:
     save_manifest(workspace, manifest)
 
 
+def _apply_article_quality_status(
+    workspace: Path,
+    manifest: dict[str, Any],
+    *,
+    title: str,
+    summary: str,
+    body: str,
+    review: dict[str, Any] | None = None,
+    layout_plan: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    status = _update_manifest_quality_status(
+        workspace,
+        manifest,
+        title=title,
+        summary=summary,
+        body=body,
+        review=review,
+        layout_plan=layout_plan,
+    )
+    return status
+
+
 def _maybe_promote_rewrite(manifest: dict[str, Any], rewrite: dict[str, Any]) -> None:
     output_path = str(rewrite.get("output_path") or "").strip()
     if not output_path:
@@ -2357,7 +2493,7 @@ def cmd_draft(args: argparse.Namespace) -> int:
     meta, body = split_frontmatter(raw)
     title = args.selected_title or manifest.get("selected_title") or meta.get("title") or legacy.extract_title_from_body(body) or manifest.get("topic") or "未命名文章"
     body = strip_leading_h1(body, title)
-    summary = args.summary or meta.get("summary") or manifest.get("summary") or extract_summary(body)
+    summary = args.summary or meta.get("summary") or manifest.get("summary") or build_article_summary(title, body)
     author = args.author or meta.get("author") or manifest.get("author") or ""
     article_meta = {"title": title, "summary": summary}
     if author:
@@ -2373,6 +2509,13 @@ def cmd_draft(args: argparse.Namespace) -> int:
             "article_path": "article.md",
             "outline": [item["text"] for item in legacy.extract_headings(synced_body or body)] or manifest.get("outline") or [],
         }
+    )
+    _apply_article_quality_status(
+        workspace,
+        manifest,
+        title=title,
+        summary=str(manifest.get("summary") or summary),
+        body=synced_body or body,
     )
     save_manifest(workspace, manifest)
     print(str(article_path))
@@ -3515,14 +3658,14 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
         workspace,
         manifest,
         title,
-        extract_summary(body),
+        build_article_summary(title, body),
         body,
         outline_meta=outline_meta,
         allow_model_repair=True,
     )
-    write_text(workspace / "article.md", join_frontmatter({"title": title, "summary": extract_summary(body)}, body))
+    write_text(workspace / "article.md", join_frontmatter({"title": title, "summary": build_article_summary(title, body)}, body))
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
-    summary = synced_meta.get("summary") or extract_summary(synced_body or body)
+    summary = synced_meta.get("summary") or build_article_summary(title, synced_body or body)
     manifest.update(
         {
             "selected_title": title,
@@ -3534,6 +3677,14 @@ def _bootstrap_hosted_article(workspace: Path, manifest: dict[str, Any], topic: 
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
             "content_enhancement_path": "content-enhancement.json",
         }
+    )
+    _apply_article_quality_status(
+        workspace,
+        manifest,
+        title=title,
+        summary=summary,
+        body=synced_body or body,
+        layout_plan=layout_plan,
     )
     sync_title_truth(workspace, manifest, title)
     update_stage(manifest, "draft", "draft_status")
@@ -3559,14 +3710,14 @@ def _import_hosted_article(
         meta, body = split_frontmatter(raw)
         title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
         body = strip_leading_h1(body, title)
-        summary = summary_hint or meta.get("summary") or extract_summary(body)
+        summary = summary_hint or meta.get("summary") or build_article_summary(title, body)
         write_text(article_path, join_frontmatter({"title": title, "summary": summary}, body))
     elif not article_path.exists():
         title = title_hint or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
         return _bootstrap_hosted_article(workspace, manifest, manifest.get("topic") or title, title, angle, audience)
     meta, body = split_frontmatter(read_text(article_path))
     title = title_hint or meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名标题"
-    summary = summary_hint or meta.get("summary") or extract_summary(body)
+    summary = summary_hint or meta.get("summary") or build_article_summary(title, body)
     ensure_content_enhancement(workspace, manifest, load_ideation(workspace), selected_title=title, force=True)
     hardened_body, preflight = harden_generated_article_body(
         workspace,
@@ -3577,6 +3728,7 @@ def _import_hosted_article(
         outline_meta=load_ideation(workspace).get("outline_meta") or {},
         allow_model_repair=True,
     )
+    summary = summary_hint or build_article_summary(title, hardened_body)
     write_text(article_path, join_frontmatter({"title": title, "summary": summary}, hardened_body))
     synced_meta, synced_body = sync_article_reference_policy(workspace, manifest)
     manifest.update(
@@ -3590,6 +3742,13 @@ def _import_hosted_article(
             "generation_preflight_status": "fixed" if preflight.get("used_repaired_body") else "passed",
             "content_enhancement_path": "content-enhancement.json",
         }
+    )
+    _apply_article_quality_status(
+        workspace,
+        manifest,
+        title=title,
+        summary=str(manifest.get("summary") or summary),
+        body=synced_body or hardened_body,
     )
     update_stage(manifest, "draft", "draft_status")
     return title
@@ -3609,6 +3768,7 @@ def _finalize_after_score(workspace: Path, manifest: dict[str, Any], title: str,
         review_payload = build_review_from_score(title, score_report, manifest)
         write_review_report(workspace, manifest, review_payload)
     write_editorial_anchor_plan(workspace, manifest, title=title, review_report=review_payload, score_report=score_report)
+    write_acceptance_artifacts(workspace, manifest)
     save_manifest(workspace, manifest)
     return review_payload
 

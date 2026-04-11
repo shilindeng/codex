@@ -16,7 +16,7 @@ from core.workflow import write_editorial_anchor_plan  # noqa: E402
 
 
 class EditorialAnchorTests(unittest.TestCase):
-    def test_build_editorial_anchor_plan_returns_three_slots(self):
+    def test_build_editorial_anchor_plan_returns_expected_slots(self):
         payload = build_editorial_anchor_plan(
             title="测试标题",
             manifest={},
@@ -24,10 +24,11 @@ class EditorialAnchorTests(unittest.TestCase):
             score_report={"mandatory_revisions": ["补一个具体场景", "补反方边界"], "humanness_findings": ["缺少场景锚。"]},
             content_enhancement={"section_enhancements": [{"evidence_targets": ["一条真实案例"], "counterpoint_targets": ["补一句边界提醒"]}]},
         )
-        self.assertEqual(len(payload.get("anchors") or []), 3)
+        self.assertEqual(len(payload.get("anchors") or []), 4)
         self.assertEqual(payload["anchors"][0]["slot"], "opening")
         self.assertEqual(payload["anchors"][1]["slot"], "middle")
-        self.assertEqual(payload["anchors"][2]["slot"], "ending")
+        self.assertEqual(payload["anchors"][2]["slot"], "pressure")
+        self.assertEqual(payload["anchors"][3]["slot"], "ending")
 
     def test_write_editorial_anchor_plan_writes_artifacts(self):
         with tempfile.TemporaryDirectory() as tmp:

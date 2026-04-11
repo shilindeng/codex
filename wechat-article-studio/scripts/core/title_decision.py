@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 import legacy_studio as legacy
+from core.quality_checks import ACTION_WORDS, abstract_tail_penalty, title_hook_shape
 from core.editorial_strategy import title_template_key
 
 
@@ -26,8 +27,18 @@ BROKEN_CONNECTOR_PATTERNS = (
 )
 RISKY_TITLE_ENDINGS = ("这里", "那一步", "这一层")
 TITLE_SCORE_THRESHOLD = 68
-TITLE_LENGTH_TARGET = (16, 24)
-TITLE_LENGTH_HARD_MAX = 28
+TITLE_LENGTH_TARGET = (24, 33)
+TITLE_LENGTH_HARD_MAX = 36
+TITLE_LENGTH_HIGH_RISK = 40
+ANSWER_COMPLETE_TITLE_PATTERNS = (
+    r"：.*不是.*而是.*",
+    r"先要补的不是",
+    r"接下来拼的，不是谁.*而是谁.*",
+    r"正在从.*变成.*",
+    r"下一场仗，打的不是.*是.*",
+    r"谁更.*而是谁更.*",
+)
+ABSTRACT_TITLE_WORDS = ("边界", "秩序", "流程问题", "系统建设", "判断顺序", "真实处境")
 TITLE_FAMILY_LABELS = {
     "viewpoint-direct": "观点直述型",
     "pain-truth": "痛点真相型",
@@ -298,6 +309,16 @@ def evaluate_title_open_rate(
     technical_tokens = _technical_token_count(title)
     absolute_hits = sum(1 for word in ABSOLUTE_TITLE_WORDS if word in title)
     old_template_hits = sum(1 for fragment in HIGH_RISK_TITLE_FRAGMENTS if fragment in title)
+    hook_shape = title_hook_shape(title, topic=topic, audience=audience)
+    answer_complete_title_penalty = 0
+    if any(re.search(pattern, title) for pattern in ANSWER_COMPLETE_TITLE_PATTERNS):
+        answer_complete_title_penalty += 3
+    if re.search(r"真正.{0,12}是", title) and (separator_count >= 1 or any(word in title for word in ACTION_WORDS if word)):
+        answer_complete_title_penalty += 2
+    conclusion_density_penalty = max(0, title.count("真正") - 1) + max(0, 1 if ("不是" in title and "而是" in title) else 0)
+    if title.count("真正") >= 2 and "不是" in title and "而是" in title:
+        conclusion_density_penalty += 1
+    abstract_tail = abstract_tail_penalty(title)
     pain_text = f"{title} {(components.get('pain_point') or '')}"
     truth_text = f"{title} {(components.get('truth_or_rule') or '')}"
     contrast_text = f"{title} {(components.get('counterintuitive_hook') or '')}"
@@ -342,7 +363,7 @@ def evaluate_title_open_rate(
         4.2
         + (2.0 if family in DIRECT_FAMILY_PRIORITY else 1.2)
         + (1.8 if _contains_any(share_text, SHARE_WORDS) else 0.0)
-        + (1.0 if len(normalized) <= 24 else 0.0)
+        + (1.0 if len(normalized) <= 30 else 0.0)
         + (0.6 if question_count == 1 else 0.0),
     )
     dimensions["情绪共鸣"] = min(
@@ -357,9 +378,10 @@ def evaluate_title_open_rate(
         4.0
         + (2.2 if family in DIRECT_FAMILY_PRIORITY else 1.4)
         + (1.6 if _contains_any(share_text, SHARE_WORDS) else 0.0)
-        + (1.0 if separator_count <= 1 and len(normalized) <= 24 else 0.0)
+        + (1.0 if separator_count <= 1 and len(normalized) <= 30 else 0.0)
         + (0.8 if question_count == 0 else 0.0),
     )
+    dimensions["传播性"] = max(1.0, dimensions["传播性"] + min(1.5, hook_shape.get("shape_score", 0) * 0.5) - answer_complete_title_penalty * 0.4)
     trust_score = 8.0
     trust_score -= absolute_hits * 1.8
     trust_score -= max(0, separator_count - 1) * 1.6
@@ -367,6 +389,10 @@ def evaluate_title_open_rate(
     trust_score -= old_template_hits * 0.8
     if len(normalized) > TITLE_LENGTH_HARD_MAX:
         trust_score -= 1.6
+    if len(normalized) > TITLE_LENGTH_HIGH_RISK:
+        trust_score -= 2.0
+    trust_score -= abstract_tail * 1.2
+    trust_score -= answer_complete_title_penalty * 0.8
     if research.get("sources") or research.get("evidence_items"):
         trust_score += 0.8
     dimensions["可信度"] = round(max(1.0, min(trust_score, 10.0)), 2)
@@ -388,17 +414,27 @@ def evaluate_title_open_rate(
             gate_reasons.append(f"{dimension}偏弱")
     if len(normalized) > TITLE_LENGTH_HARD_MAX:
         gate_reasons.append("标题过长")
+    if len(normalized) > TITLE_LENGTH_HIGH_RISK:
+        gate_reasons.append("标题过长且风险高")
     if separator_count > 1:
         gate_reasons.append("分隔符过多")
     if absolute_hits:
         gate_reasons.append("用词过满")
     if question_count > 1:
         gate_reasons.append("问句过强")
+    if hook_shape.get("shape_score", 0) < 2:
+        gate_reasons.append("对象/动作/后果不够完整")
+    if answer_complete_title_penalty > 0:
+        gate_reasons.append("标题说满")
+    if abstract_tail > 0:
+        gate_reasons.append("抽象词过重")
     gate_passed = bool(
         total_score >= TITLE_SCORE_THRESHOLD
         and dimensions["可信度"] >= 6.0
         and dimensions["新鲜度"] >= 5.0
         and dimensions["低门槛理解"] >= 6.0
+        and hook_shape.get("shape_score", 0) >= 2
+        and len(normalized) <= TITLE_LENGTH_HIGH_RISK
     )
     gate_reason = "达到爆款门槛" if gate_passed else "、".join(dict.fromkeys(gate_reasons[:4])) or "标题未达爆款门槛"
     top_dims = sorted(dimensions.items(), key=lambda item: item[1], reverse=True)
@@ -419,6 +455,10 @@ def evaluate_title_open_rate(
         "title_gate_reason": gate_reason,
         "title_template_key": pattern_key,
         "title_repeat_penalty": repeat_penalty,
+        "hook_strength_score": hook_shape.get("shape_score", 0),
+        "answer_complete_title_penalty": answer_complete_title_penalty,
+        "conclusion_density_penalty": conclusion_density_penalty,
+        "abstract_tail_penalty": abstract_tail,
         "score_breakdown": score_breakdown,
         "dimension_scores": dimensions,
         "recent_title_overlap": round(overlap, 3),
@@ -441,6 +481,9 @@ def title_integrity_report(title: str, *, topic: str = "", account_strategy: dic
     if len(fragment_hits) >= 2:
         score -= 4.0
         issues.append("标题同时叠了两层以上熟套路，像模板拼接。")
+    if len(normalized) > TITLE_LENGTH_HIGH_RISK:
+        score -= 3.5
+        issues.append("标题过长且信息塞得太满，已经像摘要。")
     for pattern in BROKEN_CONNECTOR_PATTERNS:
         if re.search(pattern, title):
             score -= 5.0
@@ -467,10 +510,16 @@ def title_integrity_report(title: str, *, topic: str = "", account_strategy: dic
     if len(normalized) > TITLE_LENGTH_HARD_MAX:
         score -= 1.8
         issues.append("标题过长，首屏抓不住重点。")
+    if abstract_tail_penalty(title):
+        score -= 1.5
+        issues.append("标题收在抽象词上，后果不够具体。")
+    if any(re.search(pattern, title) for pattern in ANSWER_COMPLETE_TITLE_PATTERNS):
+        score -= 2.2
+        issues.append("标题把判断和答案说得太满，点击欲会被压掉。")
     if topic and normalized and normalized == _normalize_text(topic) and len(fragment_hits) >= 1:
         score -= 1.5
         issues.append("原始主题本身已经像标题模板，不能直接拿来发。")
-    passed = score >= 6.0 and not any("残句" in item or "硬拼接" in item for item in issues)
+    passed = score >= 6.0 and len(normalized) <= TITLE_LENGTH_HARD_MAX and not any("残句" in item or "硬拼接" in item for item in issues)
     notes = [] if issues else ["标题语义完整，句法顺，读起来不像拼出来的。"]
     return {
         "score": round(max(0.0, min(score, 10.0)), 2),
@@ -560,6 +609,15 @@ def build_title_decision_report(
         if trust_score < 5.0:
             rejection_reason.append("可信度风险偏高")
         rejection_reason.extend(integrity.get("issues") or [])
+        selected_title_risks = []
+        if int(open_rate.get("answer_complete_title_penalty") or 0) > 0:
+            selected_title_risks.append("标题说满")
+        if len(_normalize_text(title)) > 33:
+            selected_title_risks.append("标题过长")
+        if int(open_rate.get("abstract_tail_penalty") or 0) > 0:
+            selected_title_risks.append("抽象词过重")
+        if fragment_hits := [fragment for fragment in HIGH_RISK_TITLE_FRAGMENTS if fragment in title]:
+            selected_title_risks.append("标题撞模板")
 
         normalized_candidates.append(
             {
@@ -571,6 +629,10 @@ def build_title_decision_report(
                 "title_open_rate_score": total_score,
                 "title_score_threshold": threshold,
                 "title_repeat_penalty": open_rate.get("title_repeat_penalty", 0),
+                "hook_strength_score": open_rate.get("hook_strength_score", 0),
+                "answer_complete_title_penalty": open_rate.get("answer_complete_title_penalty", 0),
+                "conclusion_density_penalty": open_rate.get("conclusion_density_penalty", 0),
+                "abstract_tail_penalty": open_rate.get("abstract_tail_penalty", 0),
                 "title_score_breakdown": open_rate.get("score_breakdown") or [],
                 "title_family": open_rate.get("title_family"),
                 "title_formula_components": open_rate.get("title_formula_components") or {},
@@ -597,13 +659,18 @@ def build_title_decision_report(
                 "rejection_reason": rejection_reason[:5],
                 "recent_title_overlap": open_rate.get("recent_title_overlap", 0),
                 "title_integrity": integrity,
+                "selected_title_risks": selected_title_risks,
             }
         )
 
     normalized_candidates.sort(
         key=lambda item: (
             bool(item.get("title_gate_passed")),
-            float(item.get("title_score") or 0) + float(item.get("family_priority_score") or 0) * 4,
+            float(item.get("title_score") or 0)
+            + float(item.get("family_priority_score") or 0) * 4
+            + float(item.get("hook_strength_score") or 0) * 2
+            - float(item.get("answer_complete_title_penalty") or 0) * 3
+            - float(item.get("abstract_tail_penalty") or 0) * 2,
             float((item.get("decision_breakdown") or {}).get("传播性") or 0),
             float((item.get("decision_breakdown") or {}).get("新鲜度") or 0),
             float((item.get("decision_breakdown") or {}).get("信息差") or 0),
@@ -647,6 +714,7 @@ def build_title_decision_report(
         "selected_title": selected_title_value,
         "selected_reason": selected_reason[:5],
         "selected_explainer": selected_explainer,
+        "selected_title_risks": list((selected or {}).get("selected_title_risks") or []),
         "candidates": normalized_candidates,
         "candidate_groups": {
             "强打开型": [item for item in normalized_candidates if item.get("title_bucket") == "强打开型"][:3],
@@ -667,6 +735,8 @@ def markdown_title_decision_report(payload: dict[str, Any]) -> str:
         f"- 决策阈值：{payload.get('threshold') or 0}",
         f"- 标题回炉轮次：{payload.get('title_rewrite_round') or 0}",
     ]
+    if payload.get("selected_title_risks"):
+        lines.append(f"- 最终标题风险：{'、'.join(payload.get('selected_title_risks') or [])}")
     explainer = payload.get("selected_explainer") or {}
     if explainer.get("why_click"):
         lines.extend(["", "## 为什么这个标题会被点开", "", f"- {explainer.get('why_click')}"])

@@ -7,6 +7,17 @@ from typing import Any
 
 import legacy_studio as legacy
 from core.editorial_strategy import ending_pattern_key, heading_pattern_key, opening_pattern_key
+from core.quality_checks import (
+    cost_signal_present,
+    discussion_trigger_present,
+    ending_excerpt_signature,
+    lead_paragraph_count,
+    opening_excerpt_signature,
+    paragraph_overlap_signals,
+    scene_signal_present,
+    title_token_similarity,
+    workspace_batch_key,
+)
 
 
 def _normalize_text(value: str) -> str:
@@ -121,6 +132,7 @@ def build_article_fingerprint(
     layout_plan = layout_plan or {}
     paragraphs = legacy.list_paragraphs(body)
     headings = legacy.extract_headings(body)
+    workspace_value = str(manifest.get("workspace") or "").strip()
     opening_pattern = opening_pattern_key(paragraphs[0]) if paragraphs else "none"
     second_opening = opening_pattern_key(paragraphs[1]) if len(paragraphs) > 1 else "none"
     ending_pattern = ending_pattern_key(paragraphs[-1]) if paragraphs else "none"
@@ -154,11 +166,21 @@ def build_article_fingerprint(
     return {
         "title": title,
         "kind": "article",
+        "batch_key": workspace_batch_key(workspace_value),
         "article_archetype": route_features[0],
         "editorial_style_key": route_features[1],
         "opening_pattern": opening_pattern,
         "second_opening_pattern": second_opening,
         "ending_pattern": ending_pattern,
+        "opening_excerpt_signature": opening_excerpt_signature(body),
+        "ending_excerpt_signature": ending_excerpt_signature(body),
+        "lead_paragraph_count": lead_paragraph_count(body),
+        "title_length": len(re.sub(r"\s+", "", str(title or ""))),
+        "summary_length": len(re.sub(r"\s+", "", str(manifest.get("summary") or ""))),
+        "cost_signal_present": cost_signal_present(body),
+        "scene_signal_present": scene_signal_present("\n".join(paragraphs[:2])),
+        "discussion_trigger_present": discussion_trigger_present(body),
+        "text_overlap_signals": [],
         "heading_patterns": heading_patterns,
         "argument_modes": list(dict.fromkeys(argument_modes))[:6],
         "evidence_modes": list(dict.fromkeys(evidence_modes))[:6],
@@ -168,6 +190,137 @@ def build_article_fingerprint(
         "keywords": sorted(_tokens(title) | _tokens(" ".join(paragraphs[:3])) | _tokens(" ".join(item.get("text") or "" for item in headings[:4]))),
         "route_features": [item for item in route_features if item and item not in {"none", "generic"}],
         "generated_at": legacy.now_iso(),
+    }
+
+
+def load_batch_article_items(current_workspace: Path) -> list[dict[str, Any]]:
+    batch_key = workspace_batch_key(current_workspace)
+    if not batch_key:
+        return []
+    parent = current_workspace.parent
+    if not parent.exists():
+        return []
+    items: list[dict[str, Any]] = []
+    for path in parent.iterdir():
+        if not path.is_dir() or path.resolve() == current_workspace.resolve():
+            continue
+        if workspace_batch_key(path) != batch_key:
+            continue
+        article_path = path / "article.md"
+        if not article_path.exists():
+            continue
+        try:
+            raw = article_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        meta, other_body = legacy.split_frontmatter(raw)
+        other_manifest = {}
+        try:
+            other_manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            other_manifest = {}
+        other_review = {}
+        try:
+            other_review = json.loads((path / "review-report.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            other_review = {}
+        other_layout_plan = {}
+        try:
+            other_layout_plan = json.loads((path / "layout-plan.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            other_layout_plan = {}
+        fingerprint_path = path / "content-fingerprint.json"
+        fingerprint = load_fingerprint(fingerprint_path) if fingerprint_path.exists() else {}
+        if not fingerprint:
+            other_title = (
+                other_manifest.get("selected_title")
+                or meta.get("title")
+                or legacy.extract_title_from_body(other_body)
+                or path.name
+            )
+            fingerprint = build_article_fingerprint(
+                str(other_title),
+                other_body,
+                other_manifest | {"workspace": str(path.resolve())},
+                review=other_review,
+                blueprint=other_manifest.get("viral_blueprint") or {},
+                layout_plan=other_layout_plan,
+            )
+        items.append(
+            {
+                "workspace": str(path.resolve()),
+                "batch_key": batch_key,
+                "title": str(fingerprint.get("title") or meta.get("title") or path.name),
+                "body": other_body,
+                "fingerprint": fingerprint,
+            }
+        )
+    return items
+
+
+def summarize_batch_collisions(
+    current: dict[str, Any],
+    *,
+    current_title: str,
+    current_body: str,
+    batch_items: list[dict[str, Any]],
+    threshold: float = 0.62,
+    title_threshold: float = 0.72,
+) -> dict[str, Any]:
+    similar_items: list[dict[str, Any]] = []
+    max_route_similarity = 0.0
+    max_title_similarity = 0.0
+    overlap_signals: list[dict[str, Any]] = []
+    for item in batch_items:
+        other_fp = dict(item.get("fingerprint") or {})
+        other_title = str(item.get("title") or other_fp.get("title") or "")
+        other_body = str(item.get("body") or "")
+        route_similarity = compare_fingerprints(current, other_fp)
+        title_similarity = title_token_similarity(current_title, other_title)
+        overlap = paragraph_overlap_signals(current_body, other_body)
+        matched_rules: list[str] = []
+        if route_similarity > threshold:
+            matched_rules.append("route_similarity")
+        if title_similarity > title_threshold:
+            matched_rules.append("title_token_similarity")
+        if int(overlap.get("shared_paragraph_count") or 0) >= 2:
+            matched_rules.append("shared_paragraphs")
+        if int(overlap.get("shared_opening_paragraph_count") or 0) >= 1:
+            matched_rules.append("shared_opening")
+        if int(overlap.get("shared_ending_paragraph_count") or 0) >= 1:
+            matched_rules.append("shared_ending")
+        max_route_similarity = max(max_route_similarity, route_similarity)
+        max_title_similarity = max(max_title_similarity, title_similarity)
+        if matched_rules:
+            signal = {
+                "workspace": str(item.get("workspace") or ""),
+                "title": other_title,
+                "route_similarity": round(route_similarity, 3),
+                "title_token_similarity": round(title_similarity, 3),
+                "shared_paragraph_count": int(overlap.get("shared_paragraph_count") or 0),
+                "shared_opening_paragraph_count": int(overlap.get("shared_opening_paragraph_count") or 0),
+                "shared_ending_paragraph_count": int(overlap.get("shared_ending_paragraph_count") or 0),
+                "matched_rules": matched_rules,
+                "shared_paragraph_examples": list(overlap.get("shared_paragraph_examples") or []),
+            }
+            overlap_signals.append(signal)
+            similar_items.append(
+                {
+                    "title": other_title,
+                    "workspace": str(item.get("workspace") or ""),
+                    "score": round(route_similarity, 3),
+                    "title_token_similarity": round(title_similarity, 3),
+                    "matched_rules": matched_rules,
+                }
+            )
+    similar_items.sort(key=lambda value: (len(value.get("matched_rules") or []), value.get("score") or 0), reverse=True)
+    return {
+        "batch_key": str(current.get("batch_key") or ""),
+        "passed": not overlap_signals,
+        "max_route_similarity": round(max_route_similarity, 3),
+        "max_title_token_similarity": round(max_title_similarity, 3),
+        "batch_similar_items": similar_items[:5],
+        "text_overlap_signals": overlap_signals[:5],
     }
 
 

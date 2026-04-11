@@ -19,6 +19,10 @@ MANIFEST_STATUS_DEFAULTS = {
     "verify_status": "not_started",
     "content_mode": "tech-balanced",
     "wechat_header_mode": "drop-title",
+    "metadata_integrity_status": "unknown",
+    "batch_uniqueness_status": "unknown",
+    "state_consistency_status": "unknown",
+    "acceptance_ready_status": "unknown",
 }
 
 ARTIFACT_DEFAULTS = {

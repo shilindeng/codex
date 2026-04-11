@@ -376,6 +376,30 @@ class ViralPipelineTests(unittest.TestCase):
                 return {"total_score": 90, "passed": True, "quality_gates": {"credibility_passed": True}, "score_breakdown": [], "threshold": 80}
 
             def fake_finalize(*args, **kwargs):
+                manifest_obj = args[1]
+                manifest_obj["stage"] = "score"
+                manifest_obj["score_status"] = "done"
+                manifest_obj["score_passed"] = True
+                manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))
+                manifest["stage"] = "score"
+                manifest["score_status"] = "done"
+                manifest["score_passed"] = True
+                (workspace / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+                (workspace / "acceptance-report.json").write_text(
+                    json.dumps(
+                        {
+                            "passed": True,
+                            "gates": {
+                                "acceptance_ready_passed": True,
+                                "publish_ready": True,
+                            },
+                            "failed_gates": [],
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
                 return {}
 
             def fake_render(*args, **kwargs):

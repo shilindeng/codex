@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from core.quality_checks import lead_paragraph_count
+
 
 SEVERITY_ORDER = {"strong": 3, "medium": 2, "weak": 1}
 OPENING_SCENE_MARKERS = (
@@ -78,6 +80,16 @@ PROTOCOL_CLOSE_PATTERNS = (
     r"照着做就行",
     r"按这个顺序做",
     r"总结成一个清单",
+)
+DIDACTIC_SOFTENER_PATTERNS = (
+    "也别",
+    "当然这不代表",
+    "反过来说",
+)
+JUDGMENT_FIRST_OPENING_PATTERNS = (
+    r"很多人[^。！？!?；;\n]{0,40}(但这次|但真正)",
+    r"如果你把[^。！？!?；;\n]{0,40}叠在一起",
+    r"更准确地说",
 )
 
 
@@ -167,6 +179,26 @@ def _detect_opening_triad(paragraphs: list[str], findings: list[dict[str, Any]])
             source_skill="dbs-ai-check",
             fingerprint_id="16",
         )
+
+
+def _detect_judgment_first_opening(paragraphs: list[str], findings: list[dict[str, Any]]) -> None:
+    opening = "\n".join(paragraphs[:2])
+    if not opening:
+        return
+    hits = [pattern for pattern in JUDGMENT_FIRST_OPENING_PATTERNS if re.search(pattern, opening)]
+    if not hits:
+        return
+    _append(
+        findings,
+        kind="judgment_first_opening",
+        label="开头先下判断再补解释",
+        severity="strong",
+        count=len(hits),
+        evidence="开头先替读者归纳，再立刻翻成作者判断，读感像评论提要。",
+        rewrite_hint="开头先给现场或动作，再给判断，不要一上来就把观点讲完。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="jf-1",
+    )
 
 
 def _detect_uniform_rhythm(paragraphs: list[str], text: str, findings: list[dict[str, Any]]) -> None:
@@ -259,6 +291,83 @@ def _detect_protocol_close(paragraphs: list[str], findings: list[dict[str, Any]]
         rewrite_hint="分析稿不要收成协议；如果确实要给动作，也只留一个最先能做的动作。",
         source_skill="dbs-ai-check",
         fingerprint_id="12",
+    )
+
+
+def _detect_overused_not_but(text: str, findings: list[dict[str, Any]]) -> None:
+    hits = len(re.findall(r"不是[^。！？!?；;\n]{1,20}而是[^。！？!?；;\n]{1,20}", text or ""))
+    if hits <= 4:
+        return
+    _append(
+        findings,
+        kind="overused_not_but",
+        label="不是X而是Y链条过多",
+        severity="strong",
+        count=hits,
+        evidence=f"全文出现 {hits} 次“不是X，而是Y”，判断骨架明显重复。",
+        rewrite_hint="把一部分“不是…而是…”换成案例、场景或对比，不要全靠翻转句推进。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="ob-1",
+    )
+
+
+def _detect_overused_this_is_more_like(text: str, findings: list[dict[str, Any]]) -> None:
+    hits = len(re.findall(r"这更像|更像是", text or ""))
+    if hits <= 2:
+        return
+    _append(
+        findings,
+        kind="overused_this_is_more_like",
+        label="“这更像”式判断过多",
+        severity="medium",
+        count=hits,
+        evidence=f"全文出现 {hits} 次“这更像/更像是”，读感像同一判断模板反复套用。",
+        rewrite_hint="减少“这更像”类判断句，改成具体场景、对比或直接陈述。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="tm-1",
+    )
+
+
+def _detect_didactic_softener(text: str, findings: list[dict[str, Any]]) -> None:
+    hits = sum(text.count(pattern) for pattern in DIDACTIC_SOFTENER_PATTERNS)
+    if hits <= 2:
+        return
+    _append(
+        findings,
+        kind="didactic_softener",
+        label="说教缓冲句过多",
+        severity="medium",
+        count=hits,
+        evidence="文章反复用缓冲句给判断垫软垫，像在带读者上课。",
+        rewrite_hint="删掉一部分缓冲句，直接说结论、边界或代价。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="ds-1",
+    )
+
+
+def _detect_two_sentence_protocol_close(paragraphs: list[str], findings: list[dict[str, Any]]) -> None:
+    if len(paragraphs) < 2:
+        return
+    ending = paragraphs[-2:]
+    matched = 0
+    for paragraph in ending:
+        value = _normalize_text(paragraph)
+        if not value:
+            continue
+        if any(re.search(pattern, value) for pattern in PROTOCOL_CLOSE_PATTERNS) or any(marker in value for marker in GOLDEN_CLOSE_MARKERS):
+            matched += 1
+    if matched < 2:
+        return
+    _append(
+        findings,
+        kind="two_sentence_protocol_close",
+        label="结尾连续两段协议化收口",
+        severity="strong",
+        count=matched,
+        evidence="结尾连续两段都在做总括或指令式收束，像协议，不像自然结束。",
+        rewrite_hint="结尾只保留一个收口动作，另一段改成具体判断、风险或余味。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="pc-2",
     )
 
 
@@ -517,6 +626,22 @@ def _detect_flat_emotion_curve(paragraphs: list[str], text: str, findings: list[
     )
 
 
+def _detect_pre_h2_overlong(text: str, findings: list[dict[str, Any]]) -> None:
+    if lead_paragraph_count(text) <= 4:
+        return
+    _append(
+        findings,
+        kind="pre_h2_overlong",
+        label="第一个小标题前铺垫过长",
+        severity="medium",
+        count=lead_paragraph_count(text),
+        evidence="第一个二级标题前的段落太多，首屏像背景说明，不像切题开场。",
+        rewrite_hint="把首屏压到 4 段内，尽早给主判断和场景。",
+        source_skill="dbs-hook",
+        fingerprint_id="ph2-1",
+    )
+
+
 def _detect_precise_emotion(text: str, findings: list[dict[str, Any]]) -> None:
     if not re.search(r"\d+(?:\.\d+)?秒", text):
         return
@@ -584,18 +709,24 @@ def detect_ai_fingerprints(text: str, *, genre: str = "article") -> list[dict[st
     findings: list[dict[str, Any]] = []
     _detect_dead_opening_self_intro(paragraphs, findings)
     _detect_opening_triad(paragraphs, findings)
+    _detect_judgment_first_opening(paragraphs, findings)
     _detect_uniform_rhythm(paragraphs, normalized, findings)
     _detect_flat_emotion_curve(paragraphs, normalized, findings)
+    _detect_pre_h2_overlong(text, findings)
     _detect_reader_strawman(normalized, findings)
     _detect_concession_template(normalized, findings)
     _detect_naming_ritual(normalized, findings)
     _detect_translationese(normalized, findings)
     _detect_golden_close_density(paragraphs, findings)
+    _detect_overused_not_but(normalized, findings)
+    _detect_overused_this_is_more_like(normalized, findings)
+    _detect_didactic_softener(normalized, findings)
     _detect_connective_overload(normalized, findings)
     _detect_certainty_overload(normalized, findings)
     _detect_synonym_stacking(normalized, findings)
     _detect_pseudo_depth(normalized, findings)
     _detect_protocol_close(paragraphs, findings)
+    _detect_two_sentence_protocol_close(paragraphs, findings)
     _detect_body_feeling_answer(normalized, findings)
     _detect_blessing_close(paragraphs, findings)
     _detect_precise_emotion(normalized, findings)
