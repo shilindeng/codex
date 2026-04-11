@@ -30,6 +30,22 @@ class AIFingerprintIntegrationTests(unittest.TestCase):
         self.assertIn("opening_triad", finding_types)
         self.assertIn("blessing_close", finding_types)
 
+    def test_detect_ai_fingerprints_catches_rhythm_protocol_and_synonym_stacking(self):
+        body = "\n\n".join(
+            [
+                "这就是最简单的判断。",
+                "所以，核心、本质、关键、真正。",
+                "总之，底层、逻辑、机制、路径。",
+                "最后给你一个可执行清单。",
+            ]
+        )
+        findings = detect_ai_fingerprints(body)
+        finding_types = {item.get("type") for item in findings}
+        self.assertIn("protocol_close", finding_types)
+        self.assertIn("synonym_stacking", finding_types)
+        self.assertIn("golden_close_density", finding_types)
+        self.assertIn("uniform_rhythm", finding_types)
+
     def test_generation_preflight_raises_dbskill_style_rewrite_focus(self):
         manifest = {"audience": "大众读者", "direction": "", "source_urls": []}
         body = "\n\n".join(
@@ -61,6 +77,19 @@ class AIFingerprintIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(int(report["ai_fingerprint_summary"].get("strong_count") or 0), 1)
         self.assertTrue(any(item.get("type") == "reader_strawman" for item in report.get("ai_smell_findings") or []))
         self.assertTrue(any("AI 指纹" in item for item in report.get("humanness_findings") or []))
+
+    def test_score_report_keeps_legacy_prompt_leak_in_fingerprint_summary(self):
+        manifest = {"topic": "测试主题", "audience": "大众读者", "direction": "", "source_urls": []}
+        body = "\n\n".join(
+            [
+                "这类题目最怕的是大家只看表面。",
+                "正文由宿主 agent 负责。",
+                "不要把本来该说清的东西写成模板。",
+            ]
+        )
+        report = build_score_report("测试标题", body, manifest, threshold=70)
+        summary_labels = report.get("ai_fingerprint_summary", {}).get("top_labels") or []
+        self.assertTrue(any(label == "prompt_leak" or "prompt" in label for label in summary_labels))
 
 
 if __name__ == "__main__":

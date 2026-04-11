@@ -1,6 +1,6 @@
 ---
 name: wechat-article-studio
-description: 高质量微信公众号图文创作与草稿发布技能。用于热点选题、标题筛选、作者风格学习、正文写作、编辑评审、评分回炉、配图规划、公众号排版、草稿箱发布与验收。Use when the user asks to create, improve, score, de-AI, imitate a style for, format, verify, or publish a WeChat Official Account article / 公众号文章 / 公众号图文，或当任务涉及选题发现、历史去重、风格作战卡、人工改稿学习、Markdown 转公众号 HTML、封面图/信息图/插图、草稿箱发布与发布验收。
+description: 高质量微信公众号图文创作与草稿发布技能。用于公众号选题、标题触发器、开头钩子、AI 指纹诊断、去模板化改写、正文评审、评分回炉、配图规划、公众号排版、草稿箱发布与验收。Use when the user asks to create, improve, score, de-AI, detect AI fingerprints, optimize hooks/titles, imitate a style for, format, verify, or publish a WeChat Official Account article / 公众号文章 / 公众号图文，或当任务涉及“AI味重”“开头怎么写”“标题怎么起”“像模板”“去AI味”、选题发现、历史去重、风格作战卡、人工改稿学习、Markdown 转公众号 HTML、封面图/信息图/插图、草稿箱发布与发布验收。
 ---
 
 # WeChat Article Studio
@@ -123,6 +123,7 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - 产物契约：读 [references/artifact-contract.md](references/artifact-contract.md)
 - 评分标准：读 [references/scoring-rubric.md](references/scoring-rubric.md)
 - `dbskill` 式 AI 指纹排查：读 [references/ai-fingerprint-playbook.md](references/ai-fingerprint-playbook.md)
+- AI 指纹样本库：读 [references/ai-fingerprint-samples.md](references/ai-fingerprint-samples.md)
 - 标题、开头和传播触发器：读 [references/viral-trigger-library.md](references/viral-trigger-library.md)
 - 来源归因与轻引用：读 [references/attribution.md](references/attribution.md)
 - 发布前 Markdown 整理与公众号成品链路：读 [references/publication-pipeline.md](references/publication-pipeline.md)

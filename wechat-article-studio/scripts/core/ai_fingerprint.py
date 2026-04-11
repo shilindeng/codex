@@ -45,6 +45,40 @@ OPENING_PROMISE_PATTERNS = (
     r"方法",
     r"只要记住",
 )
+GOLDEN_CLOSE_MARKERS = (
+    "这就是",
+    "所以",
+    "总之",
+    "最后",
+    "一句话",
+    "真正",
+    "本质",
+    "归根结底",
+    "说白了",
+)
+SYNONYM_STACK_MARKERS = (
+    "核心",
+    "本质",
+    "关键",
+    "真正",
+    "底层",
+    "逻辑",
+    "机制",
+    "路径",
+    "维度",
+    "层面",
+    "框架",
+    "方向",
+)
+PROTOCOL_CLOSE_PATTERNS = (
+    r"如果你只记住一句话",
+    r"最后给你一个可执行清单",
+    r"你只需要记住",
+    r"记住这一点就行",
+    r"照着做就行",
+    r"按这个顺序做",
+    r"总结成一个清单",
+)
 
 
 def _normalize_text(value: str) -> str:
@@ -133,6 +167,99 @@ def _detect_opening_triad(paragraphs: list[str], findings: list[dict[str, Any]])
             source_skill="dbs-ai-check",
             fingerprint_id="16",
         )
+
+
+def _detect_uniform_rhythm(paragraphs: list[str], text: str, findings: list[dict[str, Any]]) -> None:
+    if len(paragraphs) < 4:
+        return
+    sentences = [item for item in re.split(r"[。！？!?；;\n]+", text or "") if _normalize_text(item)]
+    sentence_lengths = [len(_normalize_text(item)) for item in sentences if len(_normalize_text(item)) > 0]
+    paragraph_lengths = [len(_normalize_text(item)) for item in paragraphs if len(_normalize_text(item)) > 0]
+    if len(sentence_lengths) < 4 or len(paragraph_lengths) < 4:
+        return
+    sentence_range = max(sentence_lengths) - min(sentence_lengths)
+    paragraph_range = max(paragraph_lengths) - min(paragraph_lengths)
+    contrast_hits = sum(text.count(marker) for marker in ("但是", "不过", "然而", "可是", "反而"))
+    if sentence_range > 12 or paragraph_range > 30 or contrast_hits >= 3:
+        return
+    _append(
+        findings,
+        kind="uniform_rhythm",
+        label="句式和段落节奏过于均匀",
+        severity="medium",
+        count=max(len(sentences), len(paragraphs)),
+        evidence="句长和段落长度都太齐，像排好的卡片，情绪曲线也很平。",
+        rewrite_hint="拉开长短句和段落长度，保留一两处明显起伏，不要每段都一个节拍。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="14",
+    )
+
+
+def _detect_golden_close_density(paragraphs: list[str], findings: list[dict[str, Any]]) -> None:
+    if len(paragraphs) < 4:
+        return
+    hits = 0
+    evidence_samples: list[str] = []
+    for paragraph in paragraphs:
+        value = _normalize_text(paragraph)
+        if not value or len(value) > 90:
+            continue
+        if not any(marker in value for marker in GOLDEN_CLOSE_MARKERS):
+            continue
+        hits += 1
+        if len(evidence_samples) < 3:
+            evidence_samples.append(_snippet(value))
+    if hits < 3:
+        return
+    _append(
+        findings,
+        kind="golden_close_density",
+        label="每段都在收束成金句",
+        severity="medium",
+        count=hits,
+        evidence=" / ".join(evidence_samples) or "多个段落都在试图收尾或升华。",
+        rewrite_hint="只保留一两处真正收束的句子，其余段落正常推进，不要每段都想当结论。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="13",
+    )
+
+
+def _detect_synonym_stacking(text: str, findings: list[dict[str, Any]]) -> None:
+    counts = {marker: text.count(marker) for marker in SYNONYM_STACK_MARKERS if text.count(marker)}
+    total = sum(counts.values())
+    if total < 8 or len(counts) < 4:
+        return
+    _append(
+        findings,
+        kind="synonym_stacking",
+        label="同义词刻意替换",
+        severity="medium",
+        count=total,
+        evidence=f"同一主题词在短文里反复换法：{' / '.join(list(counts.keys())[:5])}",
+        rewrite_hint="如果这个词最准确，就直接重复用；重复不是错，硬换词才像在绕。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="18",
+    )
+
+
+def _detect_protocol_close(paragraphs: list[str], findings: list[dict[str, Any]]) -> None:
+    if not paragraphs:
+        return
+    closing = "\n".join(paragraphs[-2:])
+    hits = [pattern for pattern in PROTOCOL_CLOSE_PATTERNS if re.search(pattern, closing)]
+    if not hits:
+        return
+    _append(
+        findings,
+        kind="protocol_close",
+        label="把结论包装成协议",
+        severity="strong",
+        count=len(hits),
+        evidence=f"结尾直接变成清单/协议口吻：{' / '.join(hits[:3])}",
+        rewrite_hint="分析稿不要收成协议；如果确实要给动作，也只留一个最先能做的动作。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="12",
+    )
 
 
 def _detect_reader_strawman(text: str, findings: list[dict[str, Any]]) -> None:
@@ -357,6 +484,39 @@ def _detect_blessing_close(paragraphs: list[str], findings: list[dict[str, Any]]
     )
 
 
+def _detect_flat_emotion_curve(paragraphs: list[str], text: str, findings: list[dict[str, Any]]) -> None:
+    if len(paragraphs) < 4:
+        return
+    sentences = [item for item in re.split(r"[。！？!?；;\n]+", text or "") if _normalize_text(item)]
+    if len(sentences) < 5:
+        return
+    sentence_lengths = [len(_normalize_text(item)) for item in sentences if len(_normalize_text(item)) > 0]
+    paragraph_lengths = [len(_normalize_text(item)) for item in paragraphs if len(_normalize_text(item)) > 0]
+    if not sentence_lengths or not paragraph_lengths:
+        return
+    sentence_range = max(sentence_lengths) - min(sentence_lengths)
+    paragraph_range = max(paragraph_lengths) - min(paragraph_lengths)
+    contrast_hits = sum(text.count(marker) for marker in ("但是", "不过", "然而", "可是", "反而", "别", "但"))
+    question_hits = text.count("？") + text.count("?")
+    exclamation_hits = text.count("！") + text.count("!")
+    counterpoint_hits = sum(text.count(marker) for marker in ("不是", "而是", "问题在", "边界", "误判", "反方"))
+    if sentence_range > 12 or paragraph_range > 30:
+        return
+    if contrast_hits >= 3 or question_hits >= 2 or exclamation_hits >= 2 or counterpoint_hits >= 2:
+        return
+    _append(
+        findings,
+        kind="flat_emotion_curve",
+        label="情绪曲线太光滑",
+        severity="medium",
+        count=len(paragraphs),
+        evidence="全文几乎没有明显起伏、转折或犹豫感，读起来像平铺直叙的说明稿。",
+        rewrite_hint="留一处反差、犹豫或转折，让读者感到情绪和判断在移动。",
+        source_skill="dbs-ai-check",
+        fingerprint_id="6",
+    )
+
+
 def _detect_precise_emotion(text: str, findings: list[dict[str, Any]]) -> None:
     if not re.search(r"\d+(?:\.\d+)?秒", text):
         return
@@ -424,13 +584,18 @@ def detect_ai_fingerprints(text: str, *, genre: str = "article") -> list[dict[st
     findings: list[dict[str, Any]] = []
     _detect_dead_opening_self_intro(paragraphs, findings)
     _detect_opening_triad(paragraphs, findings)
+    _detect_uniform_rhythm(paragraphs, normalized, findings)
+    _detect_flat_emotion_curve(paragraphs, normalized, findings)
     _detect_reader_strawman(normalized, findings)
     _detect_concession_template(normalized, findings)
     _detect_naming_ritual(normalized, findings)
     _detect_translationese(normalized, findings)
+    _detect_golden_close_density(paragraphs, findings)
     _detect_connective_overload(normalized, findings)
     _detect_certainty_overload(normalized, findings)
+    _detect_synonym_stacking(normalized, findings)
     _detect_pseudo_depth(normalized, findings)
+    _detect_protocol_close(paragraphs, findings)
     _detect_body_feeling_answer(normalized, findings)
     _detect_blessing_close(paragraphs, findings)
     _detect_precise_emotion(normalized, findings)
@@ -447,11 +612,7 @@ def detect_ai_fingerprints(text: str, *, genre: str = "article") -> list[dict[st
 
 
 def summarize_ai_fingerprints(findings: list[dict[str, Any]]) -> dict[str, Any]:
-    relevant = [
-        item
-        for item in findings
-        if item.get("fingerprint_id") or item.get("rewrite_hint") or item.get("source_skill")
-    ]
+    relevant = list(findings)
     strong = [item for item in relevant if str(item.get("severity") or "") == "strong"]
     medium = [item for item in relevant if str(item.get("severity") or "") == "medium"]
     weak = [item for item in relevant if str(item.get("severity") or "") == "weak"]

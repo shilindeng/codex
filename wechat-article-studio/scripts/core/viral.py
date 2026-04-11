@@ -315,6 +315,7 @@ SEVERE_AI_SMELL_TYPES = {
     "prompt_leak",
     "reader_strawman",
     "opening_triad",
+    "protocol_close",
     "dead_opening_self_intro",
     "body_feeling_answer",
     "blessing_close",
