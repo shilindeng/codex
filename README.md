@@ -1,6 +1,11 @@
-# wechat-article-studio
+# my-skill
 
-一个面向 Codex / ClaudeCode / OpenClaw 等 agent 场景的微信公众号图文工作流 skill。
+一个收纳个人 Codex skill 项目的仓库，当前包含公众号图文工作流 skill 和独立的 Gemini Web 生图 skill。
+
+## 当前项目
+
+- `wechat-article-studio`：微信公众号图文工作流 skill
+- `gemini-web-image`：独立的 Gemini Web 生图与登录态排查 skill
 
 ## 当前版本能力
 
@@ -9,6 +14,7 @@
 - 微信公众号封面图、信息图、正文插图规划与生成
 - Markdown 汇总与公众号 HTML 渲染
 - 微信草稿箱发布与回读验收
+- Gemini Web 提示词生图、参考图生图、登录态刷新、会话查看
 - 标准工作目录产物，便于跨平台接入
 
 ## 目录结构
@@ -21,6 +27,11 @@
 - `wechat-article-studio/scripts/providers/`：文本与图片 provider 抽象
 - `wechat-article-studio/scripts/publishers/`：微信发布器
 - `wechat-article-studio/scripts/adapters/`：Codex / ClaudeCode / OpenClaw 接入约定
+- `gemini-web-image/SKILL.md`：独立生图 skill 主说明
+- `gemini-web-image/references/`：命令和首次使用说明
+- `gemini-web-image/scripts/gemini_web_image.py`：统一 CLI 入口
+- `gemini-web-image/scripts/core/`：登录态、cookie、vendor、环境检查
+- `gemini-web-image/scripts/_vendor/`：Gemini Web 底层脚本
 
 ## 常用命令
 
@@ -31,6 +42,9 @@ python wechat-article-studio/scripts/studio.py hosted-run --workspace runs/demo 
 python wechat-article-studio/scripts/studio.py run --workspace runs/demo --topic "AI 时代的个人品牌写作" --to render
 python wechat-article-studio/scripts/studio.py publish --workspace runs/demo --confirmed-publish
 python wechat-article-studio/scripts/studio.py verify-draft --workspace runs/demo
+python gemini-web-image/scripts/gemini_web_image.py doctor
+python gemini-web-image/scripts/gemini_web_image.py login --json
+python gemini-web-image/scripts/gemini_web_image.py generate --prompt "A minimalist poster of a paper crane" --dry-run --workspace runs/gemini-demo --json
 ```
 
 ## 默认接入方式

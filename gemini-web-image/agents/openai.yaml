@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gemini Web 生图"
+  short_description: "Gemini Web 提示词生图、参考图生图与登录态排查"
+  default_prompt: "Use $gemini-web-image to generate images with Gemini Web from a text prompt or reference images."
