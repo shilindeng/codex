@@ -115,11 +115,25 @@ def placeholder_article(title: str, outline: dict[str, Any], audience: str) -> s
         [
             "## 结尾",
             "",
-            "真正有传播力的公众号文章，结尾不会只剩一个清单，它通常会把全文判断收束到一句读者愿意带走的话。",
+            "真正有传播力的公众号文章，结尾不会只剩一个清单，它通常会把全文判断收束到一句读者愿意带走的话，或者一张可以反复拿出来用的判断卡。",
             "",
-            "如果这是方法文，可以给一个真的能开始的动作；如果这是分析稿，更适合留下一个值得反复想的判断。",
+            "把这条留着：下次再遇到类似问题时，先对照这篇文章里最核心的判断，再决定要不要继续往下做。",
+            "",
+            "如果这是方法文，可以给一个真的能开始的动作；如果这是分析稿，更适合留下一个值得反复想、愿意保存的判断。",
         ]
     )
+    takeaway_scaffold = normalized_outline.get("takeaway_scaffold") or {}
+    if takeaway_scaffold:
+        lines.extend(
+            [
+                "",
+                f"## {takeaway_scaffold.get('heading') or '最后带走这张卡'}",
+                "",
+                str(takeaway_scaffold.get("core_line") or "").strip(),
+                "",
+                str(takeaway_scaffold.get("save_trigger_line") or "").strip(),
+            ]
+        )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -297,12 +311,12 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "你是资深微信公众号总编。只输出 JSON。"
                     "字段必须包含 title, angle, sections, viral_blueprint, editorial_blueprint。"
                     "sections 每项包含 heading, goal, evidence_need。"
-                    "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns, must_have_elements, heading_variation_rule, paragraph_variation_rule, generation_guardrails, preflight_checklist。"
+                    "同时尽量补充 article_archetype, opening_mode, ending_mode, voice_guardrails, avoid_patterns, must_have_elements, heading_variation_rule, paragraph_variation_rule, generation_guardrails, preflight_checklist, hook_strategy, insight_strategy, takeaway_strategy。"
                     "editorial_blueprint 必须包含 style_key, style_label, summary, title_strategy, opening_strategy, body_strategy, heading_strategy, evidence_strategy, ending_strategy, paragraph_rhythm, language_texture, forbidden_moves, preferred_devices。"
                     "viral_blueprint 必须包含 core_viewpoint, secondary_viewpoints, persuasion_strategies, emotion_triggers, "
                     "target_quotes, emotion_curve, emotion_layers, argument_modes, perspective_shifts, style_traits, pain_points, emotion_value_goals, "
                     "like_triggers, comment_triggers, share_triggers, social_currency_points, identity_labels, controversy_anchors, interaction_prompts, "
-                    "interaction_formula, peak_moment_design, ending_interaction_design。"
+                    "interaction_formula, peak_moment_design, ending_interaction_design, hook_strategy, insight_strategy, takeaway_strategy。"
                     "不要把所有文章都规划成“一句话结论 + 三段方法 + 执行清单”。要根据题材判断是分析评论、教程指南、案例拆解还是叙事观察。"
                     "如果输入已经给了 editorial_blueprint，必须沿用其中的 style_key、style_label 和核心策略，只能补齐，不能改回你最熟悉的评论模板。"
                     "规划时显式思考：点赞靠什么、评论靠什么、转发靠什么，以及中段的峰值时刻和结尾的互动收束如何设计。"
@@ -313,9 +327,11 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果输入包含 writing_persona，要让大纲的开头方式、证据摆法和收束方式服从它，不要只认你最熟悉的篇型模板。"
                     "如果输入包含 fingerprint_collision_notes，必须主动换开头路数、证据组织、互动目标或结尾收束，不能只换词。"
                     "大纲必须主动分配深度：至少有一个“现场/案例/具体瞬间”章节，一个“误判/反方/边界”章节，一个“最后判断/收束”章节。"
+                    "大纲必须同时把三层结构写清楚：hook 放哪里，认知增量放哪里，takeaway 放哪里。"
+                    "如果输入里已经有 takeaway_strategy，必须额外给出 takeaway_scaffold，至少包含 heading、primary_shape、core_line、save_trigger_line。"
                     "大纲还必须提前分配素材：至少明确哪一节放数据或案例，哪一节放表格，哪一节放引用，哪一节做类比，哪一节做对比分析。"
                     "opening_mode 必须明确选择一路，不要默认同一种开头。优先在：人物/场景切口、反常识冲突切口、代价先行切口、具体事件倒挂切口 中择一。"
-                    "ending_mode 也必须明确收束路数。评论稿优先：可转述判断、站队式问题、风险提醒；教程稿才优先动作建议。"
+                    "ending_mode 也必须明确收束路数。所有稿子都必须有 takeaway；评论稿优先：可转述判断 + 检查框架，教程稿才优先动作建议。"
                     "不要让所有小标题都长得像同一类问句、编号句或判断句。"
                 ),
             },
@@ -349,18 +365,19 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果写前增强里出现 table_targets、analogy_targets、comparison_targets、citation_targets，必须把它们真正写进正文，不要只留在计划里。"
                     "如果输入带有 example_snippets/exemplar_snippets，只把它们当语感示例，不能复写原句。"
                     "如果输入带有 layout_plan，正文必须给这些版式模块留出自然材料，不要写到最后只剩空洞判断。"
+                    "如果输入带有 takeaway_scaffold，结尾必须优先沿着它去写，不要换成你更熟悉的空泛总结或提问。"
                     "输入里的 must_have_elements、generation_guardrails、preflight_checklist、heading_variation_rule、paragraph_variation_rule 都是生成阶段硬约束。输出前先自查，再给最终正文。"
                     "牢记：爆款潜力建立在阅读推进之上。先把开头钩住、判断讲透、证据托住，再自然形成可传播表达。"
                     "优先服务输入中的 primary_interaction_goal，但不要把点赞、评论、转发写成固定三件套。"
                     "写作要求："
                     "1. 允许用场景、新闻、反差、细节、人物、问题等不同方式开头，不要默认使用“先说结论”“如果你只想记住一句话”“这篇文章会”。"
-                    "2. 结尾不默认给 checklist；只有当题材明显是教程/方法文时，才给动作。分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束。"
+                    "2. 所有稿子都必须有 takeaway。教程稿可以给动作清单；评论稿、案例稿、叙事稿也必须在最后 15%~20% 正文里落下一张可收藏、可复用的判断卡、检查框架或迁移原则。"
                     "3. 不要硬凑固定配方；不要把每一节都写成先下判断再解释；要有节奏变化、具体细节和真实编辑感。"
                     "4. 段落短但不能碎，句式要有长短变化；禁用首先/其次/最后/综上所述等模板连接词。"
                     "5. 多用具体场景、案例、对比、引用和事实支撑，不要空喊观点。"
                     "6. 不要自我解释写作结构，不要出现“接下来我会”“下面我们来看”。"
                     "7. 中段要有一个真正的峰值判断或关键对比，让读者自然停下来，而不是靠硬抛问题。"
-                    "8. 结尾优先收束判断和余味，不要默认抛“如果是你”“欢迎留言”这类互动句。"
+                    "8. 结尾不能只收束判断和余味，必须额外交付一个可带走内容；不要默认抛“如果是你”“欢迎留言”这类互动句。"
                     "9. 文章可以自然形成谈资或可转述表达，但不要硬塞身份标签、站队点和互动口号。"
                     "10. 必须遵守引用策略：正文不要裸贴 URL，也不要写 [1][2] 这种引用标记；把来源自然融进句子里。"
                     "11. 必须避开输入 recent_phrase_blacklist 里的高频套话和结构。"
@@ -379,6 +396,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                      "24. 正文必须写清至少 1 段现实代价：谁在付、付在哪里、会多出什么后果。"
                      "25. 正文必须留出至少 1 个自然的讨论入口或分歧点，但不要把它写成最后一行的硬互动。"
                      "26. 固定反转句法如‘不是A，而是B’整篇最多出现 1 次，标题和结尾不能重复同一类骨架。"
+                     "27. 结尾必须至少满足 3 件事：给出可带走内容、让读者知道为什么值得保存、留下一句促使保存/转发的表达。"
                  ),
              },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -416,6 +434,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "还要重点判断：有没有具体场景/动作/瞬间，有没有事实或案例托底，有没有反方或适用边界，段落是否过碎像提纲，多个段落是否反复同一种起手。"
                     "还要明确判断：有没有数据表格、有没有至少 2 处自然来源化表达、有没有类比分析、有没有对比分析；如果没有，要直接指出。"
                     "同时判断：哪里会让人继续读，哪里像在完成任务，哪里虽然有爆点但读起来发硬。"
+                    "还要输出 three_layer_diagnostics，对 hook、认知增量、takeaway 三层分别判断是否成立、落在何处、缺在哪里。"
                     "editorial_review 必须包含 reading_desire, professional_tone, novelty_of_viewpoint, opening_hook_strength, middle_flow_strength, evidence_support_strength, template_risk, citation_restraint, ending_naturalness, interaction_naturalness, human_judgment, summary。"
                 ),
             },
@@ -460,6 +479,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "如果写前增强里要求了表格、引用、类比或对比分析，这些材料必须真正落进正文。"
                     "如果输入给了 material_actions 或 material_signals，优先逐条补齐缺的素材，不要只补情绪句和金句。"
                     "如果输入给了 layout_plan，改稿时要顺手补足对应版式模块需要的材料。"
+                    "如果输入给了 takeaway_scaffold，改稿时优先按那张脚手架把文末写实，先保住可保存、可复用、可转发。"
                     "禁止默认补“先说结论”“最后给你一个可执行清单”“如果你只想记住一句话”。"
                     "如果原稿更适合做分析稿或评论稿，就保留判断与余味；如果原稿明显是教程，再考虑动作化结尾。"
                     "改稿优先级是：先补角度，再补案例或实际支撑，再补场景细节，再补反向看法或使用前提，再处理结构同质化，最后才清理模板连接词。"
@@ -467,7 +487,7 @@ class OpenAICompatibleTextProvider(TextProvider):
                     "1. 第一优先级是标题、首屏、中段推进。"
                     "2. 第二优先级是去模板腔、压长句、打散同质化结构。"
                     "3. 只有前两者站住了，才允许补自然传播点或可转述判断。"
-                    "4. 结尾必须先收束，不要靠“如果是你/欢迎留言”硬抬互动。"
+                    "4. 结尾必须先收束，再补一个可保存、可复用的 takeaway，不要靠“如果是你/欢迎留言”硬抬互动。"
                     "5. 必须去掉正文裸 URL，也不要补 [1][2] 或文末参考资料尾卡。"
                     "6. 必须避开输入 recent_phrase_blacklist 中的开头、结尾和桥接套话。"
                     "7. 如果 recent_corpus_summary 显示标题、开头、结尾或小标题模式撞上近期高频套路，必须顺手换骨架。"
@@ -480,7 +500,8 @@ class OpenAICompatibleTextProvider(TextProvider):
                      "14. 如果正文还没有数据表格、引用、类比分析、对比分析，就优先补这些；不要只会补情绪句和金句。"
                      "15. 如果首屏超过 4 段，优先压缩首屏，把主判断和具体场景前移。"
                      "16. 如果正文没有现实代价，就优先补一段“谁在付、付在哪里、会多出什么后果”。"
-                     "17. 如果正文没有讨论入口，就在中段补一个自然分歧点，不要在最后一行硬加提问。"
+                    "17. 如果正文没有讨论入口，就在中段补一个自然分歧点，不要在最后一行硬加提问。"
+                    "18. 如果正文没有 takeaway，就优先补一张判断卡、检查框架、模板、原则或一句可复用判断；所有稿子都要有。"
                  ),
              },
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},

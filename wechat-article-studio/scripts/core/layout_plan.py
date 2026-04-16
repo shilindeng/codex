@@ -14,7 +14,7 @@ ARCHETYPE_LAYOUT_MAP: dict[str, dict[str, Any]] = {
     "commentary": {
         "recommended_style": "magazine",
         "hero_module": "hero-judgment",
-        "closing_module": "summary-close",
+        "closing_module": "takeaway-card",
         "module_density": "balanced",
         "spacing_profile": "editorial-air",
     },
@@ -28,14 +28,14 @@ ARCHETYPE_LAYOUT_MAP: dict[str, dict[str, Any]] = {
     "case-study": {
         "recommended_style": "business",
         "hero_module": "hero-scene",
-        "closing_module": "migration-close",
+        "closing_module": "takeaway-card",
         "module_density": "balanced",
         "spacing_profile": "case-rhythm",
     },
     "narrative": {
         "recommended_style": "warm-journal",
         "hero_module": "hero-scene",
-        "closing_module": "soft-close",
+        "closing_module": "takeaway-card",
         "module_density": "airy",
         "spacing_profile": "story-breathing",
     },
@@ -63,7 +63,7 @@ def _heading_role(index: int, total: int, module_type: str) -> str:
         return "section-break"
     if total >= 4 and index == total - 1:
         return "section-break"
-    if module_type in {"turning-point-card", "summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
+    if module_type in {"turning-point-card", "summary-close", "action-close", "migration-close", "soft-close", "decision-close", "takeaway-card"}:
         return "section-break"
     return "section-label"
 
@@ -72,7 +72,7 @@ def _commentary_module(index: int, total: int, corpus: str) -> str:
     if index == 0:
         return "lead-note"
     if index == total - 1:
-        return "summary-close"
+        return "takeaway-card"
     if any(word in corpus for word in ["数据", "报告", "研究", "证据", "事实", "%", "指标"]):
         return "evidence-strip"
     if any(word in corpus for word in ["误区", "误判", "边界", "反方", "别把", "前提"]):
@@ -96,7 +96,7 @@ def _case_module(index: int, total: int, corpus: str) -> str:
     if any(word in corpus for word in ["转折", "结果", "分水岭", "关键一步", "变化"]):
         return "turning-point-card"
     if index == total - 1:
-        return "migration-close"
+        return "takeaway-card"
     return "evidence-strip"
 
 
@@ -108,7 +108,7 @@ def _narrative_module(index: int, total: int, corpus: str) -> str:
     if any(word in corpus for word in ["引语", "那句话", "一句话", "说"]):
         return "quote-card"
     if index == total - 1:
-        return "soft-close"
+        return "takeaway-card"
     return "scene-card"
 
 
@@ -154,6 +154,7 @@ def _pick_module_type(archetype: str, index: int, total: int, section: dict[str,
         "migration-close": "最后一节把案例提炼成可迁移判断。",
         "soft-close": "最后一节轻回扣，保留余味，不做硬总结。",
         "decision-close": "最后一节明确建议，帮助读者做选择。",
+        "takeaway-card": "最后一节收成一张可收藏、可复用、可转述的 takeaway。",
         "emotion-turn": "这一节更适合情绪转折模块，让读感有波峰。",
         "quote-card": "这一节更适合引语卡，单独抬出一句值得记住的话。",
     }

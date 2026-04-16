@@ -25,6 +25,7 @@ from core.quality_checks import (
     metadata_integrity_report,
 )
 from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report
+from core.three_layers import build_takeaway_scaffold, build_three_layer_diagnostics, default_layer_strategies, normalize_layer_strategy
 from core.title_decision import title_integrity_report
 
 
@@ -349,6 +350,11 @@ BLUEPRINT_EXTRA_TEXT_FIELDS = [
     "peak_moment_design",
     "ending_interaction_design",
 ]
+BLUEPRINT_EXTRA_DICT_FIELDS = [
+    "hook_strategy",
+    "insight_strategy",
+    "takeaway_strategy",
+]
 
 ARCHETYPE_KEYWORDS: dict[str, list[str]] = {
     "tutorial": ["教程", "指南", "手把手", "实操", "上手", "怎么做", "如何", "方法", "SOP", "清单", "流程", "模板"],
@@ -387,11 +393,11 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["行业观察者", "普通用户", "同类决策者"],
         "controversy_anchors": ["不要中性总结，要给一个可以被讨论甚至被反驳的靶子", "关键判断要让支持者愿意附和，反对者愿意开口"],
         "interaction_prompts": ["如果是你，你会怎么判断？", "你更认同哪一边？"],
-        "primary_interaction_goal": "comment/share",
-        "secondary_interaction_goal": "like",
-        "interaction_formula": "点赞靠文末升华和金句，评论靠鲜明判断与提问，转发靠谈资和身份认同。",
+        "primary_interaction_goal": "save/share",
+        "secondary_interaction_goal": "comment",
+        "interaction_formula": "保存靠判断卡和检查框架，评论靠鲜明判断与提问，转发靠谈资和身份认同。",
         "peak_moment_design": "中段安排一次反常识判断或趋势反转，让读者想停下来划线或转发。",
-        "ending_interaction_design": "结尾先收束判断，再留一个能让读者站队或补充经验的问题。",
+        "ending_interaction_design": "结尾先收束成一张可保存的判断卡或检查框架，再留一个能让读者站队或补充经验的问题。",
         "default_sections": [
             {"heading": "大家真正误判了什么", "goal": "先把被忽略的信号说透", "evidence_need": "新闻、案例或现象对比"},
             {"heading": "真正拉开差距的分水岭", "goal": "提出主判断并拆解逻辑", "evidence_need": "数据、案例或结构拆解"},
@@ -430,7 +436,7 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "interaction_prompts": ["你最容易卡在哪一步？", "如果是你，你会先改哪一个动作？"],
         "primary_interaction_goal": "like/save",
         "secondary_interaction_goal": "comment",
-        "interaction_formula": "点赞靠低门槛获得感，评论靠卡点提问，转发靠实用框架和圈层认同。",
+        "interaction_formula": "点赞靠低门槛获得感，保存靠动作清单和模板，评论靠卡点提问。",
         "peak_moment_design": "中段要出现一次“原来我一直做反了”的醒悟时刻。",
         "ending_interaction_design": "结尾只留一两个最关键动作，并用提问促使读者说出自己的卡点。",
         "default_sections": [
@@ -469,9 +475,9 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["同行", "操盘者", "案例复盘者"],
         "controversy_anchors": ["指出案例里最值得争议的一步", "不要只讲过程，要敢讲谁做对了谁做错了"],
         "interaction_prompts": ["如果换成你，会在哪一步做不同选择？", "你见过更典型的类似案例吗？"],
-        "primary_interaction_goal": "share/comment",
-        "secondary_interaction_goal": "like",
-        "interaction_formula": "点赞靠细节与判断，评论靠站队与复盘欲，转发靠同行谈资和方法迁移。",
+        "primary_interaction_goal": "save/share",
+        "secondary_interaction_goal": "comment",
+        "interaction_formula": "保存靠复盘框架和迁移原则，转发靠同行谈资，评论靠站队与复盘欲。",
         "peak_moment_design": "案例中段要有一个让读者情绪抬起来的关键转折或失误点。",
         "ending_interaction_design": "结尾把个案抬升成通用判断，并留一个让同行想补充经历的问题。",
         "default_sections": [
@@ -510,9 +516,9 @@ ARCHETYPE_PROFILES: dict[str, dict[str, Any]] = {
         "identity_labels": ["打工人", "父母", "伴侣", "同类处境中的人"],
         "controversy_anchors": ["不用强行制造对立，但可以给出让人想回应的价值判断", "让读者觉得自己的立场被看见"],
         "interaction_prompts": ["你有没有过类似的瞬间？", "如果是你，你会怎么理解这件事？"],
-        "primary_interaction_goal": "like/comment",
+        "primary_interaction_goal": "like/save",
         "secondary_interaction_goal": "share",
-        "interaction_formula": "点赞靠被说中，评论靠补充经历，转发靠替读者表达‘我是谁’。",
+        "interaction_formula": "点赞靠被说中，保存靠一句能带走的话或自测问题，转发靠替读者表达‘我是谁’。",
         "peak_moment_design": "中段安排一次情绪爆点或被说中的瞬间，让读者想停下来截图。",
         "ending_interaction_design": "结尾轻回扣全文情绪，再留一个与读者自身经历直接相关的问题。",
         "default_sections": [
@@ -662,6 +668,12 @@ def default_viral_blueprint(
     audience_text = audience or "公众号读者"
     profile = archetype_profile(topic=topic, title=title, angle=angle, research=research)
     archetype = profile["article_archetype"]
+    layer_strategies = default_layer_strategies(
+        archetype=archetype,
+        title=title,
+        topic=topic or title,
+        audience=audience_text,
+    )
     style_defaults = _dedupe([*style_signals, *profile.get("style_traits", []), "少模板连接词", "像真人编辑一样推进"])
     core_viewpoint_map = {
         "commentary": f"{key_phrase} 真正值得警惕的，不是表面的热闹变化，而是它背后那条正在改写结果的分水岭",
@@ -743,6 +755,9 @@ def default_viral_blueprint(
         "interaction_formula": str(profile.get("interaction_formula") or "高互动文章 = 情绪价值 + 社交货币 + 峰终体验"),
         "peak_moment_design": str(profile.get("peak_moment_design") or ""),
         "ending_interaction_design": str(profile.get("ending_interaction_design") or ""),
+        "hook_strategy": layer_strategies["hook_strategy"],
+        "insight_strategy": layer_strategies["insight_strategy"],
+        "takeaway_strategy": layer_strategies["takeaway_strategy"],
     }
 
 
@@ -816,6 +831,9 @@ def normalize_viral_blueprint(payload: Any, context: dict[str, Any]) -> dict[str
         text = str(source.get(field) or "").strip()
         if text:
             merged[field] = text
+    for field in BLUEPRINT_EXTRA_DICT_FIELDS:
+        if field in source:
+            merged[field] = normalize_layer_strategy(source.get(field), merged.get(field) or {})
     return merged
 
 
@@ -939,6 +957,34 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
     output.setdefault("interaction_formula", output["viral_blueprint"].get("interaction_formula") or profile.get("interaction_formula") or "")
     output.setdefault("peak_moment_design", output["viral_blueprint"].get("peak_moment_design") or profile.get("peak_moment_design") or "")
     output.setdefault("ending_interaction_design", output["viral_blueprint"].get("ending_interaction_design") or profile.get("ending_interaction_design") or "")
+    output["hook_strategy"] = normalize_layer_strategy(
+        output.get("hook_strategy") or output["viral_blueprint"].get("hook_strategy"),
+        output["viral_blueprint"].get("hook_strategy") or default_layer_strategies(
+            archetype=output["article_archetype"],
+            title=title,
+            topic=str(context.get("topic") or title),
+            audience=str(context.get("audience") or "公众号读者"),
+        )["hook_strategy"],
+    )
+    output["insight_strategy"] = normalize_layer_strategy(
+        output.get("insight_strategy") or output["viral_blueprint"].get("insight_strategy"),
+        output["viral_blueprint"].get("insight_strategy") or default_layer_strategies(
+            archetype=output["article_archetype"],
+            title=title,
+            topic=str(context.get("topic") or title),
+            audience=str(context.get("audience") or "公众号读者"),
+        )["insight_strategy"],
+    )
+    output["takeaway_strategy"] = normalize_layer_strategy(
+        output.get("takeaway_strategy") or output["viral_blueprint"].get("takeaway_strategy"),
+        output["viral_blueprint"].get("takeaway_strategy") or default_layer_strategies(
+            archetype=output["article_archetype"],
+            title=title,
+            topic=str(context.get("topic") or title),
+            audience=str(context.get("audience") or "公众号读者"),
+        )["takeaway_strategy"],
+    )
+    output["takeaway_scaffold"] = build_takeaway_scaffold(output["takeaway_strategy"])
     output.setdefault(
         "must_have_elements",
         [
@@ -946,6 +992,7 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
             "中段必须出现一处案例、数据或事实托底。",
             "全文必须出现一处反方、误判或适用边界。",
             "至少保留一段真正展开的分析段，不要整篇卡片化。",
+            "最后 15%~20% 正文里必须落下一张可收藏、可复用的 takeaway。",
         ],
     )
     output.setdefault(
@@ -976,6 +1023,7 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
                 "检查是否复用了固定开头、固定结尾或固定小标题模式。",
                 "检查是否出现作者记忆里明确避开的句式。",
                 "检查是否有具体场景、证据托底、反方边界和展开分析段。",
+                "检查结尾有没有真的落下一张可收藏、可复用的 takeaway，而不是只剩判断收束。",
                 "检查段落起手是否在打转。",
                 "检查小标题是否至少有两种句法。",
             ]
@@ -2029,8 +2077,31 @@ def build_heuristic_review(
     discussion_present = discussion_trigger_present(body) or bool(interaction_design.get("comment_triggers")) or bool(interaction_design.get("controversy_anchors"))
     similarity_findings = _similarity_findings(title, body, manifest)
     citation_findings = _citation_findings(body, manifest)
+    material_signals = _material_signal_summary(body, manifest, {"depth_signals": depth_signals, "citation_findings": citation_findings})
+    three_layer_diagnostics = build_three_layer_diagnostics(
+        title=title,
+        body=body,
+        blueprint=blueprint,
+        analysis=interaction_design | {"core_viewpoint": core_viewpoint, "secondary_viewpoints": secondary_viewpoints[:4]},
+        depth=depth_signals,
+        material_signals=material_signals,
+        topic=str(manifest.get("topic") or title),
+        audience=str(manifest.get("audience") or "大众读者"),
+    )
     strengths: list[str] = []
     issues: list[str] = []
+    if three_layer_diagnostics["hook"].get("passed"):
+        strengths.append("标题和首屏已经能把人拉停下来，钩子层基本成立。")
+    else:
+        issues.append("钩子层还没站稳：标题和前两段没有一起把人抓住。")
+    if three_layer_diagnostics["insight"].get("passed"):
+        strengths.append("中段已经给出认知增量，不只是态度和热闹信息。")
+    else:
+        issues.append("认知增量层偏弱：有信息，但还没把新判断和迁移价值讲透。")
+    if three_layer_diagnostics["takeaway"].get("passed"):
+        strengths.append("文末已经有可收藏、可复用的 takeaway。")
+    else:
+        issues.append("takeaway 层缺位：结尾还能看，但还没有值得存下来的带走内容。")
     if len(signature_lines) >= SIGNATURE_LINE_THRESHOLD:
         strengths.append("文中已有可截图传播的金句密度。")
     else:
@@ -2170,6 +2241,8 @@ def build_heuristic_review(
         "similarity_findings": similarity_findings,
         "citation_findings": citation_findings,
         "interaction_findings": interaction_design,
+        "material_signals": material_signals,
+        "three_layer_diagnostics": three_layer_diagnostics,
         "depth_signals": depth_signals,
         "humanness_signals": humanness_signals,
         "humanness_score": humanness_score,
@@ -2333,6 +2406,14 @@ def normalize_review_payload(
             result["humanness_score"] = int(payload.get("humanness_score") or 0)
         except (TypeError, ValueError):
             pass
+    three_layer = payload.get("three_layer_diagnostics")
+    if isinstance(three_layer, dict):
+        merged_layers = dict(result.get("three_layer_diagnostics") or {})
+        for key in ["hook", "insight", "takeaway"]:
+            if isinstance(three_layer.get(key), dict):
+                merged_layers[key] = {**dict(merged_layers.get(key) or {}), **dict(three_layer.get(key) or {})}
+        if merged_layers:
+            result["three_layer_diagnostics"] = merged_layers
     result["review_source"] = review_source
     result["source"] = review_source
     result["confidence"] = float(payload.get("confidence") or result.get("confidence") or 0.72)
@@ -2494,6 +2575,9 @@ def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
     updated["hook_quality_passed"] = bool((updated.get("quality_gates") or {}).get("hook_quality_passed", True))
     updated["ending_naturalness_passed"] = bool((updated.get("quality_gates") or {}).get("ending_naturalness_passed", True))
     quality_gates = dict(updated.get("quality_gates") or {})
+    updated["hook_layer_passed"] = bool(quality_gates.get("hook_layer_passed", True))
+    updated["insight_layer_passed"] = bool(quality_gates.get("insight_layer_passed", True))
+    updated["takeaway_layer_passed"] = bool(quality_gates.get("takeaway_layer_passed", True))
     if len(updated.get("emotion_value_sentences") or []) == 0:
         total_score = min(total_score, 89)
     if not bool(quality_gates.get("interaction_passed", True)):
@@ -2512,6 +2596,9 @@ def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
         "body_integrity_passed",
         "batch_uniqueness_passed",
         "first_screen_passed",
+        "hook_layer_passed",
+        "insight_layer_passed",
+        "takeaway_layer_passed",
         "interaction_passed",
         "template_diversity_passed",
         "title_integrity_passed",
@@ -2812,6 +2899,7 @@ def _build_quality_gates(
     title_integrity: dict[str, Any],
     metadata_integrity: dict[str, Any],
     batch_uniqueness: dict[str, Any],
+    three_layers: dict[str, Any],
 ) -> dict[str, bool]:
     ai_smell_hits = _ai_smell_gate_hits(review.get("ai_smell_findings") or [])
     editorial = review.get("editorial_review") or {}
@@ -2853,6 +2941,9 @@ def _build_quality_gates(
         "batch_uniqueness_passed": bool(batch_uniqueness.get("passed", True)),
         "viral_blueprint_complete": blueprint_complete(blueprint),
         "first_screen_passed": bool(first_screen.get("passed")),
+        "hook_layer_passed": bool((three_layers.get("hook") or {}).get("passed")) and not bool(metadata_integrity.get("title_issues")),
+        "insight_layer_passed": bool((three_layers.get("insight") or {}).get("passed")),
+        "takeaway_layer_passed": bool((three_layers.get("takeaway") or {}).get("passed")),
         "interaction_passed": interaction_score >= 5,
         "template_diversity_passed": bool(template_frequency.get("passed")) and bool(similarity_findings.get("similarity_passed", True)),
         "de_ai_passed": ai_smell_hits <= AI_SMELL_THRESHOLD and severe_naturalness_hits == 0,
@@ -3074,6 +3165,19 @@ def build_score_report(
             8,
         )
     )
+    three_layer_diagnostics = build_three_layer_diagnostics(
+        title=title,
+        body=body,
+        blueprint=blueprint,
+        analysis=analysis,
+        depth=depth_signals,
+        material_signals=material_signals,
+        topic=str(manifest.get("topic") or title),
+        audience=str(manifest.get("audience") or "大众读者"),
+    )
+    hook_layer_score = int(legacy.clamp(int((three_layer_diagnostics.get("hook") or {}).get("score") or 0), 0, 30))
+    insight_layer_score = int(legacy.clamp(int((three_layer_diagnostics.get("insight") or {}).get("score") or 0), 0, 45))
+    takeaway_layer_score = int(legacy.clamp(int((three_layer_diagnostics.get("takeaway") or {}).get("score") or 0), 0, 25))
     severe_naturalness_hits = _severe_naturalness_hits(review, editorial_review)
     template_control_score = int(legacy.clamp(8 - min(7, severe_naturalness_hits * 2 + min(3, template_penalty_hits)), 0, 8))
     long_sentence_penalty = next(
@@ -3134,6 +3238,7 @@ def build_score_report(
         title_integrity=title_integrity,
         metadata_integrity=metadata_integrity,
         batch_uniqueness=batch_uniqueness,
+        three_layers=three_layer_diagnostics,
     )
     strengths = []
     weaknesses = []
@@ -3174,6 +3279,9 @@ def build_score_report(
             "修复标题或摘要里的乱码、问号替换和异常字符，再继续后面的流程。" if not quality_gates["metadata_integrity_passed"] else "",
             "修复正文里的异常字符、坏字和可疑 bullet，先保证读者不会一眼出戏。" if not quality_gates["body_integrity_passed"] else "",
             "这篇和同批稿件太像了，必须换角度重写，不要再微调句子。" if not quality_gates["batch_uniqueness_passed"] else "",
+            "钩子层还没成立：重写标题和前两段，让读者先停下来。" if not quality_gates["hook_layer_passed"] else "",
+            "认知增量层偏弱：中段必须补出新判断、证据托底和可迁移解释。" if not quality_gates["insight_layer_passed"] else "",
+            "takeaway 层缺位：结尾要补一张可收藏、可复用、可转发的带走内容。" if not quality_gates["takeaway_layer_passed"] else "",
             "前两段必须同时补出具体场景、真实冲突和为什么现在值得读。" if not quality_gates["first_screen_passed"] else "",
             "标题、开头和结尾还在重复同一类模板路数，必须换骨架重写。" if not quality_gates["template_diversity_passed"] else "",
             "先把标题和首屏钩子拉起来，别让读者在前两段就掉下去。" if not quality_gates["hook_quality_passed"] else "",
@@ -3271,18 +3379,30 @@ def build_score_report(
         "virality_score": virality_score,
         "publishability_score": publishability_score,
         "naturalness_score": naturalness_score,
+        "hook_layer_score": hook_layer_score,
+        "insight_layer_score": insight_layer_score,
+        "takeaway_layer_score": takeaway_layer_score,
+        "layer_score_breakdown": [
+            {"layer": "hook", "label": "钩子", "weight": 30, "score": hook_layer_score},
+            {"layer": "insight", "label": "认知增量", "weight": 45, "score": insight_layer_score},
+            {"layer": "takeaway", "label": "takeaway", "weight": 25, "score": takeaway_layer_score},
+        ],
         "persona_fit_score": _persona_fit_score(manifest, review, editorial_review),
         "strengths": strengths[:5],
         "weaknesses": weaknesses[:5],
-        "mandatory_revisions": mandatory_revisions[:10],
+        "mandatory_revisions": mandatory_revisions[:14],
         "suggestions": suggestions,
         "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
         "quality_gates": quality_gates,
+        "three_layer_diagnostics": three_layer_diagnostics,
         "metadata_integrity": metadata_integrity,
         "first_screen": first_screen,
         "template_frequency": template_frequency,
         "abnormal_text": abnormal_text,
         "batch_uniqueness": batch_uniqueness,
+        "hook_layer_passed": quality_gates.get("hook_layer_passed", True),
+        "insight_layer_passed": quality_gates.get("insight_layer_passed", True),
+        "takeaway_layer_passed": quality_gates.get("takeaway_layer_passed", True),
         "naturalness_floor_passed": quality_gates.get("naturalness_floor_passed", True),
         "reading_flow_passed": quality_gates.get("reading_flow_passed", True),
         "hook_quality_passed": quality_gates.get("hook_quality_passed", True),
@@ -3334,6 +3454,7 @@ def build_score_report(
 
 def markdown_review_report(review: dict[str, Any]) -> str:
     analysis = review.get("viral_analysis") or {}
+    three_layers = review.get("three_layer_diagnostics") or {}
     lines = [
         "# 编辑评审报告",
         "",
@@ -3354,6 +3475,11 @@ def markdown_review_report(review: dict[str, Any]) -> str:
     ]:
         items = _normalize_list(analysis.get(key))
         lines.append(f"- {label}：{'、'.join(items) if items else '无'}")
+    if three_layers:
+        lines.extend(["", "## 三层结构", ""])
+        for label, key in [("钩子", "hook"), ("认知增量", "insight"), ("Takeaway", "takeaway")]:
+            item = three_layers.get(key) or {}
+            lines.append(f"- {label}：{'通过' if item.get('passed') else '未通过'}｜分数 {item.get('score', 0)}")
     lines.extend(["", "## 金句", ""])
     for item in analysis.get("signature_lines") or []:
         lines.append(f"> {item.get('text') if isinstance(item, dict) else item}")
@@ -3432,6 +3558,14 @@ def markdown_score_report(report: dict[str, Any]) -> str:
             lines.append(f"- {item.get('label') or key}：`{item.get('score', 0)}` / `{item.get('weight', 0)}`")
         if report.get("persona_fit_score") not in (None, ""):
             lines.append(f"- 人设/账号贴合度：`{report.get('persona_fit_score', 0)}` / 10")
+    if report.get("layer_score_breakdown"):
+        lines.extend(["", "## 三层结构得分", ""])
+        for item in report.get("layer_score_breakdown") or []:
+            layer_key = str(item.get("layer") or "")
+            passed = report.get(f"{layer_key}_layer_passed") if layer_key else None
+            lines.append(
+                f"- {item.get('label') or layer_key}：`{item.get('score', 0)}` / `{item.get('weight', 0)}`｜`{'通过' if passed else '未通过'}`"
+            )
     stop_reason = str(report.get("stop_reason") or "").strip()
     if stop_reason:
         lines.append(f"- 停止原因：`{stop_reason}`")

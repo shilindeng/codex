@@ -65,6 +65,7 @@ class ViralEngineTests(unittest.TestCase):
         article = placeholder_article(title, placeholder_outline(title), "公众号读者")
         self.assertNotIn("先说结论", article)
         self.assertNotIn("最后给你一个可执行清单", article)
+        self.assertRegex(article, r"最后带走|判断卡|收藏这条")
 
     def test_score_report_fails_when_body_contains_raw_urls(self):
         title = "测试标题"
@@ -111,10 +112,9 @@ class ViralEngineTests(unittest.TestCase):
                 "如果判断顺序一直是乱的，新工具只会把这种混乱包装得更像进步。",
                 "",
                 "## 留一个问题",
-                "如果你也处在那种“越学越乱”的阶段，也许该问自己的，不是还缺什么工具，而是现在到底该先守住哪一个动作。",
-                "这不是鸡汤，而是一种能帮你把注意力重新拿回来的判断。",
+                "把这张判断卡留着：只要团队开始越忙越乱，先检查是不是把“补工具”放在了“改动作”前面。",
+                "收藏这条，下次复盘时直接对照：先守住一个关键动作，再决定还要不要继续往上堆信息。",
                 "如果是你，你会先停掉哪一个看起来很努力、其实一直在拖住你的动作？",
-                "先守住一个动作，再决定还要不要继续往上堆信息。",
             ]
         ).strip()
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,7 +148,13 @@ class ViralEngineTests(unittest.TestCase):
         self.assertIn("virality_score", report)
         self.assertIn("publishability_score", report)
         self.assertIn("persona_fit_score", report)
+        self.assertIn("hook_layer_score", report)
+        self.assertIn("insight_layer_score", report)
+        self.assertIn("takeaway_layer_score", report)
         self.assertTrue(report.get("quality_gates", {}).get("material_coverage_passed"))
+        self.assertTrue(report.get("hook_layer_passed"))
+        self.assertTrue(report.get("insight_layer_passed"))
+        self.assertTrue(report.get("takeaway_layer_passed"))
         # This sample should be able to pass both total score and gates.
         self.assertTrue(bool(report.get("passed")))
 

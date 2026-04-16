@@ -203,8 +203,8 @@ class EditorialLayoutTests(unittest.TestCase):
         preview = sanitize_html_fragment(enhanced)
         self.assertIn('data-wx-role="lead-note"', preview)
         self.assertIn('data-wx-role="section-break"', preview)
-        self.assertIn('data-wx-role="summary-close"', preview)
-        self.assertIn("summary-close", rich_blocks)
+        self.assertIn('data-wx-role="takeaway-card"', preview)
+        self.assertIn("takeaway-card", rich_blocks)
 
 
 if __name__ == "__main__":

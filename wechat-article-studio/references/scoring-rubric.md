@@ -33,6 +33,9 @@
 正式通过不只看总分，还必须同时满足：
 
 - `total_score >= threshold`
+- `hook_layer_passed = true`
+- `insight_layer_passed = true`
+- `takeaway_layer_passed = true`
 - `title_integrity_passed = true`
 - `credibility_passed = true`
 - `evidence_minimum_passed = true`
@@ -70,6 +73,11 @@
 - `publishability_score`
 - `naturalness_score`
 - `persona_fit_score`
+- `hook_layer_score`
+- `insight_layer_score`
+- `takeaway_layer_score`
+- `layer_score_breakdown`
+- `three_layer_diagnostics`
 - `material_signals`
 - `ai_fingerprint_summary`
 - `quality_gates`
@@ -87,8 +95,17 @@
 
 1. 先修标题、首屏和中段推进
 2. 再补表格、引用、类比、对比、边界
-3. 再清理模板腔和句式节奏
-4. 最后才补自然传播点和结尾收束
+3. 再补 takeaway，让结尾有可收藏、可复用的带走内容
+4. 再清理模板腔和句式节奏
+5. 最后才补自然传播点和结尾收束
+
+## 三层结构直判
+
+- `hook`：标题 + 前两段是否能让人停下来。
+- `认知增量`：中段是否交付新判断、信息差或可复用方法。
+- `takeaway`：最后 15%~20% 正文里是否落下可收藏、可复用、可转发的带走内容。
+
+当前通过标准不是“整体看着像篇完整文章”，而是三层都必须能明确指出落点。
 
 ## 选最优版本
 

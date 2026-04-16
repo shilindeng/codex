@@ -56,6 +56,11 @@ class AcceptanceReportTests(unittest.TestCase):
                     "long_paragraph_count": 1,
                     "paragraph_count": 6,
                 },
+                "viral_analysis": {
+                    "core_viewpoint": "真正的问题不是会不会用，而是结果、责任和流程顺序不能说反。",
+                    "secondary_viewpoints": ["返工会先冒出来。", "责任归属不清会先拖垮流程。"],
+                },
+                "material_signals": {"has_table": True, "comparison_count": 1, "analogy_count": 1, "citation_count": 2, "coverage_count": 4},
                 "quality_gates": {"credibility_passed": True},
             }
             review_report = {"editorial_review": {"ending_naturalness": "high"}}
@@ -63,9 +68,11 @@ class AcceptanceReportTests(unittest.TestCase):
             body = "\n\n".join(
                 [
                     "那天会议室里，大家第一次认真讨论 AI 要替团队扛什么结果。",
-                    "真正的问题不是会不会用，而是先把什么结果讲清楚。",
+                    "真正的问题不是会不会用，而是如果先把结果、责任和流程顺序说反了，后面返工和买单都会一起冒出来。",
                     "一份官方文档已经把边界写得很明白。",
                     "但如果忽略责任归属，再好的工具也会被用成热闹。",
+                    "## 带走这张判断卡",
+                    "把这张判断卡留着：下次只要项目越忙越乱，先检查是不是结果、责任和流程顺序说反了。收藏这条，复盘时直接对照。",
                 ]
             )
             payload = build_acceptance_report(
@@ -87,6 +94,9 @@ class AcceptanceReportTests(unittest.TestCase):
             self.assertTrue(payload["gates"]["title_consistency_passed"])
             self.assertTrue(payload["gates"]["evidence_minimum_passed"])
             self.assertTrue(payload["gates"]["first_screen_passed"])
+            self.assertTrue(payload["gates"]["hook_layer_passed"])
+            self.assertTrue(payload["gates"]["insight_layer_passed"])
+            self.assertTrue(payload["gates"]["takeaway_layer_passed"])
             self.assertTrue(payload["gates"]["image_text_density_passed"])
             self.assertTrue(payload["gates"]["score_ready"])
             self.assertTrue(payload["gates"]["render_ready"])

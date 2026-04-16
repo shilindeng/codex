@@ -792,6 +792,7 @@ _WX_RICH_ROLES = {
     "migration-close",
     "soft-close",
     "decision-close",
+    "takeaway-card",
     "section-break",
     "section-label",
     "steps",
@@ -1169,7 +1170,7 @@ class _Sanitizer(HTMLParser):
             )
         if tag == "p" and role in {"evidence-strip-label", "boundary-label", "scene-label", "turning-point-label", "pitfall-label", "fit-label", "emotion-turn-label"}:
             return f"margin:0 0 8px;color:{self._accent};font-size:12px;line-height:1.45;font-weight:900;letter-spacing:0.12em;text-transform:uppercase;"
-        if tag == "section" and role in {"summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
+        if tag == "section" and role in {"summary-close", "action-close", "migration-close", "soft-close", "decision-close", "takeaway-card"}:
             return (
                 f"margin:22px 0 0;padding:14px 14px 12px;border-radius:{t.radius_sm};"
                 f"background:{t.soft};border:{outline};"

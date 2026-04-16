@@ -10,6 +10,7 @@ import legacy_studio as legacy
 from core.content_fingerprint import build_article_fingerprint, load_batch_article_items, summarize_batch_collisions, summarize_collisions
 from core.quality_checks import discussion_trigger_present, lead_paragraph_count, metadata_integrity_report
 from core.reader_gates import abnormal_text_report, first_screen_signal_report, image_plan_gate_report
+from core.three_layers import build_three_layer_diagnostics
 
 ACCEPTANCE_SCHEMA_VERSION = "2026-04-v3"
 
@@ -123,6 +124,20 @@ def build_acceptance_report(
     metadata = metadata_integrity_report(title, summary)
     first_screen = first_screen_signal_report(body)
     abnormal_text = abnormal_text_report(title, summary, body)
+    three_layers = (
+        score_report.get("three_layer_diagnostics")
+        or review_report.get("three_layer_diagnostics")
+        or build_three_layer_diagnostics(
+            title=title,
+            body=body,
+            blueprint=manifest.get("viral_blueprint") or {},
+            analysis=(review_report.get("viral_analysis") or score_report.get("viral_analysis") or {}),
+            depth=score_report.get("depth_signals") or review_report.get("depth_signals") or {},
+            material_signals=score_report.get("material_signals") or review_report.get("material_signals") or {},
+            topic=str(manifest.get("topic") or title),
+            audience=str(manifest.get("audience") or "大众读者"),
+        )
+    )
     publication_text = abnormal_text_report(
         str(publication_meta.get("title") or title),
         str(publication_meta.get("summary") or summary),
@@ -168,6 +183,9 @@ def build_acceptance_report(
         "title_consistency_passed": not title_consistency_issues,
         "evidence_minimum_passed": bool(research_requirements.get("passed", True)),
         "first_screen_passed": bool(first_screen.get("passed")),
+        "hook_layer_passed": bool((three_layers.get("hook") or {}).get("passed")),
+        "insight_layer_passed": bool((three_layers.get("insight") or {}).get("passed")),
+        "takeaway_layer_passed": bool((three_layers.get("takeaway") or {}).get("passed")),
         "opening_scene_passed": int(depth.get("scene_paragraph_count") or 0) >= 1,
         "evidence_passed": int(depth.get("evidence_paragraph_count") or 0) >= 1 and bool(quality_gates.get("credibility_passed", True)),
         "boundary_passed": int(depth.get("counterpoint_paragraph_count") or 0) >= 1,
@@ -196,6 +214,9 @@ def build_acceptance_report(
         and gates["evidence_minimum_passed"]
         and gates["body_integrity_passed"]
         and gates["first_screen_passed"]
+        and gates["hook_layer_passed"]
+        and gates["insight_layer_passed"]
+        and gates["takeaway_layer_passed"]
         and gates["opening_scene_passed"]
         and gates["boundary_passed"]
         and gates["analysis_passed"]
@@ -228,6 +249,12 @@ def build_acceptance_report(
         highlights.append("首屏已经有具体场景或动作。")
     if gates["first_screen_passed"]:
         highlights.append("前两段已经同时给出场景、冲突和继续读下去的理由。")
+    if gates["hook_layer_passed"]:
+        highlights.append("钩子层已经成立，标题和首屏能把人停下来。")
+    if gates["insight_layer_passed"]:
+        highlights.append("认知增量层已经成立，中段有新判断和迁移价值。")
+    if gates["takeaway_layer_passed"]:
+        highlights.append("文末已经有可收藏、可复用的 takeaway。")
     if gates["title_consistency_passed"]:
         highlights.append("标题真源已经统一到同一个结果。")
     if gates["evidence_passed"]:
@@ -253,6 +280,12 @@ def build_acceptance_report(
         risks.append("评论/案例类稿件还没满足最小证据门槛。")
     if not gates["first_screen_passed"]:
         risks.append("前两段还没同时把场景、冲突和阅读代价交代清楚。")
+    if not gates["hook_layer_passed"]:
+        risks.append("只有开头，没有真正站住钩子层。")
+    if not gates["insight_layer_passed"]:
+        risks.append("有信息，但没有稳定交付认知增量。")
+    if not gates["takeaway_layer_passed"]:
+        risks.append("结尾还能看，但没有值得收藏和复用的 takeaway。")
     if not gates["summary_alignment_passed"]:
         risks.append("摘要和正文前半段不够贴合。")
     if not gates["pre_h2_length_passed"]:
@@ -291,6 +324,7 @@ def build_acceptance_report(
         "risks": risks[:5],
         "metadata_integrity": metadata,
         "first_screen": first_screen,
+        "three_layer_diagnostics": three_layers,
         "abnormal_text": abnormal_text,
         "publication_text": publication_text,
         "rendered_text_integrity_passed": rendered_text_integrity_passed,

@@ -365,7 +365,7 @@ def _apply_layout_plan(enhanced_blocks: list[str], manifest: dict[str, Any] | No
             continue
         if module_type == "keyline":
             section["content_blocks"] = _render_keyline(content_blocks)
-        elif module_type in {"evidence-strip", "boundary-card", "scene-card", "turning-point-card", "pitfall-card", "fit-card", "emotion-turn", "summary-close", "action-close", "migration-close", "soft-close", "decision-close"}:
+        elif module_type in {"evidence-strip", "boundary-card", "scene-card", "turning-point-card", "pitfall-card", "fit-card", "emotion-turn", "summary-close", "action-close", "migration-close", "soft-close", "decision-close", "takeaway-card"}:
             section["content_blocks"] = _wrap_module(module_type, content_blocks, label=label_text_map.get(module_type, ""))
         elif module_type == "quote-card":
             if not any('data-wx-role="quote-card"' in block for block in content_blocks):

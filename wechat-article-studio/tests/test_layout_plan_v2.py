@@ -28,12 +28,12 @@ class LayoutPlanV2Tests(unittest.TestCase):
             {"viral_blueprint": {"article_archetype": "commentary"}},
         )
         self.assertEqual(plan.get("hero_module"), "hero-judgment")
-        self.assertEqual(plan.get("closing_module"), "summary-close")
+        self.assertEqual(plan.get("closing_module"), "takeaway-card")
         self.assertEqual(plan.get("lead_visual_policy"), "allow-before-first-h2")
         self.assertEqual(plan.get("lead_visual_deadline_ratio"), 0.25)
         self.assertEqual(plan.get("pre_h2_max_paragraphs"), 4)
         self.assertEqual(plan.get("section_modules")[0].get("heading_role"), "section-break")
-        self.assertEqual(plan.get("section_modules")[-1].get("module_type"), "summary-close")
+        self.assertEqual(plan.get("section_modules")[-1].get("module_type"), "takeaway-card")
 
     def test_tutorial_plan_uses_checkpoint_and_action_close(self):
         plan = build_layout_plan(
