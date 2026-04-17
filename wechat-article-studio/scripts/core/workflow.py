@@ -84,6 +84,7 @@ from core.pipeline_readiness import (
     has_score_dimension as readiness_has_score_dimension,
     score_dimension_value as readiness_score_dimension_value,
 )
+from core.quality_gates import build_final_gate, build_reader_gate, build_visual_gate, collect_gate_publish_blockers
 from core.publication import (
     apply_reference_policy as publication_apply_reference_policy,
     build_references_payload as publication_build_references_payload,
@@ -218,7 +219,10 @@ def attach_account_strategy(workspace: Path, manifest: dict[str, Any]) -> dict[s
     strategy = load_account_strategy(workspace, manifest, create_if_missing=True)
     manifest.setdefault("audience", strategy.get("target_reader_label") or "泛科技读者")
     controls = dict(manifest.get("image_controls") or {})
-    controls.setdefault("density", strategy.get("image_density") or "minimal")
+    density_mode = legacy.normalize_image_density_mode(controls.get("density_mode") or controls.get("density") or strategy.get("image_density") or "auto")
+    controls.setdefault("density_mode", density_mode)
+    controls["density"] = density_mode
+    controls.setdefault("allow_closing_image", "auto")
     manifest["image_controls"] = controls
     return manifest
 
@@ -416,7 +420,7 @@ def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score
         score_report=report,
         acceptance_report=acceptance,
     )
-    return compute_pipeline_readiness(
+    readiness = compute_pipeline_readiness(
         report=report,
         acceptance=acceptance,
         research_report=research_report,
@@ -429,6 +433,15 @@ def build_pipeline_readiness(workspace: Path, manifest: dict[str, Any], *, score
         publish_result_exists=bool(read_json(workspace / "publish-result.json", default={}) or {}),
         min_credibility_score=PUBLISH_MIN_CREDIBILITY_SCORE,
     )
+    gate_blockers = collect_gate_publish_blockers(workspace, manifest)
+    if gate_blockers:
+        merged = list(readiness.get("publish_blockers") or [])
+        for item in gate_blockers:
+            if item not in merged:
+                merged.append(item)
+        readiness["publish_blockers"] = merged
+        readiness["publish_ready"] = False
+    return readiness
 
 
 def active_text_provider():
@@ -809,6 +822,21 @@ def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dic
     summary = meta.get("summary") or manifest.get("summary") or extract_summary(body)
     write_content_fingerprint_artifact(workspace, title, body, manifest, review=review_report, layout_plan=layout_plan)
     recent_fingerprints = collect_recent_fingerprints(workspace, manifest)
+    image_plan = read_json(workspace / str(manifest.get("image_plan_path") or "image-plan.json"), default={}) or {}
+    reader_gate = build_reader_gate(
+        workspace,
+        manifest,
+        title=title,
+        summary=summary,
+        body=body,
+        score_report=score_report,
+        review_report=review_report,
+    )
+    visual_gate = build_visual_gate(
+        workspace,
+        manifest,
+        image_plan=image_plan,
+    )
     payload = build_acceptance_report(
         workspace,
         manifest,
@@ -819,13 +847,136 @@ def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dic
         review_report=review_report,
         layout_plan=layout_plan,
         recent_fingerprints=recent_fingerprints,
+        reader_gate=reader_gate,
+        visual_gate=visual_gate,
     )
+    final_gate = build_final_gate(
+        workspace,
+        manifest,
+        title=title,
+        body=body,
+        score_report=score_report,
+        review_report=review_report,
+        acceptance_report=payload,
+        reader_gate=reader_gate,
+        visual_gate=visual_gate,
+    )
+    write_json(workspace / "reader_gate.json", reader_gate)
+    write_json(workspace / "visual_gate.json", visual_gate)
+    write_json(workspace / "final_gate.json", final_gate)
     write_json(workspace / "acceptance-report.json", payload)
     write_text(workspace / "acceptance-report.md", markdown_acceptance_report(payload))
     manifest["acceptance_report_path"] = "acceptance-report.json"
+    manifest["reader_gate_path"] = "reader_gate.json"
+    manifest["visual_gate_path"] = "visual_gate.json"
+    manifest["final_gate_path"] = "final_gate.json"
     manifest["acceptance_passed"] = bool(payload.get("passed"))
     manifest["acceptance_ready_status"] = "passed" if (payload.get("gates") or {}).get("acceptance_ready_passed") else "failed"
+    manifest["reader_gate_status"] = "passed" if reader_gate.get("passed") else "failed"
+    manifest["visual_gate_status"] = "passed" if visual_gate.get("passed") else "failed"
+    manifest["final_gate_status"] = "passed" if final_gate.get("passed") else "failed"
     return payload
+
+
+def cmd_reader_gate(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace)
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    if not article_path.exists():
+        raise SystemExit(f"找不到文章文件：{article_path}")
+    score_report = read_json(workspace / "score-report.json", default={}) or {}
+    if not score_report:
+        raise SystemExit("缺少 score-report.json，请先完成评分。")
+    review_report = read_json(workspace / "review-report.json", default={}) or {}
+    meta, body = split_frontmatter(read_text(article_path))
+    title = str(manifest.get("selected_title") or meta.get("title") or manifest.get("topic") or "").strip()
+    summary = str(meta.get("summary") or manifest.get("summary") or extract_summary(body)).strip()
+    payload = build_reader_gate(
+        workspace,
+        manifest,
+        title=title,
+        summary=summary,
+        body=body,
+        score_report=score_report,
+        review_report=review_report,
+    )
+    write_json(workspace / "reader_gate.json", payload)
+    manifest["reader_gate_path"] = "reader_gate.json"
+    manifest["reader_gate_status"] = "passed" if payload.get("passed") else "failed"
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_visual_gate(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace)
+    image_plan = read_json(workspace / str(manifest.get("image_plan_path") or "image-plan.json"), default={}) or {}
+    payload = build_visual_gate(workspace, manifest, image_plan=image_plan)
+    write_json(workspace / "visual_gate.json", payload)
+    manifest["visual_gate_path"] = "visual_gate.json"
+    manifest["visual_gate_status"] = "passed" if payload.get("passed") else "failed"
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_final_gate(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace)
+    write_acceptance_artifacts(workspace, manifest)
+    payload = read_json(workspace / "final_gate.json", default={}) or {}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_learn_performance(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace)
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    title = str(manifest.get("selected_title") or manifest.get("topic") or "未命名文章").strip()
+    if article_path.exists():
+        meta, _body = split_frontmatter(read_text(article_path))
+        title = str(meta.get("title") or title).strip()
+    feedback_path = workspace / "performance-feedback.json"
+    payload = read_json(feedback_path, default={}) or {}
+    entries = list(payload.get("entries") or [])
+    entry = {
+        "title": title,
+        "captured_at": now_iso(),
+        "metrics_24h": {
+            "read": int(getattr(args, "read_24h", 0) or 0),
+            "like": int(getattr(args, "like_24h", 0) or 0),
+            "share": int(getattr(args, "share_24h", 0) or 0),
+            "comment": int(getattr(args, "comment_24h", 0) or 0),
+            "favorite": int(getattr(args, "favorite_24h", 0) or 0),
+        },
+        "metrics_72h": {
+            "read": int(getattr(args, "read_72h", 0) or 0),
+            "like": int(getattr(args, "like_72h", 0) or 0),
+            "share": int(getattr(args, "share_72h", 0) or 0),
+            "comment": int(getattr(args, "comment_72h", 0) or 0),
+            "favorite": int(getattr(args, "favorite_72h", 0) or 0),
+        },
+        "notes": str(getattr(args, "notes", "") or "").strip(),
+    }
+    entries.append(entry)
+    payload["entries"] = entries
+    payload["updated_at"] = now_iso()
+    write_json(feedback_path, payload)
+    manifest["performance_feedback_path"] = "performance-feedback.json"
+    save_manifest(workspace, manifest)
+    notes = entry["notes"]
+    if notes:
+        playbook_path = workspace / "performance-playbook.json"
+        playbook = read_json(playbook_path, default={}) or {}
+        learnings = list(playbook.get("recent_learnings") or [])
+        learnings.append({"title": title, "captured_at": entry["captured_at"], "note": notes})
+        playbook["recent_learnings"] = learnings[-50:]
+        playbook["updated_at"] = now_iso()
+        write_json(playbook_path, playbook)
+    print(json.dumps(entry, ensure_ascii=False, indent=2))
+    return 0
 
 
 def topic_keyword_tokens(value: str) -> list[str]:
@@ -2511,6 +2662,31 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return wechat_publish(args)
 
 
+def cmd_publish(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    if not getattr(args, "dry_run", False):
+        if not getattr(args, "confirmed_publish", False):
+            raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
+        write_acceptance_artifacts(workspace, manifest)
+        manifest = load_manifest(workspace)
+        save_manifest(workspace, manifest)
+        blockers = collect_publish_blockers(workspace, manifest)
+        force_publish = bool(getattr(args, "force_publish", False))
+        force_reason = str(getattr(args, "force_reason", "") or "").strip()
+        if blockers and not force_publish:
+            detail = "\n".join(f"- {item}" for item in blockers)
+            raise SystemExit(f"当前稿件不满足正式发布条件：\n{detail}")
+        if blockers and force_publish:
+            if not force_reason:
+                raise SystemExit("强制发布需要同时传入 --force-reason，说明为什么仍要继续发布。")
+            manifest["force_publish_reason"] = force_reason
+            manifest["force_publish_at"] = now_iso()
+            save_manifest(workspace, manifest)
+        _mark_publish_intent(workspace)
+    return wechat_publish(args)
+
+
 def cmd_verify_draft(args: argparse.Namespace) -> int:
     return wechat_verify_draft(args)
 
@@ -3262,7 +3438,10 @@ def _sync_image_controls(workspace: Path, args: argparse.Namespace) -> None:
     manifest = attach_account_strategy(workspace, manifest)
     controls = legacy.resolve_image_controls(manifest.get("image_controls"), args)
     strategy = manifest.get("account_strategy") or {}
-    controls.setdefault("density", str(strategy.get("image_density") or "minimal"))
+    density_mode = legacy.normalize_image_density_mode(controls.get("density_mode") or controls.get("density") or strategy.get("image_density") or "auto")
+    controls.setdefault("density_mode", density_mode)
+    controls["density"] = density_mode
+    controls.setdefault("allow_closing_image", "auto")
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
 
@@ -3755,18 +3934,27 @@ def _prepare_run_manifest(workspace: Path, args: argparse.Namespace) -> tuple[di
 
 
 def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    _sync_image_controls(workspace, args)
+    manifest = load_manifest(workspace)
     publication_report = render_prepare_publication_artifacts(workspace, manifest)
     original_article_path = str(manifest.get("article_path") or "article.md")
     publication_path = str(manifest.get("publication_path") or publication_report.get("output_path") or "publication.md")
     requested_inline_count = int(getattr(args, "inline_count", 0) or 0)
     inline_count = requested_inline_count or int(publication_report.get("inline_image_limit") or 0)
     ensure_layout_plan_artifacts(workspace, manifest, force=True)
-    _sync_image_controls(workspace, args)
     image_provider = _effective_image_provider(args)
     manifest["article_path"] = publication_path
     save_manifest(workspace, manifest)
     try:
-        legacy_plan_images(argparse.Namespace(workspace=str(workspace), provider=image_provider, inline_count=inline_count))
+        legacy_plan_images(
+            argparse.Namespace(
+                workspace=str(workspace),
+                provider=image_provider,
+                inline_count=inline_count,
+                image_density=getattr(args, "image_density", None),
+                allow_closing_image=getattr(args, "allow_closing_image", None),
+            )
+        )
         manifest = load_manifest(workspace)
         manifest["image_status"] = "planned"
         save_manifest(workspace, manifest)
@@ -3812,6 +4000,8 @@ def _run_image_render_pipeline(workspace: Path, manifest: dict[str, Any], args: 
                 cover=None,
                 dry_run=args.dry_run_publish,
                 confirmed_publish=args.confirmed_publish,
+                force_publish=getattr(args, "force_publish", False),
+                force_reason=getattr(args, "force_reason", None),
             )
         )
         if not args.dry_run_publish:
@@ -4205,6 +4395,7 @@ def cmd_all(args: argparse.Namespace) -> int:
             image_preset_infographic=getattr(args, "image_preset_infographic", None),
             image_preset_inline=getattr(args, "image_preset_inline", None),
             image_density=args.image_density,
+            allow_closing_image=getattr(args, "allow_closing_image", None),
             image_layout_family=args.image_layout_family,
             image_theme=args.image_theme,
             image_style=args.image_style,
@@ -4217,6 +4408,8 @@ def cmd_all(args: argparse.Namespace) -> int:
             dry_run_images=args.dry_run_images,
             dry_run_publish=args.dry_run_publish,
             confirmed_publish=args.confirmed_publish,
+            force_publish=getattr(args, "force_publish", False),
+            force_reason=getattr(args, "force_reason", None),
             gemini_model=args.gemini_model,
             openai_model=args.openai_model,
             accent_color=args.accent_color,
@@ -4301,7 +4494,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     run.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     run.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
+    run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default=None)
+    run.add_argument("--allow-closing-image", choices=legacy.ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     run.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     run.add_argument("--image-theme")
     run.add_argument("--image-style")
@@ -4314,6 +4508,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run-images", action="store_true")
     run.add_argument("--dry-run-publish", action="store_true")
     run.add_argument("--confirmed-publish", action="store_true")
+    run.add_argument("--force-publish", action="store_true")
+    run.add_argument("--force-reason")
     run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     run.add_argument("--openai-model", default="gpt-image-1")
     run.add_argument("--accent-color", default="#0F766E")
@@ -4344,7 +4540,8 @@ def build_parser() -> argparse.ArgumentParser:
     viral_run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     viral_run.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     viral_run.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    viral_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
+    viral_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default=None)
+    viral_run.add_argument("--allow-closing-image", choices=legacy.ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     viral_run.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     viral_run.add_argument("--image-theme")
     viral_run.add_argument("--image-style")
@@ -4357,6 +4554,8 @@ def build_parser() -> argparse.ArgumentParser:
     viral_run.add_argument("--dry-run-images", action="store_true")
     viral_run.add_argument("--dry-run-publish", action="store_true")
     viral_run.add_argument("--confirmed-publish", action="store_true")
+    viral_run.add_argument("--force-publish", action="store_true")
+    viral_run.add_argument("--force-reason")
     viral_run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     viral_run.add_argument("--openai-model", default="gpt-image-1")
     viral_run.add_argument("--accent-color", default="#0F766E")
@@ -4460,7 +4659,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     hosted_run.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     hosted_run.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    hosted_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
+    hosted_run.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default=None)
+    hosted_run.add_argument("--allow-closing-image", choices=legacy.ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     hosted_run.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     hosted_run.add_argument("--image-theme")
     hosted_run.add_argument("--image-style")
@@ -4473,6 +4673,8 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--dry-run-images", action="store_true")
     hosted_run.add_argument("--dry-run-publish", action="store_true")
     hosted_run.add_argument("--confirmed-publish", action="store_true")
+    hosted_run.add_argument("--force-publish", action="store_true")
+    hosted_run.add_argument("--force-reason")
     hosted_run.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     hosted_run.add_argument("--openai-model", default="gpt-image-1")
     hosted_run.add_argument("--accent-color", default="#0F766E")
@@ -4576,6 +4778,8 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--cover")
     publish.add_argument("--dry-run", action="store_true")
     publish.add_argument("--confirmed-publish", action="store_true")
+    publish.add_argument("--force-publish", action="store_true")
+    publish.add_argument("--force-reason")
     publish.set_defaults(func=cmd_publish)
 
     verify_draft = subparsers.add_parser("verify-draft", help="回读草稿箱内容，校验图片与 thumb_media_id")
@@ -4600,7 +4804,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     all_cmd.add_argument("--image-preset-infographic", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     all_cmd.add_argument("--image-preset-inline", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
-    all_cmd.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default="balanced")
+    all_cmd.add_argument("--image-density", choices=legacy.IMAGE_DENSITY_CHOICES, default=None)
+    all_cmd.add_argument("--allow-closing-image", choices=legacy.ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     all_cmd.add_argument("--image-layout-family", choices=legacy.IMAGE_LAYOUT_FAMILY_CHOICES)
     all_cmd.add_argument("--image-theme")
     all_cmd.add_argument("--image-style")
@@ -4617,6 +4822,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--publish", action="store_true")
     all_cmd.add_argument("--dry-run-publish", action="store_true")
     all_cmd.add_argument("--confirmed-publish", action="store_true")
+    all_cmd.add_argument("--force-publish", action="store_true")
+    all_cmd.add_argument("--force-reason")
     all_cmd.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     all_cmd.add_argument("--openai-model", default="gpt-image-1")
     all_cmd.add_argument("--accent-color", default="#0F766E")
@@ -4624,6 +4831,33 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--layout-skin", choices=LAYOUT_SKIN_CHOICES, default=None)
     all_cmd.add_argument("--input-format", choices=INPUT_FORMAT_CHOICES, default="auto")
     all_cmd.set_defaults(func=cmd_all)
+
+    reader_gate = subparsers.add_parser("reader-gate", help="生成 reader_gate.json")
+    reader_gate.add_argument("--workspace", required=True)
+    reader_gate.set_defaults(func=cmd_reader_gate)
+
+    visual_gate = subparsers.add_parser("visual-gate", help="生成 visual_gate.json")
+    visual_gate.add_argument("--workspace", required=True)
+    visual_gate.set_defaults(func=cmd_visual_gate)
+
+    final_gate = subparsers.add_parser("final-gate", help="生成 final_gate.json")
+    final_gate.add_argument("--workspace", required=True)
+    final_gate.set_defaults(func=cmd_final_gate)
+
+    learn_performance = subparsers.add_parser("learn-performance", help="记录 24h / 72h 的真实表现")
+    learn_performance.add_argument("--workspace", required=True)
+    learn_performance.add_argument("--read-24h", type=int, default=0)
+    learn_performance.add_argument("--like-24h", type=int, default=0)
+    learn_performance.add_argument("--share-24h", type=int, default=0)
+    learn_performance.add_argument("--comment-24h", type=int, default=0)
+    learn_performance.add_argument("--favorite-24h", type=int, default=0)
+    learn_performance.add_argument("--read-72h", type=int, default=0)
+    learn_performance.add_argument("--like-72h", type=int, default=0)
+    learn_performance.add_argument("--share-72h", type=int, default=0)
+    learn_performance.add_argument("--comment-72h", type=int, default=0)
+    learn_performance.add_argument("--favorite-72h", type=int, default=0)
+    learn_performance.add_argument("--notes")
+    learn_performance.set_defaults(func=cmd_learn_performance)
 
     return parser
 

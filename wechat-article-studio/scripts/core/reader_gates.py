@@ -219,3 +219,92 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
             and bool(batch_visual.get("passed", True))
         ),
     }
+
+
+def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path | None = None) -> dict[str, Any]:
+    payload = image_plan or {}
+    items = list(payload.get("items") or [])
+    cover = next(
+        (
+            item
+            for item in items
+            if str(item.get("insert_strategy") or "") == "cover_only" or str(item.get("id") or "").startswith("cover-")
+        ),
+        {},
+    )
+    first_inline = next((item for item in items if str(item.get("id") or "").startswith("inline-")), {})
+    inline_items = [
+        item
+        for item in items
+        if str(item.get("insert_strategy") or "") == "section_middle" or str(item.get("id") or "").startswith("inline-")
+    ]
+    article_strategy = payload.get("article_visual_strategy") or {}
+    visual_route = str(article_strategy.get("visual_route") or "")
+    per_item_routes = {
+        str((item.get("article_visual_strategy") or {}).get("visual_route") or visual_route)
+        for item in items
+        if str((item.get("article_visual_strategy") or {}).get("visual_route") or visual_route).strip()
+    }
+    cover_text_policy = str(cover.get("text_policy") or "")
+    first_inline_text_policy = str(first_inline.get("text_policy") or "")
+    density_mode = str(
+        payload.get("density_mode")
+        or (payload.get("image_controls") or {}).get("density_mode")
+        or (payload.get("image_controls") or {}).get("density")
+        or "auto"
+    ).strip().lower()
+    inline_range = payload.get("inline_density_range") or {}
+    density_min = int(inline_range.get("min") or 0)
+    density_max = int(inline_range.get("max") or 0)
+    if density_mode == "none":
+        density_min = density_max = 0
+    elif density_mode == "minimal":
+        density_min, density_max = 0, 1
+    elif density_mode == "balanced":
+        density_min, density_max = 1, 2
+    elif density_mode == "dense":
+        density_min, density_max = 2, 4
+    elif not inline_range:
+        density_min = density_max = len(inline_items)
+    density_passed = density_min <= len(inline_items) <= density_max if density_max or density_min else len(inline_items) == 0
+    valid_roles = {"click", "explain", "remember", "share"}
+    inferred_roles = []
+    for item in items:
+        role = str(item.get("role") or "").strip().lower()
+        if role not in valid_roles:
+            image_type = str(item.get("type") or "")
+            insert_strategy = str(item.get("insert_strategy") or "")
+            if image_type == "封面图" or str(item.get("id") or "").startswith("cover-") or insert_strategy == "cover_only":
+                role = "click"
+            elif image_type in {"信息图", "流程图", "对比图"}:
+                role = "explain"
+            elif insert_strategy == "section_end":
+                role = "share"
+            elif str(item.get("id") or "").startswith("inline-"):
+                role = "explain"
+            else:
+                role = "remember"
+        inferred_roles.append(role)
+    role_assignment_passed = all(role in valid_roles for role in inferred_roles) if items else False
+    explain_role_present = any(role == "explain" for role, item in zip(inferred_roles, items) if item in inline_items) if inline_items else True
+    batch_visual = summarize_visual_batch_collisions(workspace, payload) if workspace is not None else {"passed": True, "similar_items": []}
+    return {
+        "visual_route": visual_route,
+        "visual_route_passed": bool(visual_route) and len(per_item_routes) <= 1,
+        "visual_batch_uniqueness_passed": bool(batch_visual.get("passed", True)),
+        "visual_batch": batch_visual,
+        "cover_text_policy_passed": not cover or cover_text_policy == "none",
+        "first_inline_text_policy_passed": not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"},
+        "density_passed": density_passed,
+        "role_assignment_passed": role_assignment_passed,
+        "explain_role_present": explain_role_present,
+        "passed": (
+            (not cover or cover_text_policy == "none")
+            and (not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"})
+            and density_passed
+            and role_assignment_passed
+            and explain_role_present
+            and (not visual_route or len(per_item_routes) <= 1)
+            and bool(batch_visual.get("passed", True))
+        ),
+    }

@@ -86,6 +86,8 @@ def build_acceptance_report(
     review_report: dict[str, Any],
     layout_plan: dict[str, Any],
     recent_fingerprints: list[dict[str, Any]],
+    reader_gate: dict[str, Any] | None = None,
+    visual_gate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     depth = score_report.get("depth_signals") or {}
     quality_gates = score_report.get("quality_gates") or {}
@@ -145,6 +147,8 @@ def build_acceptance_report(
     ) if publication_body.strip() else {"passed": True, "suspicious_bullets": [], "suspicious_lines": []}
     rendered_text_integrity_passed = ("????" not in wechat_html) and ("\uFFFD" not in wechat_html)
     image_plan_report = image_plan_gate_report(image_plan, workspace=workspace)
+    reader_gate = reader_gate or {}
+    visual_gate = visual_gate or {}
     summary_overlap = _jaccard(_tokens(summary), _tokens(title + " " + " ".join(legacy.list_paragraphs(body)[:3])))
     summary_tokens = list(_tokens(summary))
     summary_keyword_hit = any(token in _normalize_text(body).lower() for token in summary_tokens[:4])
@@ -204,6 +208,8 @@ def build_acceptance_report(
         "reference_tail_passed": reference_count == 0 or reference_tail_present,
         "source_block_visible_passed": reference_count == 0 or reference_tail_present,
         "quality_gates_passed": not score_failed_gates,
+        "reader_gate_passed": bool(reader_gate.get("passed", True)),
+        "visual_gate_passed": bool(visual_gate.get("passed", True)),
     }
     gates["acceptance_ready_passed"] = bool(
         gates["metadata_integrity_passed"]
@@ -226,6 +232,7 @@ def build_acceptance_report(
         and gates["pre_h2_length_passed"]
         and gates["layout_hierarchy_passed"]
         and gates["quality_gates_passed"]
+        and gates["reader_gate_passed"]
     )
     gates["score_ready"] = bool(gates["score_passed"] and gates["quality_gates_passed"])
     gates["render_ready"] = bool(
@@ -241,6 +248,7 @@ def build_acceptance_report(
         and gates["image_text_density_passed"]
         and gates["visual_batch_uniqueness_passed"]
         and gates["summary_alignment_passed"]
+        and gates["visual_gate_passed"]
     )
     gates["publish_chain_ready"] = bool(gates["publish_ready"])
     failed = [name for name, ok in gates.items() if not ok]
@@ -329,6 +337,8 @@ def build_acceptance_report(
         "publication_text": publication_text,
         "rendered_text_integrity_passed": rendered_text_integrity_passed,
         "image_plan_report": image_plan_report,
+        "reader_gate": reader_gate,
+        "visual_gate": visual_gate,
         "content_fingerprint": fingerprint,
         "fingerprint_findings": collisions,
         "batch_uniqueness": batch_collisions,

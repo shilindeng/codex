@@ -147,6 +147,45 @@ class QualityPipelineGuardTests(unittest.TestCase):
             self.assertFalse(readiness["publish_ready"])
             self.assertTrue(any("publication.md" in item or "article.wechat.html" in item for item in readiness["publish_blockers"]))
 
+    def test_build_pipeline_readiness_blocks_failed_final_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.md").write_text("---\ntitle: 测试标题\nsummary: 摘要\n---\n\n正文。", encoding="utf-8")
+            (workspace / "publication.md").write_text("---\ntitle: 测试标题\nsummary: 摘要\n---\n\n正文。", encoding="utf-8")
+            (workspace / "article.wechat.html").write_text("<section><p>正文</p></section>", encoding="utf-8")
+            (workspace / "score-report.json").write_text(
+                json.dumps({"title": "测试标题", "passed": True, "quality_gates": {}}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (workspace / "acceptance-report.json").write_text(
+                json.dumps({"title": "测试标题", "passed": True, "gates": {"acceptance_ready_passed": True, "publish_ready": True}}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (workspace / "reader_gate.json").write_text(json.dumps({"passed": True}, ensure_ascii=False, indent=2), encoding="utf-8")
+            (workspace / "visual_gate.json").write_text(json.dumps({"passed": True}, ensure_ascii=False, indent=2), encoding="utf-8")
+            (workspace / "final_gate.json").write_text(
+                json.dumps({"passed": False, "failed_checks": ["hook_passed"]}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            manifest = {
+                "workspace": str(workspace),
+                "selected_title": "测试标题",
+                "article_path": "article.md",
+                "publication_path": "publication.md",
+                "wechat_html_path": "article.wechat.html",
+                "score_report_path": "score-report.json",
+                "acceptance_report_path": "acceptance-report.json",
+                "reader_gate_path": "reader_gate.json",
+                "visual_gate_path": "visual_gate.json",
+                "final_gate_path": "final_gate.json",
+                "score_passed": True,
+                "score_status": "done",
+                "stage": "render",
+            }
+            readiness = build_pipeline_readiness(workspace, manifest)
+            self.assertFalse(readiness["publish_ready"])
+            self.assertTrue(any("final_gate.json" in item for item in readiness["publish_blockers"]))
+
     def test_detect_ai_fingerprints_catches_structural_templates(self):
         body = "\n\n".join(
             [

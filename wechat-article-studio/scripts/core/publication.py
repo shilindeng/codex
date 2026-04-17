@@ -205,7 +205,22 @@ def _guess_article_archetype(manifest: dict[str, Any], title: str, body: str) ->
     return "commentary"
 
 
-def _inline_image_limit(archetype: str) -> int:
+def _inline_image_limit(workspace: Path, manifest: dict[str, Any], body: str, archetype: str) -> int:
+    image_plan_rel = str(manifest.get("image_plan_path") or "image-plan.json").strip()
+    if image_plan_rel:
+        image_plan = read_json(workspace / image_plan_rel, default={}) or {}
+        if image_plan:
+            return int(image_plan.get("planned_inline_count") or image_plan.get("requested_inline_count") or 0)
+    controls = dict(manifest.get("image_controls") or {})
+    density_mode = legacy.normalize_image_density_mode(
+        controls.get("density_mode")
+        or manifest.get("image_density_mode")
+        or controls.get("density")
+        or ""
+    )
+    explicit_count = int(controls.get("inline_count") or manifest.get("image_inline_target") or 0)
+    if density_mode in {"auto", "none", "minimal", "balanced", "dense", "custom"}:
+        return int(legacy.estimate_inline_image_count(body, explicit_count, density_mode))
     return 3 if archetype == "tutorial" else 2
 
 
@@ -383,7 +398,7 @@ def prepare_publication_artifacts(workspace: Path, manifest: dict[str, Any], *, 
     body = normalize_publication_body(title, body)
     body, citation_findings = apply_reference_policy(workspace, manifest, title, body, keep_inline_citations=True)
     archetype = _guess_article_archetype(manifest, title, body)
-    inline_limit = _inline_image_limit(archetype)
+    inline_limit = _inline_image_limit(workspace, manifest, body, archetype)
     blocks = _split_markdown_blocks(body)
     blocks, kept_images, removed_images = _trim_existing_image_blocks(blocks, limit=inline_limit)
     blocks, rewrite_findings = _rewrite_blocks(blocks)

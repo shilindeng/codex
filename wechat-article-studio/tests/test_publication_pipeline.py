@@ -44,8 +44,8 @@ class PublicationPipelineTests(unittest.TestCase):
             publication = (workspace / "publication.md").read_text(encoding="utf-8")
             self.assertIn("| 容易误判 | 真正问题 |", publication)
             self.assertIn("- 回答准确率：76.10%", publication)
-            self.assertEqual(publication.count("!["), 2)
-            self.assertEqual(payload.get("removed_existing_image_blocks"), 1)
+            self.assertEqual(publication.count("!["), 1)
+            self.assertEqual(payload.get("removed_existing_image_blocks"), 2)
 
     def test_prepare_publication_preserves_existing_references(self):
         with tempfile.TemporaryDirectory() as tmp:

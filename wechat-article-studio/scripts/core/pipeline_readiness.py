@@ -17,6 +17,9 @@ ARTIFACT_REQUIREMENTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("wechat_html_path", "article.wechat.html"),
         ("score_report_path", "score-report.json"),
         ("acceptance_report_path", "acceptance-report.json"),
+        ("reader_gate_path", "reader_gate.json"),
+        ("visual_gate_path", "visual_gate.json"),
+        ("final_gate_path", "final_gate.json"),
     ),
 }
 

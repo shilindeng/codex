@@ -377,7 +377,8 @@ IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
         {"key": "atmospheric-divider", "label": "氛围分隔", "instruction": "Use an atmospheric divider composition with strong mood and no readable text."},
     ],
 }
-IMAGE_DENSITY_CHOICES = ("minimal", "balanced", "per-section", "rich")
+IMAGE_DENSITY_CHOICES = ("auto", "none", "minimal", "balanced", "dense", "custom")
+ALLOW_CLOSING_IMAGE_CHOICES = ("auto", "on", "off")
 IMAGE_LAYOUT_FAMILY_VARIANTS: dict[str, list[str]] = {
     "editorial": ["hero-object", "editorial-collage", "editorial-panel", "framed-window"],
     "process": ["path-nodes", "ladder-steps", "swimlane-flow", "timeline-flow", "loop-cycle"],
@@ -2965,7 +2966,10 @@ def build_effective_image_controls(controls: dict[str, Any], strategy: dict[str,
     profile = strategy.get("profile") or {}
     merged = dict(controls or {})
     merged["style_mode"] = controls.get("style_mode") or strategy.get("style_mode") or profile.get("style_mode") or "uniform"
-    merged["density"] = controls.get("density") or "balanced"
+    merged["density_mode"] = normalize_image_density_mode(controls.get("density_mode") or controls.get("density") or "auto")
+    merged["density"] = merged["density_mode"]
+    merged["inline_count"] = max(0, int(controls.get("inline_count") or 0))
+    merged["allow_closing_image"] = str(controls.get("allow_closing_image") or "auto").strip().lower() or "auto"
     merged["layout_family"] = controls.get("layout_family") or strategy.get("layout_family") or profile.get("layout_family") or ""
     merged["preset"] = controls.get("preset") or strategy.get("preset") or profile.get("preset") or ""
     merged["preset_label"] = IMAGE_STYLE_PRESETS.get(merged.get("preset", ""), {}).get("label", controls.get("preset_label", ""))
@@ -3355,8 +3359,15 @@ def _has_explicit_image_controls(args: Any) -> bool:
         "image_type",
         "image_mood",
         "custom_visual_brief",
+        "image_density",
+        "allow_closing_image",
     ]
-    return any(str(getattr(args, key, "") or "").strip() for key in keys)
+    if any(str(getattr(args, key, "") or "").strip() for key in keys):
+        return True
+    try:
+        return int(getattr(args, "inline_count", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def infer_article_category_label(title: str, summary: str, body: str) -> str:
@@ -3368,6 +3379,178 @@ def infer_article_category_label(title: str, summary: str, body: str) -> str:
     if re.search(r"故事|经历|生活|关系|成长|焦虑|情绪", corpus):
         return "叙事观察"
     return "分析评论"
+
+
+def normalize_image_density_mode(value: str) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    if normalized in {"", "auto"}:
+        return "auto"
+    if normalized in {"rich", "per-section"}:
+        return "dense"
+    if normalized in {"none", "minimal", "balanced", "dense", "custom"}:
+        return normalized
+    return "auto"
+
+
+def image_density_range(mode: str, explicit_count: int = 0) -> tuple[int, int]:
+    normalized = normalize_image_density_mode(mode)
+    if normalized == "custom":
+        count = max(0, int(explicit_count or 0))
+        return count, count
+    if normalized == "none":
+        return 0, 0
+    if normalized == "minimal":
+        return 0, 1
+    if normalized == "balanced":
+        return 1, 2
+    if normalized == "dense":
+        return 2, 4
+    if explicit_count > 0:
+        count = max(0, int(explicit_count))
+        if count <= 1:
+            return 0, 1
+        if count == 2:
+            return 1, 2
+        return 2, 4
+    return 0, 2
+
+
+def resolve_inline_density_settings(
+    body: str,
+    explicit_count: int,
+    density_mode: str = "auto",
+    *,
+    article_strategy: dict[str, Any] | None = None,
+    sections: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_mode = normalize_image_density_mode(density_mode)
+    explicit = max(0, int(explicit_count or 0))
+    inline_min, inline_max = image_density_range(normalized_mode, explicit)
+    if normalized_mode == "custom":
+        return {
+            "mode": normalized_mode,
+            "target_inline_count": explicit,
+            "inline_range": (inline_min, inline_max),
+            "allow_section_reuse": False,
+        }
+    if normalized_mode == "none":
+        return {
+            "mode": normalized_mode,
+            "target_inline_count": 0,
+            "inline_range": (0, 0),
+            "allow_section_reuse": False,
+        }
+    if explicit > 0 and normalized_mode == "auto":
+        return {
+            "mode": normalized_mode,
+            "target_inline_count": explicit,
+            "inline_range": image_density_range(normalized_mode, explicit),
+            "allow_section_reuse": False,
+        }
+
+    clean_body = strip_image_directives(body)
+    char_count = cjk_len(re.sub(r"^#{1,6}\s+", "", clean_body, flags=re.M))
+    normalized_sections = sections
+    if normalized_sections is None:
+        _, normalized_sections = normalize_sections_for_images(body)
+    metrics = [
+        extract_section_metrics(section, index)
+        for index, section in enumerate(normalized_sections)
+        if not is_reference_heading(section.get("heading", ""))
+    ]
+    eligible_sections = [metric for metric in metrics if not (metric.get("image_directives") or {}).get("skip")]
+    structured_hits = sum(
+        1
+        for metric in eligible_sections
+        if metric.get("info_hits", 0) >= 2 or metric.get("list_count", 0) >= 2 or metric.get("char_count", 0) >= 900
+    )
+    article_strategy = article_strategy or {}
+    type_bias = article_strategy.get("type_bias") or {}
+    structured_article = bool(
+        structured_hits >= 2
+        or type_bias.get("流程图", 0) >= 0.25
+        or type_bias.get("对比图", 0) >= 0.22
+        or type_bias.get("信息图", 0) >= 0.25
+    )
+
+    if normalized_mode == "minimal":
+        target = 0 if char_count < 1100 and not structured_article else 1
+    elif normalized_mode == "balanced":
+        target = 1
+        if structured_article or char_count >= 1800:
+            target = 2
+    elif normalized_mode == "dense":
+        if char_count < 1500 and not structured_article:
+            target = 2
+        elif char_count < 3200:
+            target = 3
+        else:
+            target = 4
+    else:
+        if char_count < 1000:
+            target = 1 if structured_article else 0
+        elif char_count < 2200:
+            target = 2 if structured_article else 1
+        elif char_count < 3800:
+            target = 3 if structured_article else 2
+        else:
+            target = 4 if structured_article else 3
+
+    target = max(inline_min, min(inline_max, target))
+    available = len(eligible_sections)
+    if available <= 0:
+        target = 0
+    elif normalized_mode in {"minimal", "balanced", "auto"}:
+        target = min(target, available)
+    return {
+        "mode": normalized_mode,
+        "target_inline_count": target,
+        "inline_range": (inline_min, inline_max),
+        "allow_section_reuse": normalized_mode == "dense",
+    }
+
+
+def should_include_closing_image(
+    allow_mode: str,
+    *,
+    final_metric: dict[str, Any] | None,
+    closing_decision: dict[str, str],
+    article_strategy: dict[str, Any],
+    inline_count: int,
+) -> bool:
+    normalized = str(allow_mode or "").strip().lower()
+    if normalized == "on":
+        return True
+    if normalized == "off":
+        return False
+    if inline_count <= 0 and not final_metric:
+        return False
+    if closing_decision.get("type") in {"信息图", "对比图", "流程图"}:
+        return True
+    if final_metric and (final_metric.get("info_hits", 0) >= 1 or final_metric.get("list_count", 0) >= 1):
+        return True
+    type_bias = article_strategy.get("type_bias") or {}
+    return bool(type_bias.get("信息图", 0) >= 0.3 or type_bias.get("对比图", 0) >= 0.25)
+
+
+def infer_image_role(item: dict[str, Any], *, article_category: str = "", article_strategy: dict[str, Any] | None = None) -> tuple[str, str]:
+    article_strategy = article_strategy or {}
+    image_type = str(item.get("type") or "").strip()
+    insert_strategy = str(item.get("insert_strategy") or "").strip()
+    visual_route = str(article_strategy.get("visual_route") or "").strip()
+    if image_type == "封面图" or insert_strategy == "cover_only":
+        return "click", "封面图负责把读者先点进来。"
+    if insert_strategy == "section_end":
+        if image_type in {"信息图", "对比图", "流程图"} or visual_route == "conflict-alert":
+            return "share", "结尾结构图负责可转述、可转发的收束。"
+        return "remember", "结尾图负责把最后判断留在读者脑海里。"
+    if image_type in {"信息图", "对比图", "流程图"}:
+        return "explain", "结构图优先承担解释任务。"
+    if image_type == "分隔图":
+        return "remember", "分隔图负责节奏和记忆点。"
+    if any(keyword in article_category for keyword in ["分析", "教程", "案例"]):
+        return "explain", "正文图优先帮读者理解。"
+    return "remember", "正文图优先承担记忆锚点。"
 
 
 def _candidate_keywords(text: str) -> list[str]:
@@ -3411,10 +3594,26 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
     explicit_preset = getattr(args, "image_preset", None)
     selected_preset = explicit_preset or current.get("preset") or ""
     preset = IMAGE_STYLE_PRESETS.get(selected_preset, {})
-    density = getattr(args, "image_density", None) or current.get("density") or "balanced"
+    density_mode = normalize_image_density_mode(
+        getattr(args, "image_density", None)
+        or current.get("density_mode")
+        or current.get("density")
+        or "auto"
+    )
     layout_family = getattr(args, "image_layout_family", None) or current.get("layout_family") or ""
     text_policy = getattr(args, "image_text_policy", None) or current.get("text_policy") or ""
     label_language = getattr(args, "image_label_language", None) or current.get("label_language") or ""
+    allow_closing_image = str(
+        getattr(args, "allow_closing_image", None)
+        or current.get("allow_closing_image")
+        or "auto"
+    ).strip().lower() or "auto"
+    if allow_closing_image not in ALLOW_CLOSING_IMAGE_CHOICES:
+        allow_closing_image = "auto"
+    try:
+        inline_count = max(0, int(getattr(args, "inline_count", None) or current.get("inline_count") or 0))
+    except (TypeError, ValueError):
+        inline_count = max(0, int(current.get("inline_count") or 0))
 
     preset_cover = getattr(args, "image_preset_cover", None) or current.get("preset_cover") or ""
     preset_infographic = getattr(args, "image_preset_infographic", None) or current.get("preset_infographic") or ""
@@ -3430,7 +3629,10 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
             "type": current.get("type") or "",
             "mood": preset.get("mood", ""),
             "custom_visual_brief": preset.get("custom_visual_brief", ""),
-            "density": density,
+            "density": density_mode,
+            "density_mode": density_mode,
+            "inline_count": inline_count,
+            "allow_closing_image": allow_closing_image,
             "layout_family": layout_family,
             "text_policy": text_policy,
             "label_language": label_language,
@@ -3449,7 +3651,10 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
             "type": current.get("type") or "",
             "mood": current.get("mood") or preset.get("mood") or "",
             "custom_visual_brief": current.get("custom_visual_brief") or preset.get("custom_visual_brief") or "",
-            "density": density,
+            "density": density_mode,
+            "density_mode": density_mode,
+            "inline_count": inline_count,
+            "allow_closing_image": allow_closing_image,
             "layout_family": layout_family,
             "text_policy": text_policy,
             "label_language": label_language or current.get("label_language") or "",
@@ -3475,6 +3680,10 @@ def resolve_image_controls(existing: dict[str, Any] | None, args: Any, *, title:
         base["mood"] = mood
     if brief:
         base["custom_visual_brief"] = brief
+    base["density"] = normalize_image_density_mode(base.get("density_mode") or base.get("density") or "auto")
+    base["density_mode"] = base["density"]
+    base["inline_count"] = inline_count
+    base["allow_closing_image"] = allow_closing_image
     if base.get("preset"):
         base["preset_label"] = IMAGE_STYLE_PRESETS.get(base["preset"], {}).get("label", base.get("preset_label", ""))
     if base.get("preset_cover"):
@@ -3922,67 +4131,16 @@ def infer_closing_image_decision(final_metric: dict[str, Any] | None, article_st
 
 
 def estimate_inline_image_count(body: str, explicit_count: int, density: str = "balanced") -> int:
-    char_count = cjk_len(re.sub(r"^#{1,6}\s+", "", strip_image_directives(body), flags=re.M))
-    density = density if density in IMAGE_DENSITY_CHOICES else "balanced"
-    minimum_inline = 4 if char_count > 2000 else 0
-    if explicit_count and explicit_count > 0:
-        return max(explicit_count, minimum_inline)
-    if char_count < 1200:
-        base = 4
-    elif char_count < 2500:
-        base = 5
-    elif char_count < 4000:
-        base = 6
-    elif char_count < 5500:
-        base = 8
-    else:
-        base = 9
     _, sections = normalize_sections_for_images(body)
-    metrics = [
-        extract_section_metrics(section, index)
-        for index, section in enumerate(sections)
-        if not is_reference_heading(section.get("heading", ""))
-    ]
-    eligible_sections = [metric for metric in metrics if not (metric.get("image_directives") or {}).get("skip")]
-    special_count = 0
-    dense_count = 0
-    force_bonus = 0
     article_strategy = infer_article_visual_strategy("", extract_summary(body), body, "大众读者", {"density": density}, sections)
-    for index, metric in enumerate(metrics):
-        inferred = infer_section_image_type(metric, article_strategy=article_strategy, is_final=index == len(metrics) - 1)
-        if inferred in {"流程图", "对比图", "信息图"}:
-            special_count += 1
-        if metric.get("info_hits", 0) >= 2 or metric.get("list_count", 0) >= 2 or metric.get("char_count", 0) >= 900:
-            dense_count += 1
-        directives = metric.get("image_directives") or {}
-        if directives.get("force"):
-            force_bonus += max(1, directives.get("count", 1))
-        elif directives.get("count", 0) > 1:
-            force_bonus += directives.get("count", 0) - 1
-    if density == "minimal":
-        base = max(2, base - 2)
-        type_bonus = min(1, special_count // 3)
-        density_bonus = 0
-        section_bonus = 0
-        forced_bonus = min(1, force_bonus)
-        result = base + type_bonus + forced_bonus
-    elif density == "balanced":
-        base = max(3, base - 1)
-        type_bonus = min(1, special_count // 2)
-        density_bonus = 1 if dense_count >= 4 else 0
-        section_bonus = 0
-        forced_bonus = min(2, force_bonus)
-        result = base + type_bonus + density_bonus + forced_bonus
-    elif density == "per-section":
-        result = max(base, min(len(eligible_sections), base + 2))
-        result += min(1, force_bonus)
-    else:
-        type_bonus = min(2, special_count // 2)
-        density_bonus = 1 if dense_count >= 3 else 0
-        section_bonus = 1 if len(metrics) >= 6 else 0
-        forced_bonus = min(2, force_bonus)
-        result = base + type_bonus + density_bonus + section_bonus + forced_bonus
-    return max(result, minimum_inline)
+    settings = resolve_inline_density_settings(
+        body,
+        explicit_count,
+        density,
+        article_strategy=article_strategy,
+        sections=sections,
+    )
+    return int(settings.get("target_inline_count") or 0)
 
 
 def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> int:
@@ -4042,7 +4200,13 @@ def choose_section_block_index(section_metric: dict[str, Any], variant: int) -> 
     return int(scored[0][2])
 
 
-def select_sections_for_images(body: str, inline_limit: int, article_strategy: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def select_sections_for_images(
+    body: str,
+    inline_limit: int,
+    article_strategy: dict[str, Any] | None = None,
+    *,
+    allow_section_reuse: bool = False,
+) -> list[dict[str, Any]]:
     _, sections = normalize_sections_for_images(body)
     strategy = article_strategy or infer_article_visual_strategy("", extract_summary(body), body, "大众读者", {"density": "balanced"}, sections)
     metrics = []
@@ -4078,6 +4242,19 @@ def select_sections_for_images(body: str, inline_limit: int, article_strategy: d
     for slot in force_slots[:inline_limit]:
         slots.append(slot)
 
+    directive_metrics = [
+        metric
+        for metric in eligible_metrics
+        if str((metric.get("image_directives") or {}).get("type") or "").strip()
+    ]
+    for metric in directive_metrics:
+        if len(slots) >= inline_limit:
+            break
+        if metric["section_index"] in {slot["section_index"] for slot in slots}:
+            continue
+        slots.append({"section_index": metric["section_index"], "variant": 0})
+        selected_unique.add(metric["section_index"])
+
     if len(slots) < inline_limit and len(eligible_metrics) >= 3 and inline_limit >= 3:
         midpoint = max(1, len(eligible_metrics) // 2)
         first_half = eligible_metrics[:midpoint]
@@ -4105,7 +4282,7 @@ def select_sections_for_images(body: str, inline_limit: int, article_strategy: d
         slots.append({"section_index": metric["section_index"], "variant": 0})
         selected_unique.add(metric["section_index"])
 
-    if len(slots) < inline_limit:
+    if allow_section_reuse and len(slots) < inline_limit:
         for metric in sorted(eligible_metrics, key=lambda item: (item["section_weight"], item["char_count"], item["info_hits"]), reverse=True):
             if len(slots) >= inline_limit:
                 break
@@ -4169,7 +4346,8 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     controls["text_policy_overrides"] = strategy_text_policy
     controls["label_language"] = str(controls.get("label_language") or strategy_text_policy.get("label_language") or "zh-CN")
     if infer_visual_preset and not _has_explicit_image_controls(args):
-        controls["density"] = str(account_strategy.get("image_density") or controls.get("density") or "minimal")
+        controls["density_mode"] = normalize_image_density_mode(account_strategy.get("image_density") or controls.get("density_mode") or controls.get("density") or "auto")
+        controls["density"] = controls["density_mode"]
     manifest["image_controls"] = controls
     audience = manifest.get("audience") or "\u5927\u4f17\u8bfb\u8005"
     intro_blocks, sections = normalize_sections_for_images(body)
@@ -4193,17 +4371,40 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         if preferred_layout and effective_controls.get("layout_family") not in {"process", "comparison"}:
             effective_controls["layout_family"] = preferred_layout
     provider = image_provider_from_env(args.provider)
-    inline_limit = estimate_inline_image_count(body, args.inline_count, effective_controls.get("density", "balanced"))
+    density_settings = resolve_inline_density_settings(
+        body,
+        int(getattr(args, "inline_count", 0) or effective_controls.get("inline_count") or 0),
+        effective_controls.get("density_mode") or effective_controls.get("density") or "auto",
+        article_strategy=article_strategy,
+        sections=sections,
+    )
+    inline_limit = int(density_settings.get("target_inline_count") or 0)
     max_inline_images = int(account_strategy.get("max_inline_images") or 0) if isinstance(account_strategy, dict) else 0
     structured_bonus = 1 if any(keyword in f"{title}\n{summary}\n{body}" for keyword in ["对比", "流程", "复盘", "框架"]) else 0
-    if max_inline_images:
+    if max_inline_images and not _has_explicit_image_controls(args):
         inline_limit = min(inline_limit, max_inline_images + structured_bonus)
-    inline_sections = select_sections_for_images(body, inline_limit, article_strategy=article_strategy)
+    inline_min, inline_max = density_settings.get("inline_range") or image_density_range(effective_controls.get("density_mode") or effective_controls.get("density") or "auto")
+    inline_sections = select_sections_for_images(
+        body,
+        inline_limit,
+        article_strategy=article_strategy,
+        allow_section_reuse=bool(density_settings.get("allow_section_reuse")),
+    )
     intro_char_count = sum(cjk_len(block) for block in intro_blocks)
     content_sections = [section for section in sections if not is_reference_heading(section.get("heading", ""))]
     final_section = content_sections[-1] if content_sections else None
     final_metric = extract_section_metrics(final_section, sections.index(final_section)) if final_section else None
     closing_decision = infer_closing_image_decision(final_metric, article_strategy)
+    allow_closing_image = str(effective_controls.get("allow_closing_image") or "auto")
+    if (effective_controls.get("density_mode") or effective_controls.get("density")) == "none":
+        allow_closing_image = "off"
+    closing_enabled = should_include_closing_image(
+        allow_closing_image,
+        final_metric=final_metric,
+        closing_decision=closing_decision,
+        article_strategy=article_strategy,
+        inline_count=inline_limit,
+    )
     diagnostics = image_planning_diagnostics(sections, inline_sections, inline_limit)
 
     items: list[dict[str, Any]] = [
@@ -4225,25 +4426,28 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
             "style_reason": "封面图按整篇文章的自动视觉策略选择主视觉语言。",
             "text_policy": "none",
         },
-        {
-            "id": "closing-01",
-            "type": closing_decision["type"],
-            "target_section": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
-            "target_section_index": final_metric["section_index"] if final_metric else -1,
-            "insert_strategy": "section_end",
-            "placement_block_index": final_metric["paragraph_count"] if final_metric else 0,
-            "placement_reason": "\u5168\u6587\u6536\u675f\u578b\u914d\u56fe\uff0c\u653e\u5728\u6587\u672b\u5185\u5bb9\u6bb5\u843d\u4e4b\u540e\u7528\u4e8e\u6536\u675f\u5168\u6587",
-            "section_weight": round((final_metric["section_weight"] if final_metric else 0) + intro_char_count / 500, 2),
-            "alt": f"{title} {closing_decision['type']}",
-            "aspect_ratio": "3:4" if closing_decision["type"] == "信息图" else "16:9",
-            "section_heading": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
-            "section_excerpt": final_metric.get("excerpt", "") if final_metric else extract_summary(summary, 220),
-            "decision_source": closing_decision["decision_source"],
-            "type_reason": closing_decision["reason"],
-            "style_reason": "收束图沿用整篇自动视觉策略，并根据结尾章节是否结构化决定是否转为信息图。",
-            "text_policy": "short-zh" if closing_decision["type"] in {"信息图", "对比图", "流程图"} else "none",
-        },
     ]
+    if closing_enabled:
+        items.append(
+            {
+                "id": "closing-01",
+                "type": closing_decision["type"],
+                "target_section": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
+                "target_section_index": final_metric["section_index"] if final_metric else -1,
+                "insert_strategy": "section_end",
+                "placement_block_index": final_metric["paragraph_count"] if final_metric else 0,
+                "placement_reason": "\u5168\u6587\u6536\u675f\u578b\u914d\u56fe\uff0c\u653e\u5728\u6587\u672b\u5185\u5bb9\u6bb5\u843d\u4e4b\u540e\u7528\u4e8e\u6536\u675f\u5168\u6587",
+                "section_weight": round((final_metric["section_weight"] if final_metric else 0) + intro_char_count / 500, 2),
+                "alt": f"{title} {closing_decision['type']}",
+                "aspect_ratio": "3:4" if closing_decision["type"] == "信息图" else "16:9",
+                "section_heading": final_metric["heading"] if final_metric else "\u6587\u672b\u603b\u7ed3",
+                "section_excerpt": final_metric.get("excerpt", "") if final_metric else extract_summary(summary, 220),
+                "decision_source": closing_decision["decision_source"],
+                "type_reason": closing_decision["reason"],
+                "style_reason": "收束图沿用整篇自动视觉策略，并根据结尾章节是否结构化决定是否转为信息图。",
+                "text_policy": "short-zh" if closing_decision["type"] in {"信息图", "对比图", "流程图"} else "none",
+            }
+        )
     type_occurrence: dict[str, int] = {}
     for item in items:
         occurrence_index = type_occurrence.get(item["type"], 0)
@@ -4293,6 +4497,12 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         )
         type_occurrence[image_type] = occurrence_index + 1
 
+    article_category = infer_article_category_label(title, summary, body)
+    for item in items:
+        role, role_reason = infer_image_role(item, article_category=article_category, article_strategy=article_strategy)
+        item["role"] = role
+        item["role_reason"] = role_reason
+
     items = _enrich_plan_items(
         items,
         title=title,
@@ -4306,7 +4516,6 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     )
 
     decision_source = "explicit" if article_strategy.get("explicit_overrides") else "auto"
-    article_category = infer_article_category_label(title, summary, body)
     auto_reason = "；".join(article_strategy.get("decision_reasoning") or []) or f"按文章内容自动判定为 {article_category}。"
     plan = _build_plan_payload(
         title=title,
@@ -4321,6 +4530,9 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         user_controls=controls,
         article_strategy=article_strategy,
         items=items,
+        inline_range=(int(inline_min), int(inline_max)),
+        allow_closing_image=allow_closing_image,
+        closing_image_enabled=closing_enabled,
         cfg=_image_planning_config(),
     )
     article_category = plan["article_category"]
@@ -4335,6 +4547,9 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     manifest["image_prompt_dir"] = "prompts/images"
     manifest["image_decision_source"] = decision_source
     manifest["image_article_category"] = article_category
+    manifest["image_density_mode"] = effective_controls.get("density_mode") or effective_controls.get("density") or "auto"
+    manifest["image_inline_target"] = int(plan.get("requested_inline_count") or 0)
+    manifest["allow_closing_image"] = allow_closing_image
     save_manifest(workspace, manifest)
     safe_print_json(plan)
     return 0
@@ -5403,6 +5618,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan_images = subparsers.add_parser("plan-images", help="生成图片规划")
     plan_images.add_argument("--workspace", required=True)
     plan_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    plan_images.add_argument("--image-density", choices=IMAGE_DENSITY_CHOICES, default=None)
+    plan_images.add_argument("--allow-closing-image", choices=ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     plan_images.add_argument("--inline-count", type=int, default=0)
     plan_images.set_defaults(func=cmd_plan_images)
 
@@ -5453,6 +5670,8 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd = subparsers.add_parser("all", help="串联评分、配图、汇总、渲染、发布")
     all_cmd.add_argument("--workspace", required=True)
     all_cmd.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    all_cmd.add_argument("--image-density", choices=IMAGE_DENSITY_CHOICES, default=None)
+    all_cmd.add_argument("--allow-closing-image", choices=ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     all_cmd.add_argument("--inline-count", type=int, default=0)
     all_cmd.add_argument("--threshold", type=int)
     all_cmd.add_argument("--dry-run-images", action="store_true")

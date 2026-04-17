@@ -23,6 +23,9 @@ MANIFEST_STATUS_DEFAULTS = {
     "batch_uniqueness_status": "unknown",
     "state_consistency_status": "unknown",
     "acceptance_ready_status": "unknown",
+    "reader_gate_status": "unknown",
+    "visual_gate_status": "unknown",
+    "final_gate_status": "unknown",
 }
 
 ARTIFACT_DEFAULTS = {
@@ -42,6 +45,9 @@ ARTIFACT_DEFAULTS = {
     "content_fingerprint_path": "content-fingerprint.json",
     "layout_plan_path": "layout-plan.json",
     "acceptance_report_path": "acceptance-report.json",
+    "reader_gate_path": "reader_gate.json",
+    "visual_gate_path": "visual_gate.json",
+    "final_gate_path": "final_gate.json",
     "similarity_report_path": "similarity-report.json",
     "references_path": "references.json",
     "image_plan_path": "image-plan.json",
@@ -54,6 +60,7 @@ ARTIFACT_DEFAULTS = {
     "versions_manifest_path": "versions/manifest.json",
     "publish_result_path": "publish-result.json",
     "latest_draft_report_path": "latest-draft-report.json",
+    "performance_feedback_path": "performance-feedback.json",
 }
 
 workspace_path = legacy.workspace_path
@@ -64,6 +71,8 @@ relative_posix = legacy.relative_posix
 def ensure_manifest_schema(manifest: dict[str, Any], workspace: Path | None = None) -> dict[str, Any]:
     manifest = legacy.ensure_manifest_schema(manifest, workspace)
     if workspace is not None:
+        for name in ("drafts", "reviews", "scores", "images", "render", "publish", "feedback"):
+            (workspace / name).mkdir(parents=True, exist_ok=True)
         manifest["workspace"] = str(workspace.resolve())
     manifest.setdefault("artifact_contract_version", 2)
     for key, value in MANIFEST_STATUS_DEFAULTS.items():

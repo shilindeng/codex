@@ -44,6 +44,7 @@ def image_planning_diagnostics(sections: list[dict[str, Any]], inline_sections: 
     return {
         "skipped_sections": skipped_sections,
         "forced_sections": forced_sections,
+        "available_section_count": eligible_sections,
         "planning_shortfall_reason": " ".join(reasons).strip(),
     }
 
@@ -115,6 +116,9 @@ def build_plan_payload(
     user_controls: dict[str, Any],
     article_strategy: dict[str, Any],
     items: list[dict[str, Any]],
+    inline_range: tuple[int, int],
+    allow_closing_image: str,
+    closing_image_enabled: bool,
     cfg: ImagePlanConfig,
 ) -> dict[str, Any]:
     article_category = cfg.infer_article_category_label(title, "", body)
@@ -128,11 +132,15 @@ def build_plan_payload(
         "article_char_count": cfg.cjk_len(re.sub(r"^#{1,6}\s+", "", body, flags=re.M)),
         "planned_inline_count": len(inline_sections),
         "requested_inline_count": requested_inline_count,
-        "density_mode": effective_controls.get("density", "balanced"),
+        "density_mode": effective_controls.get("density_mode") or effective_controls.get("density", "auto"),
         "layout_family": effective_controls.get("layout_family", ""),
         "planning_shortfall_reason": diagnostics["planning_shortfall_reason"],
         "skipped_sections": diagnostics["skipped_sections"],
         "forced_sections": diagnostics["forced_sections"],
+        "available_section_count": diagnostics.get("available_section_count", 0),
+        "inline_density_range": {"min": int(inline_range[0]), "max": int(inline_range[1])},
+        "closing_image_rule": {"mode": allow_closing_image, "enabled": bool(closing_image_enabled)},
+        "cover_excluded_from_density": True,
         "image_controls": effective_controls,
         "user_image_controls": user_controls,
         "article_visual_strategy": {

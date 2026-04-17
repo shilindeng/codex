@@ -25,6 +25,7 @@ def make_args(workspace: Path, **overrides):
         "image_preset_infographic": None,
         "image_preset_inline": None,
         "image_density": None,
+        "allow_closing_image": None,
         "image_layout_family": None,
         "image_theme": None,
         "image_style": None,
@@ -58,7 +59,8 @@ class ImagePlanningTests(unittest.TestCase):
             },
         )()
         controls = legacy.resolve_image_controls({}, args)
-        self.assertEqual(controls.get("density"), "balanced")
+        self.assertEqual(controls.get("density"), "auto")
+        self.assertEqual(controls.get("density_mode"), "auto")
         self.assertEqual(controls.get("style_mode"), "")
         self.assertEqual(controls.get("preset"), "")
         self.assertEqual(controls.get("layout_family"), "")
@@ -327,6 +329,54 @@ summary: 这是一次关于 AI 产品判断、竞争节奏与用户心智的分�
             self.assertEqual(cover_item["source_meta"].get("fallback_from"), "gemini-web")
             self.assertIn("certificate", cover_item["source_meta"].get("fallback_reason", ""))
             self.assertEqual(inline_item["provider"], "openai-image")
+
+    def test_none_density_keeps_cover_only(self):
+        article = """## 一、正文
+
+这一段是正常正文。
+
+## 二、结尾
+
+最后再收一下。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.md").write_text(article, encoding="utf-8")
+            legacy.cmd_plan_images(make_args(workspace, image_density="none"))
+            plan = json.loads((workspace / "image-plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan.get("planned_inline_count"), 0)
+            self.assertEqual([item["id"] for item in plan["items"]], ["cover-01"])
+            self.assertFalse(plan.get("closing_image_rule", {}).get("enabled"))
+
+    def test_custom_density_uses_inline_count_and_records_shortfall(self):
+        article = """## 一、正文
+
+只有这一节能配图。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.md").write_text(article, encoding="utf-8")
+            legacy.cmd_plan_images(make_args(workspace, image_density="custom", inline_count=3))
+            plan = json.loads((workspace / "image-plan.json").read_text(encoding="utf-8"))
+            self.assertEqual(plan.get("requested_inline_count"), 3)
+            self.assertEqual(plan.get("inline_density_range"), {"min": 3, "max": 3})
+            self.assertLess(plan.get("planned_inline_count"), 3)
+            self.assertTrue(plan.get("planning_shortfall_reason"))
+
+    def test_allow_closing_image_off_skips_closing_item(self):
+        article = """## 一、背景
+
+这里先讲背景。
+
+## 二、结尾清单
+
+1. 第一条
+2. 第二条"""
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.md").write_text(article, encoding="utf-8")
+            legacy.cmd_plan_images(make_args(workspace, inline_count=1, allow_closing_image="off"))
+            plan = json.loads((workspace / "image-plan.json").read_text(encoding="utf-8"))
+            self.assertFalse(any(item["id"].startswith("closing-") for item in plan["items"]))
+            self.assertFalse(plan.get("closing_image_rule", {}).get("enabled"))
 
     def test_assemble_skips_local_fallback_card_images(self):
         with tempfile.TemporaryDirectory() as tmp:
