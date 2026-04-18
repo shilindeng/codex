@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.analysis_11d import build_analysis_11d, score_analysis_11d, summarize_analysis_11d
 from core.ai_fingerprint import detect_ai_fingerprints, summarize_ai_fingerprints
 from core.content_fingerprint import build_article_fingerprint, load_batch_article_items, summarize_batch_collisions
 from core.editorial_strategy import (
@@ -883,6 +884,27 @@ def _pick_diverse_mode(
     return ordered[0]
 
 
+def _opening_mode_from_strategy(strategy: dict[str, Any]) -> str:
+    route = str(((strategy or {}).get("opening_strategy") or {}).get("route") or "").strip()
+    mapping = {
+        "scene-cut": "场景切口",
+        "cost-upfront": "代价先行切口",
+        "news-hook": "新闻切口",
+        "reader-scene": "读者代入切口",
+    }
+    return mapping.get(route, "")
+
+
+def _ending_mode_from_strategy(strategy: dict[str, Any]) -> str:
+    shape = str(((strategy or {}).get("ending_strategy") or {}).get("shape") or "").strip()
+    mapping = {
+        "judgment_card": "可转述判断",
+        "risk_warning": "风险提醒",
+        "reusable_question": "站队式问题",
+    }
+    return mapping.get(shape, "")
+
+
 def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload, dict):
         output = dict(payload)
@@ -932,6 +954,7 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
             "article_archetype": output["viral_blueprint"].get("article_archetype") or profile["article_archetype"],
         },
     )
+    generation_strategy = dict(context.get("generation_strategy") or {})
     blocked_opening_patterns = list((output.get("editorial_blueprint") or {}).get("blocked_opening_patterns") or [])
     blocked_ending_patterns = list((output.get("editorial_blueprint") or {}).get("blocked_ending_patterns") or [])
     preferred_opening_modes = _normalize_list((output.get("editorial_blueprint") or {}).get("preferred_opening_modes"))
@@ -952,6 +975,22 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
         blocked_patterns=blocked_ending_patterns,
         kind="ending",
     )
+    strategy_opening = _opening_mode_from_strategy(generation_strategy)
+    if strategy_opening:
+        output["opening_mode"] = _pick_diverse_mode(
+            strategy_opening,
+            opening_candidates or [strategy_opening],
+            blocked_patterns=blocked_opening_patterns,
+            kind="opening",
+        )
+    strategy_ending = _ending_mode_from_strategy(generation_strategy)
+    if strategy_ending:
+        output["ending_mode"] = _pick_diverse_mode(
+            strategy_ending,
+            ending_candidates or [strategy_ending],
+            blocked_patterns=blocked_ending_patterns,
+            kind="ending",
+        )
     output.setdefault("voice_guardrails", output["viral_blueprint"].get("voice_guardrails") or profile.get("voice_guardrails") or [])
     output.setdefault("avoid_patterns", output["viral_blueprint"].get("avoid_patterns") or profile.get("avoid_patterns") or [])
     output.setdefault("interaction_formula", output["viral_blueprint"].get("interaction_formula") or profile.get("interaction_formula") or "")
@@ -984,6 +1023,12 @@ def normalize_outline_payload(payload: Any, context: dict[str, Any]) -> dict[str
             audience=str(context.get("audience") or "公众号读者"),
         )["takeaway_strategy"],
     )
+    if generation_strategy:
+        ending_strategy = dict(generation_strategy.get("ending_strategy") or {})
+        if ending_strategy.get("allowed_shapes"):
+            output["takeaway_strategy"]["allowed_shapes"] = list(ending_strategy.get("allowed_shapes") or [])
+        if ending_strategy.get("heading_hint"):
+            output["takeaway_strategy"]["heading_hint"] = str(ending_strategy.get("heading_hint") or "")
     output["takeaway_scaffold"] = build_takeaway_scaffold(output["takeaway_strategy"])
     output.setdefault(
         "must_have_elements",
@@ -2201,6 +2246,34 @@ def build_heuristic_review(
         ]
     )
     editorial_review = _heuristic_editorial_review(title, body, {"viral_analysis": interaction_design}, template_findings, similarity_findings, citation_findings)
+    analysis_11d = build_analysis_11d(
+        title=title,
+        body=body,
+        summary=summary,
+        analysis={
+            "core_viewpoint": core_viewpoint,
+            "secondary_viewpoints": secondary_viewpoints[:4],
+            "persuasion_strategies": _dedupe(_normalize_list(blueprint.get("persuasion_strategies")) + argument_modes)[:5],
+            "emotion_triggers": _dedupe(
+                _normalize_list(blueprint.get("emotion_triggers"))
+                + ["怕掉队" if pain_point_sentences else "", "想找到抓手" if emotion_value_sentences else ""]
+            )[:5],
+            "signature_lines": signature_lines[:6],
+            "emotion_curve": emotion_curve,
+            "emotion_layers": emotion_layers,
+            "argument_diversity": argument_modes[:6],
+            "perspective_shifts": perspective_shifts[:5],
+            "style_traits": style_traits[:6],
+            "comment_triggers": interaction_design["comment_triggers"],
+            "share_triggers": interaction_design["share_triggers"],
+            "save_triggers": interaction_design["social_currency_points"],
+            "controversy_anchors": interaction_design["controversy_anchors"],
+            "interaction_prompts": interaction_design["comment_triggers"],
+        },
+        depth=depth_signals,
+        material_signals=material_signals,
+        humanness_signals=humanness_signals,
+    )
     return {
         "summary": summary,
         "findings": strengths + issues,
@@ -2242,6 +2315,7 @@ def build_heuristic_review(
         "citation_findings": citation_findings,
         "interaction_findings": interaction_design,
         "material_signals": material_signals,
+        "analysis_11d": analysis_11d,
         "three_layer_diagnostics": three_layer_diagnostics,
         "depth_signals": depth_signals,
         "humanness_signals": humanness_signals,
@@ -2414,6 +2488,15 @@ def normalize_review_payload(
                 merged_layers[key] = {**dict(merged_layers.get(key) or {}), **dict(three_layer.get(key) or {})}
         if merged_layers:
             result["three_layer_diagnostics"] = merged_layers
+    result["analysis_11d"] = build_analysis_11d(
+        title=title,
+        body=body,
+        summary=str(manifest.get("summary") or ""),
+        analysis=result.get("viral_analysis") or {},
+        depth=result.get("depth_signals") or {},
+        material_signals=result.get("material_signals") or {},
+        humanness_signals=result.get("humanness_signals") or {},
+    )
     result["review_source"] = review_source
     result["source"] = review_source
     result["confidence"] = float(payload.get("confidence") or result.get("confidence") or 0.72)
@@ -2814,7 +2897,7 @@ def _evidence_readiness(manifest: dict[str, Any], body: str, review: dict[str, A
 def _image_fit_expectation(title: str, body: str, manifest: dict[str, Any]) -> dict[str, Any]:
     strategy = manifest.get("account_strategy") or {}
     blocked = [str(item).strip() for item in (strategy.get("blocked_image_presets") or []) if str(item).strip()]
-    density = str(strategy.get("image_density") or "minimal").strip() or "minimal"
+    density = str(strategy.get("image_density") or "balanced").strip() or "balanced"
     max_inline = int(strategy.get("max_inline_images") or 2)
     pressure_keywords = ["成本", "岗位", "风险", "算力", "危机", "封杀", "银行", "租赁费", "H100"]
     pressure = any(keyword in f"{title}\n{body}" for keyword in pressure_keywords)
@@ -3054,6 +3137,15 @@ def build_score_report(
     evidence_readiness = _evidence_readiness(manifest, body, review | {"depth_signals": depth_signals})
     image_fit_expectation = _image_fit_expectation(title, body, manifest)
     material_signals = _material_signal_summary(body, manifest, review | {"depth_signals": depth_signals, "citation_findings": citation_findings})
+    analysis_11d = dict(review.get("analysis_11d") or {}) or build_analysis_11d(
+        title=title,
+        body=body,
+        summary=summary_text,
+        analysis=review.get("viral_analysis") or {},
+        depth=depth_signals,
+        material_signals=material_signals,
+        humanness_signals=humanness_signals,
+    )
     template_penalty_hits = sum(max(1, min(2, int(item.get("count") or 1))) for item in template_findings) + len(
         similarity_findings.get("repeated_phrases") or []
     )
@@ -3206,6 +3298,8 @@ def build_score_report(
             6,
         )
     )
+    dimension_11d_scores = score_analysis_11d(analysis_11d)
+    dimension_11d_summary = summarize_analysis_11d(analysis_11d, dimension_11d_scores)
     breakdown = [
         _score_item("标题与首屏打开欲", opening_hook_score, "先把人带进问题，再谈后面的爆点。"),
         _score_item("核心判断与新鲜度", judgment_novelty_score, "爆款稿要有明确判断，而且不是旧话新说。"),
@@ -3393,6 +3487,9 @@ def build_score_report(
         "mandatory_revisions": mandatory_revisions[:14],
         "suggestions": suggestions,
         "candidate_quotes": [item["text"] for item in (review.get("viral_analysis", {}).get("signature_lines") or [])[:6]],
+        "analysis_11d": analysis_11d,
+        "dimension_11d_scores": dimension_11d_scores,
+        "dimension_11d_summary": dimension_11d_summary,
         "quality_gates": quality_gates,
         "three_layer_diagnostics": three_layer_diagnostics,
         "metadata_integrity": metadata_integrity,

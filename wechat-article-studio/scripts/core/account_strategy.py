@@ -40,7 +40,7 @@ DEFAULT_ACCOUNT_STRATEGY: dict[str, Any] = {
     "min_sources": 2,
     "min_evidence_items": 1,
     "require_evidence_for_archetypes": ["commentary", "case-study", "comparison", "narrative"],
-    "image_density": "minimal",
+    "image_density": "balanced",
     "max_inline_images": 2,
     "image_layout_family": "editorial",
     "preferred_image_presets": {

@@ -131,6 +131,38 @@ class GenerationGuardrailTests(unittest.TestCase):
             self.assertTrue((workspace / "generation-preflight.json").exists())
             self.assertTrue((workspace / "generation-preflight.md").exists())
 
+    def test_generation_preflight_detects_same_batch_structure_collisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_root = Path(tmp)
+            for name in ["20260418-01-a", "20260418-02-b"]:
+                peer = jobs_root / name
+                peer.mkdir(parents=True, exist_ok=True)
+                (peer / "article.md").write_text(
+                    "---\ntitle: 测试标题\nsummary: 摘要\n---\n\n那天会议室里，大家第一次认真讨论这个问题。\n\n## 带走这张判断卡\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n| C | D |\n| --- | --- |\n| 3 | 4 |",
+                    encoding="utf-8",
+                )
+            current = jobs_root / "20260418-03-c"
+            current.mkdir(parents=True, exist_ok=True)
+            manifest = {"workspace": str(current), "audience": "大众读者", "direction": "", "source_urls": []}
+            body = "\n\n".join(
+                [
+                    "那天会议室里，大家第一次认真讨论这个问题。",
+                    "真正的问题不是工具，而是顺序。",
+                    "## 带走这张判断卡",
+                    "| A | B |",
+                    "| --- | --- |",
+                    "| 1 | 2 |",
+                    "",
+                    "| C | D |",
+                    "| --- | --- |",
+                    "| 3 | 4 |",
+                ]
+            )
+            report = build_generation_preflight_report("真正被改写的是顺序", body, manifest, {})
+            self.assertTrue(report.get("batch_constraints"))
+            self.assertTrue(any("同批次" in item for item in report.get("missing_elements") or []))
+            self.assertTrue(any("标题还在用" in item for item in report.get("missing_elements") or []))
+
 
 if __name__ == "__main__":
     unittest.main()

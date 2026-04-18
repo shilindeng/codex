@@ -101,6 +101,7 @@ class AcceptanceReportTests(unittest.TestCase):
             self.assertTrue(payload["gates"]["score_ready"])
             self.assertTrue(payload["gates"]["render_ready"])
             self.assertTrue(payload.get("body_signature"))
+            self.assertIn("dimension_11d_summary", payload)
             self.assertEqual(payload.get("schema_version"), "2026-04-v3")
 
     def test_acceptance_report_fails_when_reference_cards_not_rendered(self):

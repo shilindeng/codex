@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import legacy_studio as legacy
+from core.analysis_11d import build_analysis_11d, score_analysis_11d, summarize_analysis_11d
 from core.content_fingerprint import build_article_fingerprint, load_batch_article_items, summarize_batch_collisions, summarize_collisions
 from core.quality_checks import discussion_trigger_present, lead_paragraph_count, metadata_integrity_report
 from core.reader_gates import abnormal_text_report, first_screen_signal_report, image_plan_gate_report
@@ -139,6 +140,23 @@ def build_acceptance_report(
             topic=str(manifest.get("topic") or title),
             audience=str(manifest.get("audience") or "大众读者"),
         )
+    )
+    analysis_11d = (
+        review_report.get("analysis_11d")
+        or score_report.get("analysis_11d")
+        or build_analysis_11d(
+            title=title,
+            body=body,
+            summary=summary,
+            analysis=(review_report.get("viral_analysis") or score_report.get("viral_analysis") or {}),
+            depth=score_report.get("depth_signals") or review_report.get("depth_signals") or {},
+            material_signals=score_report.get("material_signals") or review_report.get("material_signals") or {},
+            humanness_signals=score_report.get("humanness_signals") or review_report.get("humanness_signals") or {},
+        )
+    )
+    dimension_11d_summary = (
+        score_report.get("dimension_11d_summary")
+        or summarize_analysis_11d(analysis_11d, score_report.get("dimension_11d_scores") or score_analysis_11d(analysis_11d))
     )
     publication_text = abnormal_text_report(
         str(publication_meta.get("title") or title),
@@ -337,6 +355,8 @@ def build_acceptance_report(
         "publication_text": publication_text,
         "rendered_text_integrity_passed": rendered_text_integrity_passed,
         "image_plan_report": image_plan_report,
+        "analysis_11d": analysis_11d,
+        "dimension_11d_summary": dimension_11d_summary,
         "reader_gate": reader_gate,
         "visual_gate": visual_gate,
         "content_fingerprint": fingerprint,

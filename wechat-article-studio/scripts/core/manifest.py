@@ -42,12 +42,14 @@ ARTIFACT_DEFAULTS = {
     "title_decision_report_path": "title-decision-report.json",
     "review_report_path": "review-report.json",
     "score_report_path": "score-report.json",
+    "report_11d_path": "report-11d.json",
     "content_fingerprint_path": "content-fingerprint.json",
     "layout_plan_path": "layout-plan.json",
     "acceptance_report_path": "acceptance-report.json",
     "reader_gate_path": "reader_gate.json",
     "visual_gate_path": "visual_gate.json",
     "final_gate_path": "final_gate.json",
+    "batch_guidance_path": "batch-guidance.json",
     "similarity_report_path": "similarity-report.json",
     "references_path": "references.json",
     "image_plan_path": "image-plan.json",
@@ -61,6 +63,7 @@ ARTIFACT_DEFAULTS = {
     "publish_result_path": "publish-result.json",
     "latest_draft_report_path": "latest-draft-report.json",
     "performance_feedback_path": "performance-feedback.json",
+    "batch_review_path": "batch-review.json",
 }
 
 workspace_path = legacy.workspace_path

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,13 @@ from core.quality_checks import workspace_batch_key
 
 def _normalize_key(value: str) -> str:
     return str(value or "").strip().lower().replace("_", "-")
+
+
+def _is_single_article_batch_workspace(path: Path, batch_key: str) -> bool:
+    name = path.name
+    if not name.startswith(f"{batch_key}-"):
+        return False
+    return "hot-topics" not in name.lower()
 
 
 def image_plan_signature(plan: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +50,8 @@ def load_batch_image_plans(current_workspace: Path) -> list[dict[str, Any]]:
         if not path.is_dir() or path.resolve() == current_workspace.resolve():
             continue
         if workspace_batch_key(path) != batch_key:
+            continue
+        if not _is_single_article_batch_workspace(path, batch_key):
             continue
         plan_path = path / "image-plan.json"
         if not plan_path.exists():

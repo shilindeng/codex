@@ -30,6 +30,7 @@ TITLE_SCORE_THRESHOLD = 68
 TITLE_LENGTH_TARGET = (24, 33)
 TITLE_LENGTH_HARD_MAX = 36
 TITLE_LENGTH_HIGH_RISK = 40
+TITLE_TAIL_TEMPLATE_RE = re.compile(r"(真正|最先|从今天开始|被改写的是)")
 ANSWER_COMPLETE_TITLE_PATTERNS = (
     r"：.*不是.*而是.*",
     r"先要补的不是",
@@ -296,6 +297,7 @@ def evaluate_title_open_rate(
     topic_tokens = _title_tokens(f"{topic} {angle}")
     overlap = _jaccard(token_set, topic_tokens) if topic_tokens else 0.0
     pattern_key = title_template_key(title)
+    title_tail_template = bool(TITLE_TAIL_TEMPLATE_RE.search(title))
     repeat_penalty = 0
     if title in recent_titles:
         repeat_penalty += 12
@@ -393,12 +395,16 @@ def evaluate_title_open_rate(
         trust_score -= 2.0
     trust_score -= abstract_tail * 1.2
     trust_score -= answer_complete_title_penalty * 0.8
+    if title_tail_template:
+        trust_score -= 1.4
     if research.get("sources") or research.get("evidence_items"):
         trust_score += 0.8
     dimensions["可信度"] = round(max(1.0, min(trust_score, 10.0)), 2)
     freshness = 10.0 - min(7.0, repeat_penalty / 2.2 + overlap * 5.0)
     if pattern_key in {"why-think-clear", "danger-not-but", "not-but"}:
         freshness -= 1.8
+    if title_tail_template:
+        freshness -= 1.2
     dimensions["新鲜度"] = round(max(1.0, min(freshness, 10.0)), 2)
 
     weighted_total = 0.0

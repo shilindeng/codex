@@ -29,6 +29,7 @@ from core.artifacts import (
 )
 from core.acceptance import build_acceptance_report, markdown_acceptance_report
 from core.account_strategy import load_account_strategy, research_requirements_status
+from core.analysis_11d import build_analysis_11d, build_analysis_11d_report_payload, list_batch_workspaces, markdown_analysis_11d_report, score_analysis_11d
 from core.ai_fingerprint import summarize_ai_fingerprints
 from core.author_memory import (
     append_lesson_payload,
@@ -69,6 +70,7 @@ from core.viral_pipeline import (
     write_source_corpus_artifacts,
 )
 from core.editorial_anchor import build_editorial_anchor_plan, write_editorial_anchor_artifacts
+from core.generation_strategy import build_generation_strategy, ensure_batch_guidance
 from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
 from core.images import cmd_plan_images as legacy_plan_images
@@ -85,18 +87,22 @@ from core.pipeline_readiness import (
     score_dimension_value as readiness_score_dimension_value,
 )
 from core.quality_gates import build_final_gate, build_reader_gate, build_visual_gate, collect_gate_publish_blockers
+from core.batch_review import build_batch_review_payload, markdown_batch_review
 from core.publication import (
     apply_reference_policy as publication_apply_reference_policy,
     build_references_payload as publication_build_references_payload,
     normalize_publication_body as publication_normalize_publication_body,
 )
 from core.publication_cleanup import expand_compact_markdown_lists, strip_ai_label_phrases
-from core.quality_checks import build_article_summary, metadata_integrity_report, workspace_batch_key
+from core.quality_checks import build_article_summary, metadata_integrity_report, split_markdown_paragraphs, workspace_batch_key
 from core.quality_checks import cost_signal_present, discussion_trigger_present, lead_paragraph_count
 from core.editorial_strategy import (
     generate_diverse_title_variants,
+    heading_pattern_key,
     normalize_editorial_blueprint,
+    opening_pattern_key,
     summarize_recent_corpus,
+    title_template_key,
 )
 from core.render import cmd_render as legacy_render, prepare_publication_artifacts as render_prepare_publication_artifacts
 from core.rewrite import generate_revision_candidate
@@ -930,6 +936,64 @@ def cmd_final_gate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report_11d(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace)
+    article_path = workspace / str(manifest.get("article_path") or "article.md")
+    if not article_path.exists():
+        raise SystemExit(f"找不到文章文件：{article_path}")
+    raw = read_text(article_path)
+    meta, body = split_frontmatter(raw)
+    title = str(meta.get("title") or manifest.get("selected_title") or manifest.get("topic") or "未命名文章").strip()
+    summary = str(meta.get("summary") or manifest.get("summary") or extract_summary(body)).strip()
+    review_report = read_json(workspace / "review-report.json", default={}) or {}
+    score_report = read_json(workspace / "score-report.json", default={}) or {}
+    analysis_11d = (
+        review_report.get("analysis_11d")
+        or score_report.get("analysis_11d")
+        or build_analysis_11d(
+            title=title,
+            body=body,
+            summary=summary,
+            analysis=(review_report.get("viral_analysis") or score_report.get("viral_analysis") or {}),
+            depth=review_report.get("depth_signals") or score_report.get("depth_signals") or {},
+            material_signals=review_report.get("material_signals") or score_report.get("material_signals") or {},
+            humanness_signals=review_report.get("humanness_signals") or score_report.get("humanness_signals") or {},
+        )
+    )
+    payload = build_analysis_11d_report_payload(
+        title=title,
+        analysis_11d=analysis_11d,
+        scores=score_report.get("dimension_11d_scores") or [],
+    )
+    if not payload.get("dimension_11d_scores"):
+        payload = build_analysis_11d_report_payload(
+            title=title,
+            analysis_11d=analysis_11d,
+            scores=score_analysis_11d(analysis_11d),
+        )
+    write_json(workspace / "report-11d.json", payload)
+    write_text(workspace / "report-11d.md", markdown_analysis_11d_report(payload))
+    manifest["report_11d_path"] = "report-11d.json"
+    save_manifest(workspace, manifest)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_review_batch(args: argparse.Namespace) -> int:
+    jobs_root = Path(str(args.jobs_root or "")).expanduser().resolve()
+    if not jobs_root.exists():
+        raise SystemExit(f"找不到批量目录：{jobs_root}")
+    batch_key = str(args.batch_key or "").strip()
+    if not batch_key:
+        raise SystemExit("review-batch 需要传入 --batch-key。")
+    payload = build_batch_review_payload(jobs_root, batch_key)
+    write_json(jobs_root / "batch-review.json", payload)
+    write_text(jobs_root / "batch-review.md", markdown_batch_review(payload))
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_learn_performance(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace)
@@ -1443,6 +1507,78 @@ def _comparison_signal_count(body: str) -> int:
     return len(re.findall(r"(对比|相比之下|一边[^。！？!?；;\n]{0,18}一边|差别在于|差异在于|更像[^。！？!?；;\n]{0,18}不是)", body or ""))
 
 
+def _table_count(body: str) -> int:
+    return len(re.findall(r"(?m)^\|.+\|\s*$", body or "")) // 2
+
+
+def _takeaway_heading_style(body: str) -> str:
+    headings = [str(item.get("text") or "").strip() for item in legacy.extract_headings(body) if int(item.get("level") or 0) == 2]
+    if not headings:
+        return "generic"
+    last_heading = headings[-1]
+    if re.search(r"^带走这(?:张|条|句|套)", last_heading):
+        return "carry-away"
+    if any(keyword in last_heading for keyword in ["判断卡", "检查表", "清单"]):
+        return "judgment-card"
+    if last_heading.endswith("？") or last_heading.endswith("?"):
+        return "question-close"
+    return "generic"
+
+
+def _batch_generation_constraints(title: str, body: str, manifest: dict[str, Any]) -> list[str]:
+    workspace_value = str(manifest.get("workspace") or "").strip()
+    if not workspace_value:
+        return []
+    current_workspace = Path(workspace_value)
+    batch_key = workspace_batch_key(current_workspace)
+    if not batch_key:
+        return []
+    peers = [path for path in list_batch_workspaces(current_workspace.parent, batch_key) if path.resolve() != current_workspace.resolve()]
+    if len(peers) + 1 < 3:
+        return []
+    paragraphs = split_markdown_paragraphs(body)
+    current_opening = opening_pattern_key(paragraphs[0]) if paragraphs else "none"
+    current_title_template = title_template_key(title)
+    current_takeaway_style = _takeaway_heading_style(body)
+    current_heading_keys = [heading_pattern_key(str(item.get("text") or "")) for item in legacy.extract_headings(body)[:6]]
+    current_heading_signature = "|".join(item for item in current_heading_keys if item not in {"", "none", "generic"}) or "generic"
+    current_table_count = _table_count(body)
+    opening_hits = 0
+    title_hits = 0
+    takeaway_hits = 0
+    heading_hits = 0
+    double_table_hits = 0
+    for peer in peers:
+        raw = read_text(peer / "article.md")
+        meta, peer_body = split_frontmatter(raw)
+        peer_title = str(meta.get("title") or peer.name).strip()
+        peer_paragraphs = split_markdown_paragraphs(peer_body)
+        if current_opening not in {"none", "generic"} and peer_paragraphs and opening_pattern_key(peer_paragraphs[0]) == current_opening:
+            opening_hits += 1
+        if current_title_template not in {"", "generic"} and title_template_key(peer_title) == current_title_template:
+            title_hits += 1
+        if current_takeaway_style == "carry-away" and _takeaway_heading_style(peer_body) == "carry-away":
+            takeaway_hits += 1
+        peer_heading_keys = [heading_pattern_key(str(item.get("text") or "")) for item in legacy.extract_headings(peer_body)[:6]]
+        peer_heading_signature = "|".join(item for item in peer_heading_keys if item not in {"", "none", "generic"}) or "generic"
+        if current_heading_signature != "generic" and peer_heading_signature == current_heading_signature:
+            heading_hits += 1
+        if current_table_count >= 2 and _table_count(peer_body) >= 2:
+            double_table_hits += 1
+    constraints: list[str] = []
+    if opening_hits >= 1:
+        constraints.append("同批次稿件已经重复这种开头路线，需要换一种进入方式。")
+    if title_hits >= 1:
+        constraints.append("同批次稿件已经出现这类标题模板，需要换一种标题句法。")
+    if takeaway_hits >= 1:
+        constraints.append("同批次稿件不要再用“带走这张/这条”式结尾标题。")
+    if heading_hits >= 1:
+        constraints.append("同批次稿件的小标题骨架已经太像，需要换一种结构推进。")
+    if double_table_hits >= 1:
+        constraints.append("同批次已经有其他稿件用了 2 张表，当前稿件应压回到 1 张。")
+    return constraints
+
+
 def build_generation_preflight_report(
     title: str,
     body: str,
@@ -1463,6 +1599,10 @@ def build_generation_preflight_report(
     lead_paras = lead_paragraph_count(body)
     has_cost_signal = cost_signal_present(body)
     has_discussion_trigger = discussion_trigger_present(body)
+    batch_constraints = _batch_generation_constraints(title, body, manifest)
+    title_tail_template = bool(re.search(r"(真正|最先|从今天开始|被改写的是)", title or ""))
+    not_but_count = len(re.findall(r"不是.{1,24}而是.{1,24}", body or ""))
+    explainer_connector_count = sum((body or "").count(marker) for marker in ["首先", "其次", "最后", "换句话说", "说白了", "更重要的是", "需要注意的是"])
     missing_elements: list[str] = []
     if depth.get("scene_paragraph_count", 0) < 1:
         missing_elements.append("开头缺少具体场景、动作或瞬间。")
@@ -1484,6 +1624,13 @@ def build_generation_preflight_report(
         missing_elements.append("正文缺少现实代价，读者还感受不到后果。")
     if not has_discussion_trigger:
         missing_elements.append("正文缺少可讨论的分歧点，评论和转发入口还不够。")
+    missing_elements.extend(batch_constraints)
+    if title_tail_template:
+        missing_elements.append("标题还在用“真正/最先/从今天开始/被改写的是”这类判断句尾巴。")
+    if not_but_count >= 3:
+        missing_elements.append("正文“不是……而是……”句式过密，模板味太重。")
+    if explainer_connector_count >= 4:
+        missing_elements.append("解释型连接词偏密，读起来像说明书。")
     if section_enhancements:
         if depth.get("evidence_paragraph_count", 0) < 1 and any(item.get("support_quotes") or item.get("support_sources") for item in section_enhancements):
             missing_elements.append("写前增强已经准备了来源材料，但正文还没把证据真正写进去。")
@@ -1574,6 +1721,13 @@ def build_generation_preflight_report(
         + [f"删掉作者明确避开的句式：{item.get('pattern')}" for item in ai_smell if str(item.get("type") or "") in {"author_phrase", "author_starter"}]
         + list(ai_fingerprint_summary.get("rewrite_hints") or [])
     )
+    rewrite_focus = _dedupe_generation_lines(
+        rewrite_focus
+        + (["同批次强制换开头路线、小标题骨架或结尾动作，别再按同一模子展开。"] if batch_constraints else [])
+        + (["把标题从抽象判断句改成更具体的对象、动作和代价。"] if title_tail_template else [])
+        + (["删掉多余的“不是……而是……”句式，保留一处最值钱的就够了。"] if not_but_count >= 3 else [])
+        + (["压低“首先/其次/最后/换句话说/说白了”这类解释型连接词密度。"] if explainer_connector_count >= 4 else [])
+    )
     issue_score = (
         len(severe_findings) * 2
         + len(missing_elements)
@@ -1592,6 +1746,10 @@ def build_generation_preflight_report(
         "lead_paragraph_count": lead_paras,
         "cost_signal_present": has_cost_signal,
         "discussion_trigger_present": has_discussion_trigger,
+        "batch_constraints": batch_constraints,
+        "title_tail_template": title_tail_template,
+        "not_but_count": not_but_count,
+        "explainer_connector_count": explainer_connector_count,
         "missing_elements": missing_elements,
         "severe_findings": severe_findings,
         "rewrite_focus": rewrite_focus,
@@ -1772,6 +1930,48 @@ def write_title_decision_artifacts(workspace: Path, payload: dict[str, Any]) -> 
     write_text(workspace / "title-decision-report.md", markdown_title_decision_report(payload))
 
 
+def _apply_batch_title_constraints(decision_report: dict[str, Any], batch_guidance: dict[str, Any]) -> dict[str, Any]:
+    candidates = list(decision_report.get("candidates") or [])
+    forbidden_patterns = {str(item).strip() for item in (batch_guidance.get("forbidden_title_patterns") or []) if str(item).strip()}
+    title_tail_re = re.compile(r"(真正|最先|从今天开始|被改写的是)")
+    for item in candidates:
+        title = str(item.get("title") or "").strip()
+        risks = list(item.get("selected_title_risks") or [])
+        blocked = False
+        reasons = []
+        if str(item.get("title_template_key") or "").strip() in forbidden_patterns:
+            blocked = True
+            reasons.append("撞上同批次高频标题模板")
+        if title_tail_re.search(title):
+            reasons.append("标题判断句尾巴过重")
+            item["title_score"] = max(0, int(item.get("title_score") or 0) - 3)
+            item["title_open_rate_score"] = int(item.get("title_score") or 0)
+        if reasons:
+            item["batch_collision_reasons"] = reasons
+            for reason in reasons:
+                if reason not in risks:
+                    risks.append(reason)
+        if blocked:
+            item["title_gate_passed"] = False
+        item["selected_title_risks"] = risks
+        if reasons:
+            item["title_gate_reason"] = "；".join(reasons[:3])
+    candidates.sort(
+        key=lambda item: (
+            bool(item.get("title_gate_passed")),
+            int(item.get("title_score") or 0),
+            float(item.get("hook_strength_score") or 0),
+            -float(item.get("recent_title_overlap") or 0),
+        ),
+        reverse=True,
+    )
+    updated = dict(decision_report)
+    updated["candidates"] = candidates
+    if candidates:
+        updated["selected_title"] = str(candidates[0].get("title") or updated.get("selected_title") or "")
+    return updated
+
+
 def _title_rewrite_hints(candidates: list[dict[str, Any]]) -> list[str]:
     counter: Counter[str] = Counter()
     for item in candidates[:3]:
@@ -1807,6 +2007,7 @@ def select_scored_title(
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     candidates = list(ideation.get("titles") or [])
     research = load_research(workspace)
+    batch_guidance = manifest.get("batch_guidance") or ensure_batch_guidance(workspace, manifest, force=False)
     recent_corpus_summary = manifest.get("recent_corpus_summary") or {}
     decision_report = build_title_decision_report(
         topic=topic,
@@ -1820,6 +2021,7 @@ def select_scored_title(
         account_strategy=manifest.get("account_strategy") or {},
         title_rewrite_round=0,
     )
+    decision_report = _apply_batch_title_constraints(decision_report, batch_guidance)
     ranked_titles = list(decision_report.get("candidates") or [])
     selected = ranked_titles[0] if ranked_titles else None
     top3 = ranked_titles[:3]
@@ -1850,6 +2052,7 @@ def select_scored_title(
             account_strategy=manifest.get("account_strategy") or {},
             title_rewrite_round=1,
         )
+        decision_report = _apply_batch_title_constraints(decision_report, batch_guidance)
         ranked_titles = list(decision_report.get("candidates") or [])
         selected = ranked_titles[0] if ranked_titles else None
     chosen_title = selected.get("title") if selected else topic
@@ -1910,6 +2113,16 @@ def _build_outline_generation_contexts(
     selected_title: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     editorial_blueprint = current_editorial_blueprint(workspace, manifest, ideation)
+    batch_guidance = manifest.get("batch_guidance") or ensure_batch_guidance(workspace, manifest, force=False)
+    generation_strategy = build_generation_strategy(
+        title=selected_title,
+        manifest=manifest,
+        batch_guidance=batch_guidance,
+    )
+    editorial_blueprint = {
+        **editorial_blueprint,
+        "blocked_opening_patterns": list(dict.fromkeys(list(editorial_blueprint.get("blocked_opening_patterns") or []) + list(batch_guidance.get("forbidden_opening_routes") or []))),
+    }
     writing_persona = current_writing_persona(workspace, manifest, ideation)
     outline_context = {
         "topic": manifest.get("topic") or research.get("topic") or "",
@@ -1929,6 +2142,8 @@ def _build_outline_generation_contexts(
         "author_memory": manifest.get("author_memory") or {},
         "writing_persona": writing_persona,
         "account_strategy": manifest.get("account_strategy") or {},
+        "batch_guidance": batch_guidance,
+        "generation_strategy": generation_strategy,
     }
     normalize_context = {
         "topic": manifest.get("topic") or research.get("topic") or selected_title,
@@ -1943,6 +2158,8 @@ def _build_outline_generation_contexts(
         "author_memory": manifest.get("author_memory") or {},
         "writing_persona": writing_persona,
         "account_strategy": manifest.get("account_strategy") or {},
+        "batch_guidance": batch_guidance,
+        "generation_strategy": generation_strategy,
     }
     return outline_context, normalize_context, editorial_blueprint, writing_persona
 
@@ -2012,6 +2229,12 @@ def _persist_outline_result(
     ideation["outline_meta"] = outline
     ideation["viral_blueprint"] = outline.get("viral_blueprint") or {}
     ideation["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
+    ideation["generation_strategy"] = build_generation_strategy(
+        title=selected_title,
+        manifest=manifest,
+        batch_guidance=manifest.get("batch_guidance") or {},
+        outline_meta=outline,
+    )
     ideation["writing_persona"] = normalize_writing_persona(
         writing_persona,
         {
@@ -2032,6 +2255,7 @@ def _persist_outline_result(
     manifest["editorial_blueprint"] = outline.get("editorial_blueprint") or {}
     manifest["writing_persona"] = ideation.get("writing_persona") or writing_persona
     manifest["layout_plan_path"] = "layout-plan.json"
+    manifest["batch_guidance_path"] = "batch-guidance.json"
     update_stage(manifest, "outline", "outline_status")
     save_manifest(workspace, manifest)
 
@@ -2046,6 +2270,7 @@ def _normalize_write_outline_meta(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     outline_meta = dict(ideation.get("outline_meta") or {})
     layout_plan = read_json(workspace / "layout-plan.json", default={}) or {}
+    batch_guidance = manifest.get("batch_guidance") or ensure_batch_guidance(workspace, manifest, force=False)
     if outline_file:
         outline_lines = [line.strip("- ").strip() for line in read_input_file(outline_file).splitlines() if line.strip()]
         outline_meta["sections"] = [{"heading": line, "goal": "展开该章节", "evidence_need": "按需补证据"} for line in outline_lines]
@@ -2065,9 +2290,22 @@ def _normalize_write_outline_meta(
             "editorial_blueprint": editorial_blueprint,
             "author_memory": manifest.get("author_memory") or {},
             "writing_persona": writing_persona,
+            "batch_guidance": batch_guidance,
+            "generation_strategy": build_generation_strategy(
+                title=selected_title,
+                manifest=manifest,
+                batch_guidance=batch_guidance,
+                outline_meta=outline_meta,
+            ),
         },
     )
     ideation["outline_meta"] = outline_meta
+    ideation["generation_strategy"] = build_generation_strategy(
+        title=selected_title,
+        manifest=manifest,
+        batch_guidance=batch_guidance,
+        outline_meta=outline_meta,
+    )
     ideation["writing_persona"] = normalize_writing_persona(
         writing_persona,
         {
@@ -2156,6 +2394,7 @@ def cmd_research(args: argparse.Namespace) -> int:
 def cmd_titles(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace)
+    batch_guidance = ensure_batch_guidance(workspace, manifest, force=True)
     provider = require_live_text_provider("titles")
     research = load_research(workspace)
     topic = manifest.get("topic") or research.get("topic") or "未命名主题"
@@ -2176,6 +2415,12 @@ def cmd_titles(args: argparse.Namespace) -> int:
             "author_memory": manifest.get("author_memory") or {},
             "writing_persona": writing_persona,
             "account_strategy": manifest.get("account_strategy") or {},
+            "batch_guidance": batch_guidance,
+            "generation_strategy": build_generation_strategy(
+                title=str(manifest.get("selected_title") or topic),
+                manifest=manifest,
+                batch_guidance=batch_guidance,
+            ),
         }
     )
     ideation = load_ideation(workspace)
@@ -2208,10 +2453,16 @@ def cmd_titles(args: argparse.Namespace) -> int:
         manifest.get("direction") or research.get("angle") or "",
         args.selected_title or "",
     )
+    ideation["generation_strategy"] = build_generation_strategy(
+        title=str(ideation.get("selected_title") or topic),
+        manifest=manifest,
+        batch_guidance=batch_guidance,
+    )
     write_json(workspace / "ideation.json", ideation)
     manifest["selected_title"] = ideation.get("selected_title") or manifest.get("selected_title", "")
     manifest["writing_persona"] = writing_persona
     manifest["ideation_path"] = "ideation.json"
+    manifest["batch_guidance_path"] = "batch-guidance.json"
     update_stage(manifest, "titles", "title_status")
     save_manifest(workspace, manifest)
     print(json.dumps(ideation, ensure_ascii=False, indent=2))
@@ -2221,6 +2472,7 @@ def cmd_titles(args: argparse.Namespace) -> int:
 def cmd_outline(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
+    batch_guidance = ensure_batch_guidance(workspace, manifest, force=True)
     provider = require_live_text_provider("outline")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -2294,6 +2546,7 @@ def cmd_enhance(args: argparse.Namespace) -> int:
 def cmd_write(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
+    batch_guidance = ensure_batch_guidance(workspace, manifest, force=True)
     provider = require_live_text_provider("write")
     research = load_research(workspace)
     ideation = load_ideation(workspace)
@@ -2309,6 +2562,13 @@ def cmd_write(args: argparse.Namespace) -> int:
     write_json(workspace / "ideation.json", ideation)
     content_enhancement = ensure_content_enhancement(workspace, manifest, ideation, selected_title=selected_title, force=True)
     manifest["content_enhancement"] = content_enhancement
+    generation_strategy = ideation.get("generation_strategy") or build_generation_strategy(
+        title=selected_title,
+        manifest=manifest,
+        batch_guidance=batch_guidance,
+        outline_meta=outline_meta,
+    )
+    ideation["generation_strategy"] = generation_strategy
     result = provider.generate_article(
         {
             "topic": manifest.get("topic") or research.get("topic") or selected_title,
@@ -2332,6 +2592,8 @@ def cmd_write(args: argparse.Namespace) -> int:
             "writing_persona": ideation.get("writing_persona") or writing_persona,
             "content_enhancement": content_enhancement,
             "account_strategy": manifest.get("account_strategy") or {},
+            "batch_guidance": batch_guidance,
+            "generation_strategy": generation_strategy,
         }
     )
     body = str(result.payload).strip()
@@ -2383,6 +2645,7 @@ def cmd_write(args: argparse.Namespace) -> int:
 def cmd_review(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace, args)
+    batch_guidance = ensure_batch_guidance(workspace, manifest, force=True)
     runtime = _prepare_article_runtime(workspace, manifest)
     article = runtime.article
     meta, body, title = article.meta, article.body, article.title
@@ -2391,6 +2654,12 @@ def cmd_review(args: argparse.Namespace) -> int:
     layout_plan = runtime.layout_plan
     manifest["content_enhancement"] = content_enhancement
     writing_persona = runtime.writing_persona
+    generation_strategy = build_generation_strategy(
+        title=title,
+        manifest=manifest,
+        batch_guidance=batch_guidance,
+        body=body,
+    )
     provider = active_text_provider()
     if provider.configured():
         result = provider.review_article(
@@ -2415,6 +2684,8 @@ def cmd_review(args: argparse.Namespace) -> int:
                 "writing_persona": writing_persona,
                 "content_enhancement": content_enhancement,
                 "account_strategy": manifest.get("account_strategy") or {},
+                "batch_guidance": batch_guidance,
+                "generation_strategy": generation_strategy,
             }
         )
         review_source = result.provider
@@ -2449,6 +2720,13 @@ def cmd_review(args: argparse.Namespace) -> int:
     payload["title"] = title
     payload["provider"] = review_source
     payload["model"] = model_name
+    payload["generation_strategy"] = build_generation_strategy(
+        title=title,
+        manifest=manifest,
+        batch_guidance=batch_guidance,
+        body=body,
+        analysis_11d=payload.get("analysis_11d") or {},
+    )
     payload["schema_version"] = PIPELINE_SCHEMA_VERSION
     payload["body_signature"] = article_body_signature(title, body)
     payload["generated_at"] = now_iso()
@@ -2491,6 +2769,13 @@ def build_review_from_score(title: str, report: dict[str, Any], manifest: dict[s
         "title": title,
         "provider": "host-agent",
         "model": "session",
+        "analysis_11d": report.get("analysis_11d") or {},
+        "generation_strategy": build_generation_strategy(
+            title=title,
+            manifest=manifest,
+            analysis_11d=report.get("analysis_11d") or {},
+            batch_guidance=manifest.get("batch_guidance") or {},
+        ),
         "generated_at": now_iso(),
         "hosted": True,
     }
@@ -2768,7 +3053,7 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     manifest["topic_discovery_focus"] = payload.get("focus") or legacy.normalize_discovery_focus(focus)
     controls = dict(manifest.get("image_controls") or {})
     strategy = manifest.get("account_strategy") or {}
-    controls.setdefault("density", str(strategy.get("image_density") or "minimal"))
+    controls.setdefault("density", str(strategy.get("image_density") or "balanced"))
     controls.setdefault("layout_family", str(strategy.get("image_layout_family") or "editorial"))
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
@@ -4858,6 +5143,15 @@ def build_parser() -> argparse.ArgumentParser:
     learn_performance.add_argument("--favorite-72h", type=int, default=0)
     learn_performance.add_argument("--notes")
     learn_performance.set_defaults(func=cmd_learn_performance)
+
+    report_11d = subparsers.add_parser("report-11d", help="生成单篇 11 维分析报告")
+    report_11d.add_argument("--workspace", required=True)
+    report_11d.set_defaults(func=cmd_report_11d)
+
+    review_batch = subparsers.add_parser("review-batch", help="批量复盘同一批次目录")
+    review_batch.add_argument("--jobs-root", required=True)
+    review_batch.add_argument("--batch-key", required=True)
+    review_batch.set_defaults(func=cmd_review_batch)
 
     return parser
 

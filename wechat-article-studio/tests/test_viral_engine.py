@@ -151,6 +151,8 @@ class ViralEngineTests(unittest.TestCase):
         self.assertIn("hook_layer_score", report)
         self.assertIn("insight_layer_score", report)
         self.assertIn("takeaway_layer_score", report)
+        self.assertEqual(len(report.get("dimension_11d_scores") or []), 11)
+        self.assertIn("analysis_11d", report)
         self.assertTrue(report.get("quality_gates", {}).get("material_coverage_passed"))
         self.assertTrue(report.get("hook_layer_passed"))
         self.assertTrue(report.get("insight_layer_passed"))

@@ -28,6 +28,13 @@ def _normalize_key(value: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", str(value or "").strip().lower()).strip("-")
 
 
+def _is_single_article_batch_workspace(path: Path, batch_key: str) -> bool:
+    name = path.name
+    if not name.startswith(f"{batch_key}-"):
+        return False
+    return "hot-topics" not in name.lower()
+
+
 def _tokens(value: str) -> set[str]:
     return {item.lower() for item in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", _normalize_text(value))}
 
@@ -212,6 +219,8 @@ def load_batch_article_items(current_workspace: Path) -> list[dict[str, Any]]:
         if not path.is_dir() or path.resolve() == current_workspace.resolve():
             continue
         if workspace_batch_key(path) != batch_key:
+            continue
+        if not _is_single_article_batch_workspace(path, batch_key):
             continue
         article_path = path / "article.md"
         if not article_path.exists():

@@ -3339,7 +3339,7 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     strategy = load_account_strategy(workspace, manifest, create_if_missing=True) if load_account_strategy else (manifest.get("account_strategy") or {})
     controls = dict(manifest.get("image_controls") or {})
     # 无主题启动仅保留安全的密度默认，不再隐式锁定风格、主题或图型。
-    controls.setdefault("density", str(strategy.get("image_density") or "minimal"))
+    controls.setdefault("density", str(strategy.get("image_density") or "balanced"))
     manifest["image_controls"] = controls
     save_manifest(workspace, manifest)
     safe_print_json(payload)

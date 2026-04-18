@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.analysis_11d import build_analysis_11d, score_analysis_11d, summarize_analysis_11d
 from core.artifacts import extract_summary, now_iso, read_json, read_text, split_frontmatter
 from core.quality_checks import cost_signal_present, discussion_trigger_present, scene_signal_present, split_markdown_paragraphs
 from core.reader_gates import first_screen_signal_report, image_plan_gate_report, template_frequency_report
@@ -75,6 +76,27 @@ def _depth_payload(score_report: dict[str, Any], review_report: dict[str, Any]) 
 
 def _material_payload(score_report: dict[str, Any], review_report: dict[str, Any]) -> dict[str, Any]:
     return (score_report.get("material_signals") or review_report.get("material_signals") or {}) if isinstance(review_report, dict) else (score_report.get("material_signals") or {})
+
+
+def _analysis_11d_payload(
+    title: str,
+    summary: str,
+    body: str,
+    score_report: dict[str, Any],
+    review_report: dict[str, Any],
+) -> dict[str, Any]:
+    existing = (review_report.get("analysis_11d") or score_report.get("analysis_11d") or {}) if isinstance(review_report, dict) else (score_report.get("analysis_11d") or {})
+    if existing:
+        return existing
+    return build_analysis_11d(
+        title=title,
+        body=body,
+        summary=summary,
+        analysis=_analysis_payload(score_report, review_report),
+        depth=_depth_payload(score_report, review_report),
+        material_signals=_material_payload(score_report, review_report),
+        humanness_signals=(score_report.get("humanness_signals") or review_report.get("humanness_signals") or {}) if isinstance(review_report, dict) else (score_report.get("humanness_signals") or {}),
+    )
 
 
 def _weak_text(value: str) -> bool:
@@ -205,6 +227,7 @@ def build_reader_gate(
 ) -> dict[str, Any]:
     first_screen = first_screen_signal_report(body)
     analysis = _analysis_payload(score_report, review_report)
+    analysis_11d = _analysis_11d_payload(title, summary, body, score_report, review_report)
     depth = _depth_payload(score_report, review_report)
     paragraphs = split_markdown_paragraphs(body)
     evidence_items = (read_json(workspace / "research.json", default={}) or {}).get("evidence_items") or []
@@ -214,8 +237,12 @@ def build_reader_gate(
     cost_count = sum(1 for item in paragraphs if cost_signal_present(item))
     click_reason = _click_reason(title, first_screen, analysis)
     continue_reason = _continue_reason(body, first_screen)
-    share_line = _share_line(body, analysis)
-    comment_seed = _comment_seed(title, body, analysis)
+    share_line = _clean(((analysis_11d.get("signature_quotes") or [""])[0])) or _share_line(body, analysis)
+    hooks = analysis_11d.get("interaction_hooks") or {}
+    comment_seed = (
+        _clean(((hooks.get("comment_triggers") or hooks.get("poll_prompts") or hooks.get("fill_blank_prompts") or [""])[0]))
+        or _comment_seed(title, body, analysis)
+    )
     fields = {
         "click_reason": click_reason,
         "continue_reason": continue_reason,
@@ -251,6 +278,7 @@ def build_reader_gate(
         "scene_count": scene_count,
         "cost_signal_count": cost_count,
         "counterpoint_count": counterpoint_count,
+        "analysis_11d": analysis_11d,
         "first_screen": first_screen,
         "failed_checks": failed_checks,
         "passed": passed,
@@ -267,6 +295,8 @@ def build_visual_gate(
     payload = image_plan or {}
     items = [dict(item) for item in (payload.get("items") or [])]
     image_plan_report = image_plan_gate_report(payload, workspace=workspace)
+    wechat_html_path = workspace / str(manifest.get("wechat_html_path") or "article.wechat.html")
+    wechat_html = read_text(wechat_html_path) if wechat_html_path.exists() else ""
     density_mode = _normalize_density_mode(
         str((payload.get("image_controls") or {}).get("density_mode") or payload.get("density_mode") or (manifest.get("image_controls") or {}).get("density_mode") or "")
     )
@@ -322,6 +352,7 @@ def build_visual_gate(
         image_type = str(item.get("type") or "")
         policy = str(item.get("text_policy") or "")
         insert_strategy = str(item.get("insert_strategy") or "")
+        label_strategy = [str(value or "").strip() for value in (item.get("label_strategy") or []) if str(value or "").strip()]
         if image_type == "封面图" and policy != "none":
             text_policy_failures.append(f"{item.get('id')} 封面图应为无文字")
         elif insert_strategy == "section_middle" and image_type in {"正文插图", "分隔图"} and policy != "none":
@@ -330,6 +361,18 @@ def build_visual_gate(
             text_policy_failures.append(f"{item.get('id')} 结构图文字策略不对")
         elif image_type == "对比图" and policy not in {"short-zh", "none"}:
             text_policy_failures.append(f"{item.get('id')} 对比图文字策略不对")
+        if insert_strategy == "section_middle" and any(re.search(r"[A-Za-z]{2,}", label) for label in label_strategy):
+            text_policy_failures.append(f"{item.get('id')} 正文图标签里出现英文")
+        if insert_strategy == "section_middle" and any(len(label) >= 10 for label in label_strategy):
+            text_policy_failures.append(f"{item.get('id')} 正文图标签过长")
+        if insert_strategy == "section_middle" and any(any(word in label for word in _UI_STYLE_WORDS) for label in label_strategy):
+            text_policy_failures.append(f"{item.get('id')} 正文图标签带 UI 说明词")
+    lead_visual_passed = True
+    if wechat_html:
+        first_img = wechat_html.find("<img")
+        first_h2 = wechat_html.find("<h2")
+        if first_img != -1 and first_h2 != -1:
+            lead_visual_passed = first_img < first_h2
     failed_checks: list[str] = []
     if not payload:
         failed_checks.append("缺少 image-plan.json")
@@ -345,6 +388,8 @@ def build_visual_gate(
         failed_checks.append("图片文字策略不符合当前规则")
     if not image_plan_report.get("passed", True):
         failed_checks.append("图片路线或视觉约束未通过")
+    if not lead_visual_passed:
+        failed_checks.append("第一张正文图没有提前到首个二级标题前")
     passed = not failed_checks
     return {
         "density_mode": density_mode,
@@ -360,6 +405,7 @@ def build_visual_gate(
         "requires_explain_role": requires_explain_role,
         "explain_role_present": explain_role_present,
         "text_policy_failures": text_policy_failures,
+        "lead_visual_passed": lead_visual_passed,
         "image_plan_report": image_plan_report,
         "failed_checks": failed_checks,
         "passed": passed,
@@ -380,6 +426,7 @@ def build_final_gate(
     visual_gate: dict[str, Any],
 ) -> dict[str, Any]:
     analysis = _analysis_payload(score_report, review_report)
+    analysis_11d = _analysis_11d_payload(title, str(manifest.get("summary") or ""), body, score_report, review_report)
     depth = _depth_payload(score_report, review_report)
     material_signals = _material_payload(score_report, review_report)
     three_layers = (
@@ -400,6 +447,10 @@ def build_final_gate(
     insight_score = int((three_layers.get("insight") or {}).get("score") or 0)
     takeaway_score = int((three_layers.get("takeaway") or {}).get("score") or 0)
     total_score = int(score_report.get("total_score") or 0)
+    dimension_11d_scores = score_report.get("dimension_11d_scores") or score_analysis_11d(analysis_11d)
+    dimension_11d_summary = score_report.get("dimension_11d_summary") or summarize_analysis_11d(analysis_11d, dimension_11d_scores)
+    language_style = analysis_11d.get("language_style") or {}
+    interaction_hooks = analysis_11d.get("interaction_hooks") or {}
     title_consistency_issues = _title_consistency_issues(workspace, manifest, title)
     skeleton_report = template_frequency_report(title, body, summary=str(manifest.get("summary") or ""))
     acceptance_gates = acceptance_report.get("gates") or {}
@@ -414,6 +465,11 @@ def build_final_gate(
         "title_consistency_passed": not title_consistency_issues,
         "skeleton_repeat_passed": bool(skeleton_report.get("passed")),
         "batch_uniqueness_passed": bool(acceptance_gates.get("batch_uniqueness_passed", True)),
+        "core_viewpoint_passed": bool(analysis_11d.get("core_viewpoint")),
+        "emotion_curve_passed": len(analysis_11d.get("emotion_curve") or []) >= 3,
+        "argument_diversity_passed": len(analysis_11d.get("argument_diversity") or []) >= 3,
+        "language_style_passed": str(language_style.get("rhythm") or "") != "偏平" and len(language_style.get("template_risk_signals") or []) <= 2,
+        "interaction_hooks_passed": bool(interaction_hooks.get("comment_triggers") or interaction_hooks.get("share_triggers") or interaction_hooks.get("save_triggers")),
     }
     failed_checks = [name for name, ok in checks.items() if not ok]
     return {
@@ -425,6 +481,9 @@ def build_final_gate(
             "takeaway": takeaway_score,
         },
         "checks": checks,
+        "analysis_11d": analysis_11d,
+        "dimension_11d_scores": dimension_11d_scores,
+        "dimension_11d_summary": dimension_11d_summary,
         "reader_gate": {
             "passed": bool(reader_gate.get("passed")),
             "failed_checks": list(reader_gate.get("failed_checks") or []),
@@ -459,4 +518,3 @@ def collect_gate_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> 
             detail = f"：{'、'.join(str(item) for item in reasons[:4])}" if reasons else ""
             blockers.append(f"{rel} 未通过{detail}")
     return blockers
-
