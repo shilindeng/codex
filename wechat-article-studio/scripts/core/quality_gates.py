@@ -39,6 +39,18 @@ _SHARE_LINE_PATTERNS = (
     r"真正.{0,10}不是.{1,24}而是.{1,24}",
 )
 
+_BLOCKED_TEMPLATE_PHRASES = (
+    "真正值得看的是",
+    "这也是",
+    "最后可以",
+    "这张清单值得保存",
+    "这份清单值得保存",
+)
+
+_ROLE_WORDS = ("家长", "父母", "求职者", "财务", "运营", "产品经理", "企业负责人", "小老板", "工程师", "用户", "普通人", "子女", "老人")
+_DETAIL_WORDS = ("现场", "赛道", "会议室", "群里", "工单", "账单", "报价", "订单", "手机号", "药盒", "加油", "船期")
+_COMPARISON_WORDS = ("对比", "过去", "现在", "前者", "后者", "相比", "不再", "从", "转向")
+
 
 def _clean(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
@@ -116,6 +128,51 @@ def _candidate_sentences(body: str) -> list[str]:
             if 12 <= len(item) <= 48:
                 candidates.append(item)
     return candidates
+
+
+def _table_intro_failures(body: str) -> list[str]:
+    lines = str(body or "").splitlines()
+    failures: list[str] = []
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            continue
+        if index + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-{2,}:?\s*\|", lines[index + 1]):
+            previous = ""
+            for back_index in range(index - 1, -1, -1):
+                previous = lines[back_index].strip()
+                if previous:
+                    break
+            if not previous or (not cost_signal_present(previous) and not re.search(r"(问题|风险|后果|代价|误判|卡住|失控|冲突)", previous)):
+                failures.append("表格前缺少真实问题或代价铺垫")
+    return failures[:3]
+
+
+def _hard_evidence_types(body: str, evidence_items: list[Any]) -> set[str]:
+    corpus = "\n".join(split_markdown_paragraphs(body))
+    types: set[str] = set()
+    if evidence_items:
+        types.add("source")
+    if re.search(r"\d", corpus):
+        types.add("number")
+    if any(word in corpus for word in _DETAIL_WORDS) or any(scene_signal_present(item) for item in split_markdown_paragraphs(body)):
+        types.add("detail")
+    if any(word in corpus for word in _COMPARISON_WORDS):
+        types.add("comparison")
+    if any(word in corpus for word in _ROLE_WORDS):
+        types.add("role")
+    if cost_signal_present(corpus):
+        types.add("cost")
+    return types
+
+
+def _ending_template_failures(body: str, comment_seed: str) -> list[str]:
+    paragraphs = split_markdown_paragraphs(body)
+    ending = " ".join(paragraphs[-2:])
+    failures: list[str] = []
+    if re.search(r"(这[张份]清单值得保存|下次.*问.*问题|最后可以)", ending) and not discussion_trigger_present(ending + " " + comment_seed):
+        failures.append("结尾只收成清单或三问，缺少自然分歧点")
+    return failures
 
 
 def _share_line(body: str, analysis: dict[str, Any]) -> str:
@@ -232,6 +289,7 @@ def build_reader_gate(
     paragraphs = split_markdown_paragraphs(body)
     evidence_items = (read_json(workspace / "research.json", default={}) or {}).get("evidence_items") or []
     evidence_count = max(int(depth.get("evidence_paragraph_count") or 0), len(evidence_items))
+    evidence_types = _hard_evidence_types(body, evidence_items)
     scene_count = int(depth.get("scene_paragraph_count") or 0) or sum(1 for item in paragraphs if scene_signal_present(item))
     counterpoint_count = int(depth.get("counterpoint_paragraph_count") or 0)
     cost_count = sum(1 for item in paragraphs if cost_signal_present(item))
@@ -253,8 +311,12 @@ def build_reader_gate(
     failed_checks: list[str] = []
     if evidence_count < 2:
         failed_checks.append("正文证据不足 2 条")
+    if len(evidence_types) < 2:
+        failed_checks.append("硬证据类型不足，至少需要来源、数字、现场细节、角色、成本或前后对照中的两类")
     if scene_count < 1:
         failed_checks.append("开头缺少具体场景")
+    if first_screen and not first_screen.get("four_question_passed", False):
+        failed_checks.append("首屏四问未齐：具体人、具体动作、关系/重要性、损失或冲突")
     if cost_count < 1:
         failed_checks.append("正文缺少真实代价")
     if counterpoint_count < 1:
@@ -265,6 +327,11 @@ def build_reader_gate(
         failed_checks.append("缺少自然评论触发点")
     if len(weak_fields) >= 2:
         failed_checks.append("四个读者问题里至少有两项回答过弱")
+    failed_checks.extend(_table_intro_failures(body))
+    failed_checks.extend(_ending_template_failures(body, comment_seed))
+    template_hits = [phrase for phrase in _BLOCKED_TEMPLATE_PHRASES if phrase in body]
+    if template_hits:
+        failed_checks.append(f"命中模板腔黑名单：{'、'.join(template_hits[:3])}")
     passed = not failed_checks
     return {
         "title": title,
@@ -275,6 +342,7 @@ def build_reader_gate(
         "comment_seed": comment_seed,
         "weak_fields": weak_fields,
         "evidence_count": evidence_count,
+        "hard_evidence_types": sorted(evidence_types),
         "scene_count": scene_count,
         "cost_signal_count": cost_count,
         "counterpoint_count": counterpoint_count,
@@ -348,11 +416,15 @@ def build_visual_gate(
     elif closing_forbidden:
         closing_ok = not closing_items
     text_policy_failures: list[str] = []
+    asset_failures: list[str] = []
     for item in items:
         image_type = str(item.get("type") or "")
         policy = str(item.get("text_policy") or "")
         insert_strategy = str(item.get("insert_strategy") or "")
         label_strategy = [str(value or "").strip() for value in (item.get("label_strategy") or []) if str(value or "").strip()]
+        asset_path = _clean(str(item.get("asset_path") or ""))
+        if asset_path and not (workspace / asset_path).exists():
+            asset_failures.append(f"{item.get('id')} 缺少生成图片文件")
         if image_type == "封面图" and policy != "none":
             text_policy_failures.append(f"{item.get('id')} 封面图应为无文字")
         elif insert_strategy == "section_middle" and image_type in {"正文插图", "分隔图"} and policy != "none":
@@ -386,6 +458,8 @@ def build_visual_gate(
         failed_checks.append("结尾图配置和实际产出不一致")
     if text_policy_failures:
         failed_checks.append("图片文字策略不符合当前规则")
+    if asset_failures:
+        failed_checks.append("图片计划中的生成文件不存在")
     if not image_plan_report.get("passed", True):
         failed_checks.append("图片路线或视觉约束未通过")
     if not lead_visual_passed:
@@ -405,6 +479,7 @@ def build_visual_gate(
         "requires_explain_role": requires_explain_role,
         "explain_role_present": explain_role_present,
         "text_policy_failures": text_policy_failures,
+        "asset_failures": asset_failures,
         "lead_visual_passed": lead_visual_passed,
         "image_plan_report": image_plan_report,
         "failed_checks": failed_checks,

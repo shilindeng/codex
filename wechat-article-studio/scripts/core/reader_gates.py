@@ -34,8 +34,12 @@ _ENDING_ROUTE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
 _TEMPLATE_PATTERNS: list[tuple[str, str]] = [
     ("not_but", r"不是[^。！？!?；;\n]{1,30}而是[^。！？!?；;\n]{1,30}"),
     ("worth_write_not_but", r"真正值得(?:写|看|聊|警惕|讨论|说明)的不是"),
+    ("worth_watch_is", r"真正值得看的是"),
     ("dont_rush", r"先别急着"),
     ("real_problem", r"真正的问题(?:不是|是)"),
+    ("this_also_is", r"这也是"),
+    ("last_can", r"最后可以"),
+    ("save_list_template", r"这[张份]清单值得保存"),
     ("also_dont", r"也别把"),
 ]
 
@@ -74,6 +78,53 @@ _LEAD_STAKES_PATTERNS = (
     r"真正的问题",
 )
 
+_LEAD_PERSON_PATTERNS = (
+    r"老板",
+    r"团队",
+    r"用户",
+    r"读者",
+    r"父母",
+    r"家长",
+    r"孩子",
+    r"子女",
+    r"老人",
+    r"求职者",
+    r"学生",
+    r"小老板",
+    r"工程师",
+    r"产品经理",
+    r"财务",
+    r"运营",
+    r"平台负责人",
+    r"普通人",
+    r"同事",
+    r"他",
+    r"她",
+    r"他们",
+    r"大家",
+)
+
+_LEAD_ACTION_PATTERNS = (
+    r"看到",
+    r"问",
+    r"等",
+    r"打开",
+    r"搜索",
+    r"提醒",
+    r"发布",
+    r"报价",
+    r"下单",
+    r"转发",
+    r"转",
+    r"付款",
+    r"回",
+    r"盯着",
+    r"写",
+    r"跑",
+    r"摔倒",
+    r"联系",
+)
+
 _SUSPICIOUS_BULLET_RE = re.compile(r"^\s*[-*+]\s+")
 _SUSPICIOUS_BULLET_DIGIT_RE = re.compile(r"\d")
 
@@ -108,18 +159,32 @@ def first_screen_signal_report(body: str) -> dict[str, Any]:
     lead_text = " ".join(lead)
     opening_route = classify_opening_route(lead[0] if lead else "")
     has_scene = any(scene_signal_present(item) for item in lead) or opening_route in {"scene-entry", "news-inversion-entry"}
+    has_person = bool(any(re.search(pattern, lead_text) for pattern in _LEAD_PERSON_PATTERNS))
+    has_action = bool(any(re.search(pattern, lead_text) for pattern in _LEAD_ACTION_PATTERNS))
     has_conflict = bool(any(re.search(pattern, lead_text) for pattern in _LEAD_CONFLICT_PATTERNS))
     has_stakes = bool(cost_signal_present(lead_text) or any(re.search(pattern, lead_text) for pattern in _LEAD_STAKES_PATTERNS))
+    has_specific_loss = bool(cost_signal_present(lead_text) or re.search(r"(错过|泄露|涨价|延期|返工|失控|误判|风险|后果|买单|成本|更累|疲惫|拖延|混乱)", lead_text))
     pre_h2_paragraphs = lead_paragraph_count(body)
+    first_screen_questions = {
+        "who": has_person,
+        "action": has_action,
+        "why_it_matters": has_stakes,
+        "loss_or_conflict": bool(has_conflict and has_specific_loss),
+    }
     return {
         "opening_route": opening_route,
         "lead_excerpt": lead_text[:220],
         "lead_paragraphs": len(lead),
         "pre_h2_paragraphs": pre_h2_paragraphs,
         "has_scene": has_scene,
+        "has_person": has_person,
+        "has_action": has_action,
         "has_conflict": has_conflict,
         "has_stakes": has_stakes,
-        "passed": len(lead) >= 2 and has_scene and has_conflict and has_stakes and pre_h2_paragraphs <= 4,
+        "has_specific_loss": has_specific_loss,
+        "first_screen_questions": first_screen_questions,
+        "four_question_passed": sum(1 for ok in first_screen_questions.values() if ok) >= 4,
+        "passed": len(lead) >= 2 and has_scene and has_person and has_action and has_conflict and has_stakes and has_specific_loss and pre_h2_paragraphs <= 4,
     }
 
 
@@ -144,7 +209,7 @@ def template_frequency_report(title: str, body: str, summary: str = "") -> dict[
         matched_patterns.append("repeated_starters")
     if same_family_repeat:
         matched_patterns.append("title_ending_same_family")
-    severe_pattern_hits = counts["worth_write_not_but"] + max(0, counts["not_but"] - 3)
+    severe_pattern_hits = counts["worth_write_not_but"] + counts["worth_watch_is"] + counts["save_list_template"] + max(0, counts["not_but"] - 3)
     severe_pattern_hits += max(0, counts["dont_rush"] - 1)
     return {
         "counts": counts,

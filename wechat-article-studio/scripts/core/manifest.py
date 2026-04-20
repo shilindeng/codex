@@ -26,6 +26,7 @@ MANIFEST_STATUS_DEFAULTS = {
     "reader_gate_status": "unknown",
     "visual_gate_status": "unknown",
     "final_gate_status": "unknown",
+    "delivery_report_status": "unknown",
 }
 
 ARTIFACT_DEFAULTS = {
@@ -49,6 +50,8 @@ ARTIFACT_DEFAULTS = {
     "reader_gate_path": "reader_gate.json",
     "visual_gate_path": "visual_gate.json",
     "final_gate_path": "final_gate.json",
+    "delivery_report_path": "final-delivery-report.json",
+    "delivery_report_markdown_path": "final-delivery-report.md",
     "batch_guidance_path": "batch-guidance.json",
     "similarity_report_path": "similarity-report.json",
     "references_path": "references.json",

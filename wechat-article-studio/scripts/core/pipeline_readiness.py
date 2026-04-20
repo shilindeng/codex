@@ -10,6 +10,7 @@ ARTIFACT_REQUIREMENTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("article_path", "article.md"),
         ("score_report_path", "score-report.json"),
         ("acceptance_report_path", "acceptance-report.json"),
+        ("layout_plan_path", "layout-plan.json"),
     ),
     "publish": (
         ("article_path", "article.md"),
@@ -17,6 +18,8 @@ ARTIFACT_REQUIREMENTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("wechat_html_path", "article.wechat.html"),
         ("score_report_path", "score-report.json"),
         ("acceptance_report_path", "acceptance-report.json"),
+        ("layout_plan_path", "layout-plan.json"),
+        ("image_plan_path", "image-plan.json"),
         ("reader_gate_path", "reader_gate.json"),
         ("visual_gate_path", "visual_gate.json"),
         ("final_gate_path", "final_gate.json"),
@@ -66,6 +69,13 @@ def artifact_contract_report(
     image_plan_rel = str(manifest.get("image_plan_path") or "").strip()
     if image_plan_rel and not (workspace / image_plan_rel).exists():
         report["publish"].append(image_plan_rel)
+    layout_plan_md = workspace / "layout-plan.md"
+    if not layout_plan_md.exists():
+        report["render"].append("layout-plan.md")
+        report["publish"].append("layout-plan.md")
+    delivery_rel = str(manifest.get("delivery_report_path") or "final-delivery-report.json").strip()
+    if delivery_rel and not (workspace / delivery_rel).exists():
+        report["publish"].append(delivery_rel)
     for stage in report:
         deduped: list[str] = []
         for item in report[stage]:

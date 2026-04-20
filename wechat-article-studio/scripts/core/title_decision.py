@@ -712,6 +712,15 @@ def build_title_decision_report(
         else:
             selected_explainer["what_avoided"] = "它避开了旧模板、高风险碎片、过满用词和明显拼接感。"
         selected_reason = [selected_explainer["why_click"], selected_explainer["why_better"], selected_explainer["what_avoided"]]
+    selected_contract = {
+        "target_reader": audience or str(manifest.get("audience") or "大众读者"),
+        "primary_trigger": str((selected or {}).get("title_family") or ""),
+        "secondary_trigger": str((selected or {}).get("title_emotion_mode") or ""),
+        "why_must_click": selected_explainer.get("why_click") or "",
+        "answer_too_complete": bool((selected or {}).get("answer_complete_title_penalty")),
+        "object_action_outcome_complete": float((selected or {}).get("hook_strength_score") or 0) >= 3,
+        "same_batch_family": str((selected or {}).get("title_template_key") or ""),
+    }
     return {
         "topic": topic,
         "audience": audience,
@@ -720,6 +729,7 @@ def build_title_decision_report(
         "selected_title": selected_title_value,
         "selected_reason": selected_reason[:5],
         "selected_explainer": selected_explainer,
+        "selected_title_contract": selected_contract,
         "selected_title_risks": list((selected or {}).get("selected_title_risks") or []),
         "candidates": normalized_candidates,
         "candidate_groups": {
@@ -743,6 +753,17 @@ def markdown_title_decision_report(payload: dict[str, Any]) -> str:
     ]
     if payload.get("selected_title_risks"):
         lines.append(f"- 最终标题风险：{'、'.join(payload.get('selected_title_risks') or [])}")
+    contract = payload.get("selected_title_contract") or {}
+    if contract:
+        lines.extend(
+            [
+                f"- 目标读者：{contract.get('target_reader') or payload.get('audience') or ''}",
+                f"- 主触发器：{TITLE_FAMILY_LABELS.get(str(contract.get('primary_trigger') or ''), contract.get('primary_trigger') or '')}",
+                f"- 副触发器：{contract.get('secondary_trigger') or ''}",
+                f"- 标题是否说满：{'是' if contract.get('answer_too_complete') else '否'}",
+                f"- 对象/动作/后果是否完整：{'是' if contract.get('object_action_outcome_complete') else '否'}",
+            ]
+        )
     explainer = payload.get("selected_explainer") or {}
     if explainer.get("why_click"):
         lines.extend(["", "## 为什么这个标题会被点开", "", f"- {explainer.get('why_click')}"])

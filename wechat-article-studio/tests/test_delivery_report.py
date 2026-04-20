@@ -1,0 +1,79 @@
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+
+from core.delivery_report import build_delivery_report, markdown_delivery_report  # noqa: E402
+
+
+class DeliveryReportTests(unittest.TestCase):
+    def test_delivery_report_separates_draft_readback_from_quality_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.md").write_text(
+                "---\ntitle: Token工厂开始赚钱\nsummary: Token 成本进入企业账单，真正要看的是一次任务贵不贵。\n---\n\n正文。",
+                encoding="utf-8",
+            )
+            (workspace / "publication.md").write_text("正文。", encoding="utf-8")
+            (workspace / "article.wechat.html").write_text("<section><p>正文</p></section>", encoding="utf-8")
+            (workspace / "score-report.json").write_text(
+                json.dumps({"title": "Token工厂开始赚钱", "total_score": 82, "threshold": 88, "passed": False, "quality_gates": {"hook_layer_passed": False}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (workspace / "acceptance-report.json").write_text(
+                json.dumps({"title": "Token工厂开始赚钱", "passed": False, "failed_gates": ["first_screen_passed"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (workspace / "reader_gate.json").write_text(json.dumps({"passed": False, "failed_checks": ["首屏四问未齐"]}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "visual_gate.json").write_text(json.dumps({"passed": True, "planned_inline_count": 3}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "final_gate.json").write_text(json.dumps({"passed": False, "failed_checks": ["score_total_passed"]}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "layout-plan.json").write_text(json.dumps({"recommended_style": "magazine"}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "layout-plan.md").write_text("# 版式规划\n", encoding="utf-8")
+            (workspace / "image-plan.json").write_text(json.dumps({"items": []}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "publish-result.json").write_text(
+                json.dumps({"draft_media_id": "media-id", "verify_status": "passed", "expected_inline_count": 4, "verified_inline_count": 4}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (workspace / "latest-draft-report.json").write_text(
+                json.dumps({"draft_media_id": "media-id", "verify_status": "passed", "expected_inline_count": 4, "verified_inline_count": 4, "verify_errors": []}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            manifest = {
+                "selected_title": "Token工厂开始赚钱",
+                "article_path": "article.md",
+                "publication_path": "publication.md",
+                "wechat_html_path": "article.wechat.html",
+                "score_report_path": "score-report.json",
+                "acceptance_report_path": "acceptance-report.json",
+                "reader_gate_path": "reader_gate.json",
+                "visual_gate_path": "visual_gate.json",
+                "final_gate_path": "final_gate.json",
+                "layout_plan_path": "layout-plan.json",
+                "image_plan_path": "image-plan.json",
+                "publish_result_path": "publish-result.json",
+                "latest_draft_report_path": "latest-draft-report.json",
+            }
+
+            report = build_delivery_report(workspace, manifest)
+
+            self.assertEqual(report["overall_status"], "failed")
+            self.assertFalse(report["quality_passed"])
+            self.assertTrue(report["published"])
+            self.assertTrue(report["readback_passed"])
+            self.assertIn("hook_layer_passed", report["sections"]["quality"]["failed_gates"])
+            self.assertTrue(any("质量门未通过" in item for item in report["warnings"]))
+            rendered = markdown_delivery_report(report)
+            self.assertIn("质量结果：未通过", rendered)
+            self.assertIn("回读结果：通过", rendered)
+
+
+if __name__ == "__main__":
+    unittest.main()

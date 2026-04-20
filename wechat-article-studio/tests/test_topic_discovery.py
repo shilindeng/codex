@@ -10,6 +10,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 import legacy_studio as legacy  # noqa: E402
+from core.workflow import rerank_discovery_candidates  # noqa: E402
 
 
 class TopicDiscoveryTests(unittest.TestCase):
@@ -60,6 +61,30 @@ class TopicDiscoveryTests(unittest.TestCase):
         self.assertGreaterEqual(int(merged.get("hit_count") or 0), 2)
         self.assertEqual(merged.get("content_kind"), "教程/工具")
         self.assertEqual(merged.get("source_tier"), "官方")
+
+    def test_rerank_discovery_candidates_adds_100_point_topic_score(self):
+        candidates = [
+            {
+                "recommended_topic": "霍尔木兹航运风险推高普通人账单",
+                "hot_title": "霍尔木兹航运风险",
+                "recommended_title": "霍尔木兹一堵，普通人的账单会先从这三处抬头",
+                "recommended_title_score": 80,
+                "recommended_title_threshold": 68,
+                "recommended_title_gate_passed": True,
+                "angles": ["油价、运费和小企业订单"],
+                "viewpoints": ["外部风险最终会写进账单"],
+                "source_tier": "官方",
+                "hit_count": 2,
+                "content_kind": "事件解读",
+            }
+        ]
+        reranked = rerank_discovery_candidates(candidates, [], {}, {}, {})
+        first = reranked[0]
+        self.assertIn("topic_score_100", first)
+        self.assertIn("topic_score_dimensions", first)
+        self.assertEqual(set(first["topic_score_dimensions"].keys()), {"时效和证据", "冲突和代价", "目标读者清晰度", "判断卡沉淀能力", "互动传播潜力"})
+        self.assertGreaterEqual(first["topic_score_100"], 70)
+        self.assertTrue(first["topic_gate_passed"])
 
 
 if __name__ == "__main__":

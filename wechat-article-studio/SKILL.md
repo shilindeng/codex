@@ -95,6 +95,8 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - 至少保留 1~2 段真正展开的分析段。
 - 正文和首屏不能泄漏内部提示语或写作说明。
 - `review-report.json`、`score-report.json`、`quality_gates` 全部过线。
+- `reader_gate.json`、`visual_gate.json`、`final_gate.json` 全部过线。
+- `final-delivery-report.md` 必须清楚分开说明质量、发布和回读状态。
 - 发布前要实际跑通渲染、配图和验收链路。
 
 ## 硬约束
@@ -108,6 +110,7 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - 不要让整篇小标题都长成同一种问句、编号句或判断句。
 - 不要整篇只剩短句卡片，必须保留展开分析段。
 - 不要用“本质上 / 归根结底 / 底层逻辑”硬抬深度，也不要用“你值得 / 愿你”收尾。
+- 不要复用“真正值得看的是 / 这也是 / 最后可以 / 这张清单值得保存”这类统一收口句式。
 - 不要裸贴 URL，也不要手写参考资料 callout。
 - 教程稿才优先动作化结尾；分析稿、评论稿、案例稿优先用判断、余味、风险提醒或趋势观察收束。
 
@@ -117,6 +120,8 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - 流程图、信息图、对比图允许极少量短中文标签。
 - 图片文字策略以账号策略和图片类型共同决定，不要一刀切。
 - 默认保持整篇视觉语言一致；只有在用途明显不同的图型上，才允许轻微分化。
+- `layout-plan.md`、`image-plan.json`、`visual_gate.json` 缺任一项时，不要进入正式发布。
+- 封面负责点击，正文图负责解释，结尾图负责收藏或转发；不要整篇图片都做成同一种海报。
 
 ## 何时读 references
 

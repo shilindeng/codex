@@ -400,6 +400,11 @@ class ViralPipelineTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
+                (workspace / "layout-plan.json").write_text(
+                    json.dumps({"recommended_style": "magazine", "section_plans": [{"heading": "分水岭"}]}, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                (workspace / "layout-plan.md").write_text("# 版式规划\n", encoding="utf-8")
                 return {}
 
             def fake_render(*args, **kwargs):

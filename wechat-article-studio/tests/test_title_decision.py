@@ -61,6 +61,9 @@ class TitleDecisionTests(unittest.TestCase):
         self.assertIn("title_gate_reason", report["candidates"][0])
         self.assertIn("title_formula_components", report["candidates"][0])
         self.assertIn("selected_explainer", report)
+        self.assertIn("selected_title_contract", report)
+        self.assertEqual(report["selected_title_contract"]["target_reader"], "创业者")
+        self.assertIn("answer_too_complete", report["selected_title_contract"])
 
     def test_title_integrity_rejects_broken_double_template(self):
         report = title_integrity_report(

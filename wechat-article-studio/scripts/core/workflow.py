@@ -52,6 +52,7 @@ from core.content_enhancement import (
     load_content_enhancement,
     write_content_enhancement_artifacts,
 )
+from core.delivery_report import build_delivery_report, markdown_delivery_report
 from core.viral_pipeline import (
     PLATFORM_CHOICES as VIRAL_PLATFORM_CHOICES,
     analyze_source_corpus,
@@ -881,6 +882,17 @@ def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dic
     manifest["reader_gate_status"] = "passed" if reader_gate.get("passed") else "failed"
     manifest["visual_gate_status"] = "passed" if visual_gate.get("passed") else "failed"
     manifest["final_gate_status"] = "passed" if final_gate.get("passed") else "failed"
+    write_delivery_report(workspace, manifest)
+    return payload
+
+
+def write_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    payload = build_delivery_report(workspace, manifest)
+    write_json(workspace / "final-delivery-report.json", payload)
+    write_text(workspace / "final-delivery-report.md", markdown_delivery_report(payload))
+    manifest["delivery_report_path"] = "final-delivery-report.json"
+    manifest["delivery_report_markdown_path"] = "final-delivery-report.md"
+    manifest["delivery_report_status"] = "passed" if payload.get("overall_status") == "passed" else "failed"
     return payload
 
 
@@ -931,7 +943,17 @@ def cmd_final_gate(args: argparse.Namespace) -> int:
     workspace = ensure_workspace(workspace_path(args.workspace))
     manifest = _prepare_content_manifest(workspace)
     write_acceptance_artifacts(workspace, manifest)
+    save_manifest(workspace, manifest)
     payload = read_json(workspace / "final_gate.json", default={}) or {}
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_delivery_report(args: argparse.Namespace) -> int:
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = _prepare_content_manifest(workspace)
+    payload = write_delivery_report(workspace, manifest)
+    save_manifest(workspace, manifest)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
@@ -1226,6 +1248,14 @@ def rerank_discovery_candidates(
             + discussion_score
             - repeat_penalty
         )
+        topic_score_dimensions = {
+            "时效和证据": min(20, evidence_potential * 2 + min(2, int(item.get("hit_count") or 0)) * 2),
+            "冲突和代价": min(20, min(discussion_score, 10) + int(max(1, min(10, reader_value_score))) + (2 if any(keyword in corpus for keyword in {"成本", "代价", "岗位", "影响", "误判", "风险", "谁会先"}) else 0)),
+            "目标读者清晰度": min(20, audience_fit_score * 2),
+            "判断卡沉淀能力": min(20, writeability_score * 2),
+            "互动传播潜力": min(20, propagation_score + min(discussion_score, 10)),
+        }
+        topic_score_100 = int(sum(topic_score_dimensions.values()))
         item["novelty_score"] = novelty_score
         item["differentiation_score"] = differentiation_score
         item["angle_freshness_score"] = angle_freshness_score
@@ -1238,6 +1268,9 @@ def rerank_discovery_candidates(
         item["repeat_penalty"] = repeat_penalty
         item["recent_overlap_tokens"] = repeat_hits[:5]
         item["decision_score"] = int(decision_score)
+        item["topic_score_100"] = topic_score_100
+        item["topic_score_dimensions"] = topic_score_dimensions
+        item["topic_gate_passed"] = topic_score_100 >= 70 and min(topic_score_dimensions.values()) >= 10
         item["recommended_archetype"] = recommended_archetype
         item["recommended_enhancement_strategy"] = enhancement_strategy_for_archetype(recommended_archetype, title)
         item["writeability_score"] = int(writeability_score)
@@ -1248,8 +1281,12 @@ def rerank_discovery_candidates(
     reranked.sort(
         key=lambda item: (
             bool(item.get("recommended_title_gate_passed", False)),
-            int(item.get("decision_score") or 0),
+            -int(item.get("repeat_penalty") or 0),
+            bool(item.get("topic_gate_passed", False)),
             int(item.get("novelty_score") or 0),
+            int(item.get("differentiation_score") or 0),
+            int(item.get("decision_score") or 0),
+            int(item.get("topic_score_100") or 0),
             int(item.get("hit_count") or 0),
             int(item.get("recommended_title_score") or 0),
         ),
@@ -2938,23 +2975,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         if not getattr(args, "confirmed_publish", False):
             raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
         write_acceptance_artifacts(workspace, manifest)
-        save_manifest(workspace, manifest)
-        blockers = collect_publish_blockers(workspace, manifest)
-        if blockers:
-            detail = "\n".join(f"- {item}" for item in blockers)
-            raise SystemExit(f"当前稿件不满足正式发布条件：\n{detail}")
-        _mark_publish_intent(workspace)
-    return wechat_publish(args)
-
-
-def cmd_publish(args: argparse.Namespace) -> int:
-    workspace = ensure_workspace(workspace_path(args.workspace))
-    manifest = load_manifest(workspace)
-    if not getattr(args, "dry_run", False):
-        if not getattr(args, "confirmed_publish", False):
-            raise SystemExit("正式发布前必须显式传入 --confirmed-publish。")
-        write_acceptance_artifacts(workspace, manifest)
-        manifest = load_manifest(workspace)
+        write_delivery_report(workspace, manifest)
         save_manifest(workspace, manifest)
         blockers = collect_publish_blockers(workspace, manifest)
         force_publish = bool(getattr(args, "force_publish", False))
@@ -2969,11 +2990,20 @@ def cmd_publish(args: argparse.Namespace) -> int:
             manifest["force_publish_at"] = now_iso()
             save_manifest(workspace, manifest)
         _mark_publish_intent(workspace)
-    return wechat_publish(args)
+    rc = wechat_publish(args)
+    manifest = load_manifest(workspace)
+    write_delivery_report(workspace, manifest)
+    save_manifest(workspace, manifest)
+    return rc
 
 
 def cmd_verify_draft(args: argparse.Namespace) -> int:
-    return wechat_verify_draft(args)
+    rc = wechat_verify_draft(args)
+    workspace = ensure_workspace(workspace_path(args.workspace))
+    manifest = load_manifest(workspace)
+    write_delivery_report(workspace, manifest)
+    save_manifest(workspace, manifest)
+    return rc
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -3281,6 +3311,9 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "recommended_enhancement_strategy": recommended_enhancement_strategy or manifest.get("recommended_enhancement_strategy") or "",
             "writeability_score": candidate.get("writeability_score"),
             "evidence_potential": candidate.get("evidence_potential"),
+            "topic_score_100": candidate.get("topic_score_100"),
+            "topic_score_dimensions": candidate.get("topic_score_dimensions") or {},
+            "topic_gate_passed": candidate.get("topic_gate_passed"),
             "topic_novelty_reason": candidate.get("novelty_reason") or "",
         }
     )
@@ -3294,6 +3327,9 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "updated_at": now_iso(),
             "recommended_archetype": recommended_archetype,
             "recommended_enhancement_strategy": recommended_enhancement_strategy,
+            "topic_score_100": candidate.get("topic_score_100"),
+            "topic_score_dimensions": candidate.get("topic_score_dimensions") or {},
+            "topic_gate_passed": candidate.get("topic_gate_passed"),
         }
     )
     write_json(workspace / "ideation.json", ideation)
@@ -5128,6 +5164,10 @@ def build_parser() -> argparse.ArgumentParser:
     final_gate = subparsers.add_parser("final-gate", help="生成 final_gate.json")
     final_gate.add_argument("--workspace", required=True)
     final_gate.set_defaults(func=cmd_final_gate)
+
+    delivery_report = subparsers.add_parser("delivery-report", help="生成最终交付报告，汇总质量、配图、发布和回读状态")
+    delivery_report.add_argument("--workspace", required=True)
+    delivery_report.set_defaults(func=cmd_delivery_report)
 
     learn_performance = subparsers.add_parser("learn-performance", help="记录 24h / 72h 的真实表现")
     learn_performance.add_argument("--workspace", required=True)

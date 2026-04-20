@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 from core.ai_fingerprint import detect_ai_fingerprints  # noqa: E402
 from core.content_fingerprint import build_article_fingerprint, summarize_batch_collisions  # noqa: E402
 from core.quality_checks import metadata_integrity_report  # noqa: E402
+from core.quality_gates import build_reader_gate  # noqa: E402
 from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report  # noqa: E402
 from core.workflow import build_pipeline_readiness  # noqa: E402
 
@@ -223,6 +224,7 @@ class QualityPipelineGuardTests(unittest.TestCase):
         )
         self.assertTrue(passed["passed"])
         self.assertFalse(failed["passed"])
+        self.assertTrue(passed["four_question_passed"])
 
     def test_template_frequency_report_flags_title_and_ending_same_family(self):
         report = template_frequency_report(
@@ -237,6 +239,47 @@ class QualityPipelineGuardTests(unittest.TestCase):
         )
         self.assertFalse(report["passed"])
         self.assertTrue(report["same_family_repeat"])
+
+    def test_template_frequency_report_flags_blocked_save_list_phrase(self):
+        report = template_frequency_report(
+            "AI 产品少走弯路，先画清三条边界",
+            "\n\n".join(
+                [
+                    "父母晚上看到孩子还在和 AI 聊天，第一反应不是新奇，而是担心风险会不会失控。",
+                    "中段正常展开。",
+                    "这张清单值得保存。",
+                ]
+            ),
+        )
+        self.assertFalse(report["passed"])
+        self.assertIn("save_list_template", report["matched_patterns"])
+
+    def test_reader_gate_requires_hard_evidence_table_setup_and_natural_ending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "research.json").write_text(json.dumps({"evidence_items": []}, ensure_ascii=False), encoding="utf-8")
+            body = "\n\n".join(
+                [
+                    "AI 正在快速发展。",
+                    "这件事值得关注。",
+                    "| 现象 | 判断 |\n| --- | --- |\n| A | B |",
+                    "这张清单值得保存。",
+                ]
+            )
+            report = build_reader_gate(
+                workspace,
+                {},
+                title="AI 正在快速发展",
+                summary="AI 正在快速发展，这件事值得关注。",
+                body=body,
+                score_report={},
+                review_report={},
+            )
+            self.assertFalse(report["passed"])
+            joined = " ".join(report["failed_checks"])
+            self.assertIn("首屏四问未齐", joined)
+            self.assertIn("表格前缺少真实问题", joined)
+            self.assertIn("模板腔黑名单", joined)
 
     def test_abnormal_text_report_flags_suspicious_short_bullets(self):
         report = abnormal_text_report(

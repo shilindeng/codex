@@ -30,7 +30,13 @@
 - `publication-report.json`：发布前整理报告（图片限制、技术词、结构化块等）
 - `content-fingerprint.json`：当前稿件的结构与路线指纹
 - `layout-plan.json`：大纲阶段生成的公众号版式规划
+- `layout-plan.md`：面向人读的版式规划；正式发布前必须存在
 - `acceptance-report.json`：发布前成品验收结果
+- `reader_gate.json`：读者视角门禁，检查首屏、证据、评论点、转发动机与模板腔
+- `visual_gate.json`：视觉门禁，检查图片密度、图片分工、首图位置、文字策略与图片资产
+- `final_gate.json`：最终质量门禁，汇总评分、读者门、视觉门和验收结果
+- `final-delivery-report.json`：最终交付报告，分开记录质量、发布和回读状态
+- `final-delivery-report.md`：面向人读的最终交付报告
 - `references.json`：标准化引用清单与文末引用卡片数据
 - `image-plan.json`：配图规划
 - `image-outline.json`：结构化插图大纲
@@ -41,6 +47,21 @@
 - `article.wechat.html`：公众号兼容 HTML
 - `publish-result.json`：发布结果
 - `latest-draft-report.json`：草稿回读验收结果
+
+## 发布前硬门槛
+
+正式发布默认必须同时满足：
+
+- `score-report.json.passed = true`
+- `acceptance-report.json.passed = true`
+- `reader_gate.json.passed = true`
+- `visual_gate.json.passed = true`
+- `final_gate.json.passed = true`
+- `layout-plan.json` 与 `layout-plan.md` 都存在
+- `image-plan.json` 存在，且计划中的图片资产已落盘
+- `publication.md` 与 `article.wechat.html` 都存在
+
+如果用户明确要求强制发布，必须写入 `force_publish_reason`，并在 `final-delivery-report.json` / `final-delivery-report.md` 中标出“已发布但质量门未过”。
 
 ## `manifest.json` 关键字段
 
@@ -83,6 +104,11 @@
 - `content_fingerprint_path`
 - `layout_plan_path`
 - `acceptance_report_path`
+- `reader_gate_path`
+- `visual_gate_path`
+- `final_gate_path`
+- `delivery_report_path`
+- `delivery_report_markdown_path`
 - `publication_path`
 - `publication_report_path`
 - `writing_persona`
@@ -91,6 +117,8 @@
 - `humanness_signals`
 - `research_requirements`
 - `publish_intent`
+- `force_publish_reason`
+- `force_publish_at`
 - `content_mode`
 - `wechat_header_mode`
 - `image_decision_source`
@@ -100,6 +128,8 @@
 - `corpus_root`
 - `max_similarity`
 - `fingerprint_findings`
+
+注意：`publish_status=verified` 和 `verify_status=passed` 只说明草稿箱回读成功，不代表文章质量通过。最终对外汇报必须同时看 `final-delivery-report.json` 的 `quality_passed`、`published`、`readback_passed`。
 
 ## `review-report.json` 关键字段
 
