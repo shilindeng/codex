@@ -171,6 +171,49 @@ class PublicationPipelineTests(unittest.TestCase):
             self.assertIn("真正问题", preview_html)
             self.assertNotIn("旧图文稿", preview_html)
 
+    def test_render_uses_newer_assembled_with_inserted_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "selected_title": "测试标题",
+                        "summary": "摘要",
+                        "article_path": "article.md",
+                        "assembled_path": "assembled.md",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "article.md").write_text("原始正文。", encoding="utf-8")
+            (workspace / "assembled.md").write_text(
+                "---\ntitle: 测试标题\nsummary: 摘要\n---\n\n插图正文。\n\n![正文图](assets/images/inline-01.png)\n",
+                encoding="utf-8",
+            )
+            now = time.time() + 60
+            os = __import__("os")
+            os.utime(workspace / "assembled.md", (now, now))
+            cmd_render(
+                argparse.Namespace(
+                    workspace=str(workspace),
+                    input=None,
+                    output="article.html",
+                    accent_color="#0F766E",
+                    layout_style="auto",
+                    layout_skin=None,
+                    input_format="auto",
+                    wechat_header_mode="drop-title",
+                )
+            )
+            preview_html = (workspace / "article.html").read_text(encoding="utf-8")
+            wechat_html = (workspace / "article.wechat.html").read_text(encoding="utf-8")
+            self.assertIn("assets/images/inline-01.png", preview_html)
+            self.assertIn("assets/images/inline-01.png", wechat_html)
+            self.assertIn("插图正文", preview_html)
+            self.assertNotIn("原始正文", preview_html)
+
     def test_render_theme_personality_is_distinct_for_wechat_output(self):
         article = "\n".join(
             [

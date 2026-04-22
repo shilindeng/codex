@@ -159,6 +159,7 @@ TITLE_SCORE_THRESHOLD = 68
 DISCOVERY_TOPIC_LIMIT = 8
 DISCOVERY_FEED_LIMIT = 20
 DISCOVERY_PROVIDER_CHOICES = ("auto", "google-news-rss", "custom-rss", "tavily")
+IMAGE_PROVIDER_CHOICES = ("gemini-web", "codex", "gemini-api", "openai-image")
 START_TOPIC_TOKENS = {"", "开始", "start", "begin", "go", "启动", "开启公众号创作", "开启创作", "开始创作"}
 GEMINI_WEB_NO_IMAGE_MARKER = "No image returned in response."
 GEMINI_WEB_IMAGE_MODEL_CANDIDATES = [
@@ -2467,11 +2468,7 @@ def auto_rewrite_article(title: str, meta: dict[str, str], body: str, report: di
 def image_provider_from_env(explicit: str | None) -> str:
     if explicit:
         return explicit
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-        return "gemini-api"
-    if os.getenv("OPENAI_API_KEY"):
-        return "openai-image"
-    raise SystemExit("未检测到稳定图片后端。默认仅自动选择 gemini-api 或 openai-image；如需 gemini-web，请显式传 --provider gemini-web。")
+    return "gemini-web"
 
 
 def fallback_image_provider(preferred: str) -> str | None:
@@ -2867,6 +2864,134 @@ def generate_gemini_web_image(prompt: str, output_path: Path, model: str | None 
             "prompt_variant": used_prompt_variant,
             "profile_dir": session_info.get("shared_profile_dir") or "",
             "session_source": session_info.get("active_source") or "",
+        },
+    }
+
+
+def codex_generated_images_root() -> Path:
+    root = os.getenv("CODEX_HOME")
+    return (Path(root) if root else Path.home() / ".codex") / "generated_images"
+
+
+def codex_image_import_dirs(workspace: Path) -> list[Path]:
+    dirs: list[Path] = []
+    for raw in [
+        os.getenv("ARTICLE_STUDIO_CODEX_IMAGE_DIR"),
+        os.getenv("CODEX_IMAGE_IMPORT_DIR"),
+    ]:
+        if raw:
+            dirs.append(Path(raw))
+    dirs.extend(
+        [
+            workspace / "codex-images",
+            workspace / "assets" / "codex-images",
+        ]
+    )
+    return dirs
+
+
+def find_codex_import_image(workspace: Path, item_id: str) -> Path | None:
+    for directory in codex_image_import_dirs(workspace):
+        candidate = directory / f"{item_id}.png"
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def ensure_codex_image_available(workspace: Path, item: dict[str, Any], output_path: Path) -> dict[str, Any] | None:
+    if output_path.exists():
+        return {"source": "target-path", "path": relative_posix(output_path, workspace)}
+    source = find_codex_import_image(workspace, str(item.get("id") or ""))
+    if not source:
+        return None
+    ensure_dir(output_path.parent)
+    shutil.copyfile(source, output_path)
+    return {
+        "source": "import-dir",
+        "import_path": str(source),
+        "path": relative_posix(output_path, workspace),
+    }
+
+
+def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) -> None:
+    payload = {
+        "provider": "codex",
+        "generated_at": now_iso(),
+        "instructions": [
+            "在当前 Codex App 对话里使用内置 image_gen 逐张生图。",
+            "将每张成图保存为对应 target_path，或保存到 codex-images/<id>.png 后重新运行 generate-images --provider codex。",
+        ],
+        "codex_generated_images_root": str(codex_generated_images_root()),
+        "items": requests,
+    }
+    write_json(workspace / "codex-image-requests.json", payload)
+    lines = [
+        "# Codex 图片生成清单",
+        "",
+        "使用当前 Codex App 对话的内置生图工具逐张生成。生成后，把图片保存到 `target_path`，或保存到 `codex-images/<id>.png` 后重新运行 `generate-images --provider codex`。",
+        "",
+    ]
+    for index, item in enumerate(requests, 1):
+        lines.extend(
+            [
+                f"## {index}. {item['id']}",
+                "",
+                f"- type: {item.get('type') or ''}",
+                f"- aspect_ratio: {item.get('aspect_ratio') or ''}",
+                f"- target_path: `{item['target_path']}`",
+                "",
+                "### Prompt",
+                "",
+                str(item.get("prompt") or "").strip(),
+                "",
+            ]
+        )
+    write_text(workspace / "codex-image-requests.md", "\n".join(lines).rstrip() + "\n")
+
+
+def prepare_codex_image_requests(workspace: Path, plan: dict[str, Any], images_dir: Path) -> list[dict[str, Any]]:
+    missing: list[dict[str, Any]] = []
+    for item in plan.get("items") or []:
+        filename = f"{item['id']}.png"
+        output_path = images_dir / filename
+        prompt_path = workspace / "prompts" / "images" / f"{item['id']}.md"
+        prompt_override = extract_prompt_from_markdown(prompt_path)
+        effective_prompt = prompt_override or item.get("prompt") or ""
+        if prompt_override:
+            item["prompt"] = prompt_override
+        source_meta = ensure_codex_image_available(workspace, item, output_path)
+        if source_meta is None:
+            missing.append(
+                {
+                    "id": item.get("id"),
+                    "type": item.get("type"),
+                    "aspect_ratio": item.get("aspect_ratio") or "16:9",
+                    "target_path": relative_posix(output_path, workspace),
+                    "prompt_path": relative_posix(prompt_path, workspace) if prompt_path.exists() else "",
+                    "prompt": effective_prompt,
+                }
+            )
+    if missing:
+        write_codex_image_requests(workspace, missing)
+    return missing
+
+
+def generate_codex_image(prompt: str, output_path: Path, workspace: Path, item: dict[str, Any], aspect: str) -> dict[str, Any]:
+    source_meta = ensure_codex_image_available(workspace, item, output_path)
+    if source_meta is None:
+        raise SystemExit("codex 图片尚未生成。请先按 codex-image-requests.md 用当前 Codex App 对话生成图片。")
+    width, height, _ = image_size_hint(aspect)
+    actual_width, actual_height = detect_dimensions(output_path, (width, height))
+    return {
+        "provider": "codex",
+        "prompt": prompt,
+        "revised_prompt": prompt,
+        "width": actual_width,
+        "height": actual_height,
+        "source_meta": {
+            "codex_app_image": True,
+            "imagegen_tool": "current-conversation",
+            **source_meta,
         },
     }
 
@@ -4564,6 +4689,14 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
     requested_provider = args.provider or plan.get("provider")
     provider = image_provider_from_env(requested_provider)
     images_dir = ensure_dir(workspace / "assets" / "images")
+    if provider == "codex" and not args.dry_run:
+        missing = prepare_codex_image_requests(workspace, plan, images_dir)
+        if missing:
+            write_json(plan_path, plan)
+            raise SystemExit(
+                "codex 生图需要当前 Codex App 对话先生成图片；已写入 codex-image-requests.md 和 codex-image-requests.json。"
+                " 生成完成后重新运行 generate-images --provider codex。"
+            )
     generated = {}
     for item in plan.get("items") or []:
         filename = f"{item['id']}.png"
@@ -4624,6 +4757,8 @@ def cmd_generate_images(args: argparse.Namespace) -> int:
             result = generate_gemini_api_image(effective_prompt, output_path, args.gemini_model, aspect)
         elif provider == "openai-image":
             result = generate_openai_image(effective_prompt, output_path, args.openai_model, aspect)
+        elif provider == "codex":
+            result = generate_codex_image(effective_prompt, output_path, workspace, item, aspect)
         else:
             raise SystemExit(f"不支持的图片后端：{provider}")
         item["provider"] = result.get("provider") or provider
@@ -5438,6 +5573,17 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
             "missing": [] if ok else ["OPENAI_API_KEY"],
             "notes": ["官方 OpenAI 图片接口，推荐作为稳定路径。"],
         }
+    if provider == "codex":
+        root = codex_generated_images_root()
+        return {
+            "ok": root.parent.exists(),
+            "missing": [] if root.parent.exists() else ["Codex App 数据目录"],
+            "notes": [
+                "使用当前 Codex App 对话的内置生图能力，不要求 OPENAI_API_KEY。",
+                "CLI 只负责生成提示词、登记图片和继续排版；真实生图需要当前 agent 调用内置 image_gen 后把文件保存到工作区。",
+            ],
+            "generated_images_root": str(root),
+        }
     from core.gemini_web_session import has_session_material, session_diagnostics
 
     vendor_missing = [relative for relative in IMAGE_PROVIDER_FILES if not (vendor_root() / relative).exists()]
@@ -5457,7 +5603,7 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
         "ok": ok,
         "missing": missing,
         "notes": [
-            "非官方 best-effort 路径，仅在显式指定 --provider gemini-web 时启用。",
+            "默认免费路径。非官方 best-effort 路径，启用前需要用户同意和可复用登录态。",
             "当前若仅文本能返回、图片不返回，通常是 Gemini Web 上游图片能力或非官方接口发生兼容变化。",
         ],
         "bun_available": bun_ready,
@@ -5472,11 +5618,7 @@ def doctor_provider_status(provider: str) -> dict[str, Any]:
 def cmd_doctor(args: argparse.Namespace) -> int:
     workspace = Path(args.workspace).resolve() if args.workspace else Path.cwd().resolve()
     workspace_target = workspace if workspace.exists() else workspace.parent
-    auto_provider = None
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-        auto_provider = "gemini-api"
-    elif os.getenv("OPENAI_API_KEY"):
-        auto_provider = "openai-image"
+    auto_provider = "gemini-web"
     provider = args.provider or auto_provider
     report = {
         "python": {
@@ -5499,9 +5641,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "auto_provider": auto_provider,
         "selected_provider": provider,
         "providers": {
+            "gemini-web": doctor_provider_status("gemini-web"),
+            "codex": doctor_provider_status("codex"),
             "gemini-api": doctor_provider_status("gemini-api"),
             "openai-image": doctor_provider_status("openai-image"),
-            "gemini-web": doctor_provider_status("gemini-web"),
         },
     }
     safe_print_json(report)
@@ -5617,7 +5760,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_images = subparsers.add_parser("plan-images", help="生成图片规划")
     plan_images.add_argument("--workspace", required=True)
-    plan_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    plan_images.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     plan_images.add_argument("--image-density", choices=IMAGE_DENSITY_CHOICES, default=None)
     plan_images.add_argument("--allow-closing-image", choices=ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     plan_images.add_argument("--inline-count", type=int, default=0)
@@ -5625,7 +5768,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_images = subparsers.add_parser("generate-images", help="执行图片生成")
     generate_images.add_argument("--workspace", required=True)
-    generate_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    generate_images.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     generate_images.add_argument("--dry-run", action="store_true")
     generate_images.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     generate_images.add_argument("--openai-model", default="gpt-image-1")
@@ -5659,7 +5802,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor = subparsers.add_parser("doctor", help="检查本地环境和发布依赖")
     doctor.add_argument("--workspace")
-    doctor.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    doctor.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     doctor.set_defaults(func=cmd_doctor)
 
     consent = subparsers.add_parser("consent", help="管理 gemini-web 同意状态")
@@ -5669,7 +5812,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     all_cmd = subparsers.add_parser("all", help="串联评分、配图、汇总、渲染、发布")
     all_cmd.add_argument("--workspace", required=True)
-    all_cmd.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    all_cmd.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     all_cmd.add_argument("--image-density", choices=IMAGE_DENSITY_CHOICES, default=None)
     all_cmd.add_argument("--allow-closing-image", choices=ALLOW_CLOSING_IMAGE_CHOICES, default=None)
     all_cmd.add_argument("--inline-count", type=int, default=0)

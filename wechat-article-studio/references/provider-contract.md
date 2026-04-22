@@ -96,10 +96,14 @@
 默认自动选择顺序：
 
 1. 用户显式 `--provider`
-2. `gemini-api`
-3. `openai-image`
+2. `gemini-web`
 
-`gemini-web` 只能显式启用，且要求用户同意。
+支持的图片 provider：
+
+- `gemini-web`：默认免费路径。要求用户已同意并存在可复用登录态。
+- `codex`：使用当前 Codex App 对话内置生图能力，不要求 `OPENAI_API_KEY`。CLI 只会生成 `codex-image-requests.md/json`、登记已保存图片并继续排版；当前 agent 需要调用内置 `image_gen`，把成图保存到 `assets/images/<id>.png` 或 `codex-images/<id>.png`，再重新运行 `generate-images --provider codex`。
+- `gemini-api`：官方 API 路径，需要 `GEMINI_API_KEY` 或 `GOOGLE_API_KEY`。
+- `openai-image`：官方 OpenAI 图片接口，需要 `OPENAI_API_KEY`。
 
 ## 发布 provider
 

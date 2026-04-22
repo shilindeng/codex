@@ -132,6 +132,7 @@ CONTENT_MODE_CHOICES = ("tech-balanced", "tech-credible", "viral")
 WECHAT_HEADER_MODE_CHOICES = ("keep", "drop-title", "drop-title-summary")
 RECENT_CORPUS_LIMIT = 20
 PIPELINE_SCHEMA_VERSION = "2026-04-v3"
+IMAGE_PROVIDER_CHOICES = legacy.IMAGE_PROVIDER_CHOICES
 KNOWN_TEMPLATE_PHRASES = [
     "这很正常，你不是一个人",
     "最难受的是",
@@ -3031,9 +3032,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             ],
         },
         "image_providers": {
+            "gemini-web": legacy.doctor_provider_status("gemini-web"),
+            "codex": legacy.doctor_provider_status("codex"),
             "gemini-api": legacy.doctor_provider_status("gemini-api"),
             "openai-image": legacy.doctor_provider_status("openai-image"),
-            "gemini-web": legacy.doctor_provider_status("gemini-web"),
         },
         "de_ai_bridge": {
             "humanizerai": humanizer.doctor_status(),
@@ -3749,8 +3751,6 @@ def _effective_image_provider(args: argparse.Namespace) -> str | None:
     explicit = getattr(args, "image_provider", None)
     if explicit:
         return explicit
-    if getattr(args, "dry_run_images", False):
-        return "openai-image"
     return None
 
 
@@ -4809,7 +4809,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")
     run.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     run.add_argument("--to", choices=["render", "publish"], default="render")
-    run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    run.add_argument("--image-provider", choices=IMAGE_PROVIDER_CHOICES)
     run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     run.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
     run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
@@ -4855,7 +4855,7 @@ def build_parser() -> argparse.ArgumentParser:
     viral_run.add_argument("--max-revision-rounds", type=int, default=3)
     viral_run.add_argument("--style-sample", action="append", default=[])
     viral_run.add_argument("--to", choices=["render", "publish"], default="render")
-    viral_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    viral_run.add_argument("--image-provider", choices=IMAGE_PROVIDER_CHOICES)
     viral_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     viral_run.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
     viral_run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
@@ -4974,7 +4974,7 @@ def build_parser() -> argparse.ArgumentParser:
     hosted_run.add_argument("--max-revision-rounds", type=int, default=3, help="多轮修正上限（默认 3）")
     hosted_run.add_argument("--style-sample", action="append", default=[], help="可选：提供高表现文章/风格样本文件路径（可重复）")
     hosted_run.add_argument("--to", choices=["render", "publish"], default="render")
-    hosted_run.add_argument("--image-provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    hosted_run.add_argument("--image-provider", choices=IMAGE_PROVIDER_CHOICES)
     hosted_run.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     hosted_run.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
     hosted_run.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
@@ -5050,7 +5050,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_images = subparsers.add_parser("plan-images", help="按章节权重生成 image-plan.json")
     plan_images.add_argument("--workspace", required=True)
-    plan_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    plan_images.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     plan_images.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     plan_images.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
     plan_images.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
@@ -5070,7 +5070,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate_images = subparsers.add_parser("generate-images", help="执行 image-plan.json 中的图片生成")
     generate_images.add_argument("--workspace", required=True)
-    generate_images.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    generate_images.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     generate_images.add_argument("--dry-run", action="store_true")
     generate_images.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
     generate_images.add_argument("--openai-model", default="gpt-image-1")
@@ -5119,7 +5119,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     all_cmd = subparsers.add_parser("all", help="兼容别名：等价于 run")
     all_cmd.add_argument("--workspace", required=True)
-    all_cmd.add_argument("--provider", choices=["gemini-web", "gemini-api", "openai-image"])
+    all_cmd.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     all_cmd.add_argument("--image-preset", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)
     all_cmd.add_argument("--image-style-mode", choices=["uniform", "mixed-by-type"])
     all_cmd.add_argument("--image-preset-cover", choices=legacy.IMAGE_STYLE_PRESET_CHOICES)

@@ -186,7 +186,9 @@ def _prepare_publication_for_render(workspace: Path, manifest: dict[str, Any]) -
     input_rel = None
     article_rel = str(manifest.get("article_path") or "article.md")
     assembled_rel = str(manifest.get("assembled_path") or "assembled.md")
-    if not (workspace / article_rel).exists() and (workspace / assembled_rel).exists():
+    article_path = workspace / article_rel
+    assembled_path = workspace / assembled_rel
+    if assembled_path.exists() and (not article_path.exists() or assembled_path.stat().st_mtime_ns >= article_path.stat().st_mtime_ns):
         input_rel = assembled_rel
     payload = prepare_publication_artifacts(workspace, manifest, input_rel=input_rel)
     save_manifest(workspace, manifest)

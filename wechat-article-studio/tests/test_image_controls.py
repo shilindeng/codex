@@ -40,6 +40,9 @@ def _image_args(**overrides):
 
 
 class ImageControlTests(unittest.TestCase):
+    def test_default_image_provider_is_gemini_web(self):
+        self.assertEqual(legacy.image_provider_from_env(None), "gemini-web")
+
     def test_explicit_image_preset_wins_over_auto(self):
         controls = legacy.resolve_image_controls(
             {},
@@ -147,6 +150,87 @@ class ImageControlTests(unittest.TestCase):
             generated = plan["items"][0]
             self.assertEqual(generated["provider"], "local-card")
             self.assertTrue((workspace / "assets" / "images" / "inline-01.png").exists())
+
+    def test_generate_images_codex_writes_request_when_image_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "image-plan.json").write_text(
+                json.dumps(
+                    {
+                        "provider": "codex",
+                        "items": [
+                            {
+                                "id": "inline-01",
+                                "type": "正文插图",
+                                "prompt": "draw a compact editorial illustration",
+                                "aspect_ratio": "16:9",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(SystemExit):
+                legacy.cmd_generate_images(
+                    type(
+                        "Args",
+                        (),
+                        {
+                            "workspace": str(workspace),
+                            "provider": "codex",
+                            "dry_run": False,
+                            "gemini_model": "gemini-2.0-flash-preview-image-generation",
+                            "openai_model": "gpt-image-1",
+                        },
+                    )()
+                )
+            self.assertTrue((workspace / "codex-image-requests.md").exists())
+            request_payload = json.loads((workspace / "codex-image-requests.json").read_text(encoding="utf-8"))
+            self.assertEqual(request_payload["items"][0]["target_path"], "assets/images/inline-01.png")
+
+    def test_generate_images_codex_registers_existing_workspace_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "image-plan.json").write_text(
+                json.dumps(
+                    {
+                        "provider": "codex",
+                        "items": [
+                            {
+                                "id": "inline-01",
+                                "type": "正文插图",
+                                "prompt": "draw a compact editorial illustration",
+                                "aspect_ratio": "16:9",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            image_path = workspace / "assets" / "images" / "inline-01.png"
+            legacy.make_placeholder_png(image_path)
+            legacy.cmd_generate_images(
+                type(
+                    "Args",
+                    (),
+                    {
+                        "workspace": str(workspace),
+                        "provider": "codex",
+                        "dry_run": False,
+                        "gemini_model": "gemini-2.0-flash-preview-image-generation",
+                        "openai_model": "gpt-image-1",
+                    },
+                )()
+            )
+            plan = json.loads((workspace / "image-plan.json").read_text(encoding="utf-8"))
+            generated = plan["items"][0]
+            self.assertEqual(generated["provider"], "codex")
+            self.assertEqual(generated["asset_path"], "assets/images/inline-01.png")
+            self.assertTrue(generated["source_meta"].get("codex_app_image"))
 
 
 if __name__ == "__main__":

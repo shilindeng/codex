@@ -6,6 +6,11 @@
 - 爆款蓝图：建议宿主在写正文前先生成 `viral_blueprint` 和 `editorial_blueprint`，并写入 `<job-dir>/ideation.json` 的 `outline_meta`；否则工作流会回退到启发式蓝图，质量门槛更难通过。
 - 正文约束：不要输出顶层 `# 标题`；标题只保留在 frontmatter / manifest。命令、包名、环境变量、路径、接口名、模型名、代码符号、英文专有名词优先用反引号。
 - 图片约束：若用户未显式指定 `--image-*` 参数，默认让图片系统根据文章内容自动选择主题与风格，不要强行固定单一 preset。
+- 生图方式：
+  - 用户未指定时，默认按 `gemini-web` 执行。
+  - 用户指定 `gemini-web` 时，传入 `--image-provider gemini-web`。
+  - 用户指定 `codex` / `Codex App` / 当前对话生图时，拆成 `plan-images --provider codex`、当前 agent 内置 `image_gen` 生图、`generate-images --provider codex`、`assemble`、`render`；如果走 `hosted-run` 入口，对应参数是 `--image-provider codex`。
+  - `codex` 模式不要尝试用 Python/CLI 直接调用内置生图工具；内置生图只在当前对话工具层可用。
 - 渲染约束：默认 `--wechat-header-mode drop-title`，公众号正文不重复标题，只保留摘要卡。
 - 正式发布：只有在用户明确确认后，才执行 `--to publish --confirmed-publish`。
 - 多轮回炉：`hosted-run/run` 默认最多回炉 3 轮，可用 `--max-revision-rounds` 调整；可选注入样本 `--style-sample sample.md`（可重复）。

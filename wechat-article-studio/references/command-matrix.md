@@ -186,7 +186,7 @@
 
 ## `plan-images`
 
-- 输入：`--workspace [--provider] [--image-preset] [--image-style-mode] [--image-density] [--image-layout-family] [--inline-count]`
+- 输入：`--workspace [--provider gemini-web|codex|gemini-api|openai-image] [--image-preset] [--image-style-mode] [--image-density] [--image-layout-family] [--inline-count]`
 - 依赖：`article.md` 或当前活跃正文存在
 - 输出：
   - `image-strategy.json`
@@ -201,11 +201,12 @@
 
 ## `generate-images`
 
-- 输入：`--workspace [--provider] [--dry-run]`
+- 输入：`--workspace [--provider gemini-web|codex|gemini-api|openai-image] [--dry-run]`
 - 依赖：`image-plan.json`
 - 执行逻辑：优先读取 `prompts/images/*.md` 中的 `## Prompt` 段落作为最终 Prompt；若缺失则回退到 `image-plan.json`
 - 输出：图片文件写入 `assets/images/`，并回写 `image-plan.json`
 - 失败条件：找不到 `image-plan.json`，或图片接口调用失败
+- `codex` 说明：CLI 不会直接调用 Codex App 内置生图工具；它会检查 `assets/images/<id>.png` 或 `codex-images/<id>.png`。缺图时会生成 `codex-image-requests.md/json`，当前 agent 需要在对话里用内置生图生成图片后重新运行本命令。
 
 ## 兼容命令
 

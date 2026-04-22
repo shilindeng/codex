@@ -177,7 +177,9 @@
 
 ## Provider 规则
 
-- 自动默认只选官方图片后端：`gemini-api`、`openai-image`
-- `gemini-web` 只在显式传入 `--provider gemini-web` 时启用
+- 不指定图片 provider 时，默认使用 `gemini-web`
+- 用户可以显式传入 `--provider gemini-web` 或 `--provider codex`
 - 启用 `gemini-web` 之前必须先完成同意检查
 - `gemini-web` 会优先尝试当前已知的 Gemini Web 图片模型；如果上游只返回文本、不返回图片，而本机又配置了 `gemini-api` 或 `openai-image`，系统会自动降级到官方图片接口
+- `codex` 使用当前 Codex App 对话内置生图能力：先运行 `plan-images` 生成 `prompts/images/*.md`，再由当前 agent 调用内置 `image_gen` 逐张生成，保存到 `assets/images/<id>.png` 或 `codex-images/<id>.png`，最后运行 `generate-images --provider codex` 登记图片并继续 `assemble/render`
+- `gemini-api` 和 `openai-image` 仍可显式传入，但它们需要对应 API key，不作为免费默认路径
