@@ -210,8 +210,8 @@ class QualityPipelineGuardTests(unittest.TestCase):
                         "target_section_index": 0,
                         "asset_path": "assets/images/inline-01.png",
                         "text_policy": "short-zh",
-                        "required_text": ["OpenAI", "Agent", "AI流程"],
-                        "label_strategy": ["OpenAI", "Agent", "AI流程"],
+                        "suggested_text": ["OpenAI"],
+                        "label_strategy": ["OpenAI"],
                         "role": "explain",
                         "article_visual_strategy": {"visual_route": "data-explainer"},
                     }
@@ -219,6 +219,39 @@ class QualityPipelineGuardTests(unittest.TestCase):
             }
             gate = build_visual_gate(workspace, {"wechat_html_path": "article.wechat.html"}, image_plan=plan)
             self.assertTrue(gate["passed"], gate.get("text_policy_failures"))
+
+    def test_visual_gate_blocks_dense_codex_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.wechat.html").write_text('<p>引入图</p><img src="assets/images/inline-01.png"/><h2>正文</h2>', encoding="utf-8")
+            image_path = workspace / "assets" / "images" / "inline-01.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"fake")
+            plan = {
+                "provider": "codex",
+                "density_mode": "balanced",
+                "planned_inline_count": 1,
+                "requested_inline_count": 1,
+                "inline_density_range": {"min": 1, "max": 2},
+                "article_visual_strategy": {"visual_route": "data-explainer"},
+                "items": [
+                    {
+                        "id": "inline-01",
+                        "type": "正文插图",
+                        "insert_strategy": "section_middle",
+                        "target_section_index": 0,
+                        "asset_path": "assets/images/inline-01.png",
+                        "text_policy": "short-zh",
+                        "suggested_text": ["责任边界", "风险提醒"],
+                        "label_strategy": ["责任边界", "风险提醒"],
+                        "role": "explain",
+                        "article_visual_strategy": {"visual_route": "data-explainer"},
+                    }
+                ],
+            }
+            gate = build_visual_gate(workspace, {"wechat_html_path": "article.wechat.html"}, image_plan=plan)
+            self.assertFalse(gate["passed"])
+            self.assertTrue(any("数量过多" in item or "过密" in item for item in gate["text_policy_failures"]))
 
     def test_visual_gate_blocks_non_whitelisted_english_label(self):
         with tempfile.TemporaryDirectory() as tmp:

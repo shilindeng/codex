@@ -2966,6 +2966,7 @@ def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) 
             "在当前 Codex App 对话里使用内置 image_gen 逐张生图。",
             "将每张成图保存为对应 target_path，或保存到 codex-images/<id>.png 后重新运行 generate-images --provider codex。",
             "每张图都必须肉眼可见 required_text 中的短字；如果无字、乱码或缺字，请重新生成，不要登记。",
+            "正文插图以画面隐喻优先；suggested_text 只是可选微文字，不能把图片做成文字卡片。",
         ],
         "codex_generated_images_root": str(codex_generated_images_root()),
         "items": requests,
@@ -2986,7 +2987,8 @@ def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) 
                 f"- aspect_ratio: {item.get('aspect_ratio') or ''}",
                 f"- target_path: `{item['target_path']}`",
                 f"- required_text: {' / '.join(item.get('required_text') or []) if item.get('required_text') else '无'}",
-                "- check: 成图必须包含 required_text，且不能出现额外英文标签或大段文字。",
+                f"- suggested_text: {' / '.join(item.get('suggested_text') or []) if item.get('suggested_text') else '无'}",
+                "- check: 封面必须包含 required_text；正文图以画面为主，最多一个很小的 suggested_text；不能出现大段文字或文字墙。",
                 "",
                 "### Prompt",
                 "",
@@ -3016,7 +3018,8 @@ def prepare_codex_image_requests(workspace: Path, plan: dict[str, Any], images_d
                     "aspect_ratio": item.get("aspect_ratio") or "16:9",
                     "target_path": relative_posix(output_path, workspace),
                     "prompt_path": relative_posix(prompt_path, workspace) if prompt_path.exists() else "",
-                    "required_text": list(item.get("required_text") or item.get("label_strategy") or []),
+                    "required_text": list(item.get("required_text") or []),
+                    "suggested_text": list(item.get("suggested_text") or item.get("label_strategy") or []),
                     "prompt": effective_prompt,
                 }
             )
@@ -3359,7 +3362,8 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         layout_spec = image_layout_spec(item)
         text_policy = resolve_image_text_policy(controls, item)
         label_strategy = text_policy["label_strategy"]
-        required_text = text_policy.get("required_text") or label_strategy
+        required_text = text_policy.get("required_text") or []
+        suggested_text = text_policy.get("suggested_text") or []
         outline_items.append(
             {
                 "id": item["id"],
@@ -3378,6 +3382,7 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
                 "visual_elements": image_visual_elements(item),
                 "label_strategy": label_strategy,
                 "required_text": required_text,
+                "suggested_text": suggested_text,
                 "text_budget": text_policy["text_budget"],
                 "text_policy": text_policy["mode"],
                 "text_policy_label": text_policy["label"],
@@ -3452,6 +3457,7 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         lines.append(f"- 标签语言：{item.get('label_language') or 'zh-CN'}")
         lines.append(f"- 标签策略：{' / '.join(item['label_strategy']) if item['label_strategy'] else '尽量不用图中文字'}")
         lines.append(f"- 必须出现文字：{' / '.join(item.get('required_text') or []) if item.get('required_text') else '无'}")
+        lines.append(f"- 可选微文字：{' / '.join(item.get('suggested_text') or []) if item.get('suggested_text') else '无'}")
         lines.append(f"- 比例策略：{item['aspect_policy']}")
         lines.append(f"- Prompt 文件：`{item['prompt_path']}`")
         lines.append("")

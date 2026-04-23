@@ -93,7 +93,8 @@ def enrich_plan_items(
         item["text_policy_reason"] = text_policy["reason"]
         item["label_language"] = text_policy["label_language"]
         item["label_strategy"] = text_policy["label_strategy"]
-        item["required_text"] = text_policy.get("required_text") or text_policy["label_strategy"]
+        item["required_text"] = text_policy.get("required_text") or []
+        item["suggested_text"] = text_policy.get("suggested_text") or []
         item["text_budget"] = text_policy["text_budget"]
         item["visual_reason"] = f"{item.get('type_reason', '')} {item.get('style_reason', '')}".strip()
         item["prompt"] = cfg.compose_prompt(title, summary, effective_controls, item, audience)

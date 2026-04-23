@@ -43,6 +43,21 @@ _SHARE_LINE_PATTERNS = (
 )
 
 
+def _text_density_limits(image_type: str) -> tuple[int, int]:
+    if image_type == "封面图":
+        return 2, 14
+    if image_type in {"流程图", "信息图", "对比图"}:
+        return 3, 12
+    return 1, 6
+
+
+def _looks_like_sentence_fragment(label: str) -> bool:
+    value = str(label or "").strip()
+    if any(value.startswith(prefix) for prefix in ("这次", "接下来", "很多人", "不只是", "不是", "可能", "会是", "如果")):
+        return True
+    return len(value) >= 7 and not any(token in value for token in AI_LABEL_ALLOWLIST)
+
+
 def _has_disallowed_english_label(label: str) -> bool:
     cleaned = str(label or "")
     for token in sorted(AI_LABEL_ALLOWLIST, key=len, reverse=True):
@@ -432,15 +447,26 @@ def build_visual_gate(
         image_type = str(item.get("type") or "")
         policy = str(item.get("text_policy") or "")
         insert_strategy = str(item.get("insert_strategy") or "")
-        label_strategy = [str(value or "").strip() for value in (item.get("required_text") or item.get("label_strategy") or []) if str(value or "").strip()]
+        required_labels = [str(value or "").strip() for value in (item.get("required_text") or []) if str(value or "").strip()]
+        suggested_labels = [str(value or "").strip() for value in (item.get("suggested_text") or []) if str(value or "").strip()]
+        label_strategy = required_labels or suggested_labels or [str(value or "").strip() for value in (item.get("label_strategy") or []) if str(value or "").strip()]
         asset_path = _clean(str(item.get("asset_path") or ""))
         if asset_path and not (workspace / asset_path).exists():
             asset_failures.append(f"{item.get('id')} 缺少生成图片文件")
         if codex_mode:
             if policy not in {"short-zh", "short-zh-numeric", "short-any"}:
                 text_policy_failures.append(f"{item.get('id')} Codex 图片必须配置短字策略")
-            if not label_strategy:
+            if image_type == "封面图" and not required_labels:
                 text_policy_failures.append(f"{item.get('id')} Codex 图片缺少 required_text")
+            if image_type != "封面图" and required_labels and image_type not in {"流程图", "信息图", "对比图"}:
+                text_policy_failures.append(f"{item.get('id')} 正文概念图不应强制 required_text")
+            max_count, max_chars = _text_density_limits(image_type)
+            if len(label_strategy) > max_count:
+                text_policy_failures.append(f"{item.get('id')} 图中文字数量过多")
+            if len("".join(label_strategy)) > max_chars:
+                text_policy_failures.append(f"{item.get('id')} 图中文字过密")
+            if any(_looks_like_sentence_fragment(label) for label in label_strategy):
+                text_policy_failures.append(f"{item.get('id')} 图中文字像半句话")
         elif image_type == "封面图" and policy != "none":
             text_policy_failures.append(f"{item.get('id')} 封面图应为无文字")
         elif insert_strategy == "section_middle" and image_type in {"正文插图", "分隔图"} and policy != "none":
