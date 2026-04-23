@@ -158,8 +158,22 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     }
 
     warnings: list[str] = []
+    publish_blockers: list[str] = []
+    if not quality_passed:
+        if score_passed is False:
+            publish_blockers.append("score-report.json 未通过")
+        if acceptance_passed is False:
+            publish_blockers.append("acceptance-report.json 未通过")
+        if reader_passed is False:
+            publish_blockers.extend(f"reader_gate.json：{item}" for item in _failed_gate_names(reader_gate)[:4])
+        if visual_passed is False:
+            publish_blockers.extend(f"visual_gate.json：{item}" for item in _failed_gate_names(visual_gate)[:4])
+        if final_passed is False:
+            publish_blockers.extend(f"final_gate.json：{item}" for item in _failed_gate_names(final_gate)[:4])
     if published and readback_passed and not quality_passed:
         warnings.append("草稿箱已发布并回读通过，但质量门未通过。")
+    if not published and publish_blockers:
+        warnings.append("质量或视觉门未通过，已阻止发布。")
     if forced:
         warnings.append("本次使用了强制发布，需要保留质量风险说明。")
     if not layout_exists or not layout_md_exists:
@@ -177,6 +191,7 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         "published": published,
         "readback_passed": readback_passed,
         "force_publish": forced,
+        "publish_blockers": publish_blockers,
         "warnings": warnings,
         "sections": sections,
         "generated_at": now_iso(),
@@ -199,6 +214,10 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
     if warnings:
         lines.extend(["", "## 风险提醒", ""])
         lines.extend(f"- {item}" for item in warnings)
+    publish_blockers = [str(item) for item in payload.get("publish_blockers") or [] if str(item).strip()]
+    if publish_blockers:
+        lines.extend(["", "## 未发布原因 / 需要修复", ""])
+        lines.extend(f"- {item}" for item in publish_blockers[:12])
     lines.extend(["", "## 分项结果", ""])
     labels = {
         "title": "标题",

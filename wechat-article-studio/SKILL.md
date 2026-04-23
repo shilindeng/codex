@@ -119,7 +119,8 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - 生图方式默认使用 `gemini-web`；用户显式指定 `gemini-web` 时继续走 `gemini-web`。
 - 用户显式指定 `codex` / `Codex App` / 当前对话生图时，使用 `codex` 流程：先生成图片计划和 `codex-image-requests.md`，再由当前 Codex agent 调用内置 `image_gen` 逐张生图，保存到工作目录后登记并继续排版。
 - `codex` 流程不要求 `OPENAI_API_KEY`，但只能在 Codex App 当前对话里完成；纯 CLI 只能负责提示词、文件检查和登记。
-- 封面图、正文插图、分隔图默认无字。
+- `gemini-web` 默认仍保持“封面图、正文插图、分隔图尽量无字；结构图允许极少量短中文标签”。
+- `codex` 默认改为所有图片都尽量带短字：封面图写 1~2 行短标题，正文图/结构图写 2~4 个短中文标签；如果实际成图无字、缺字或乱码，必须重生，不能直接登记。
 - 流程图、信息图、对比图允许极少量短中文标签。
 - 图片文字策略以账号策略和图片类型共同决定，不要一刀切。
 - 默认保持整篇视觉语言一致；只有在用途明显不同的图型上，才允许轻微分化。

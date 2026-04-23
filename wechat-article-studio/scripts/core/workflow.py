@@ -511,6 +511,8 @@ def assert_publish_request_ready(args: argparse.Namespace) -> None:
         return
     if not getattr(args, "dry_run_publish", False) and not getattr(args, "confirmed_publish", False):
         raise SystemExit("进入正式发布前必须显式传入 --confirmed-publish；未确认时不会写入 publish_intent。")
+    if getattr(args, "force_publish", False):
+        raise SystemExit("run/hosted-run/viral-run 自动流程不允许 --force-publish；如确需人工应急，请单独运行 publish 并写明 --force-reason。")
 
 
 def normalize_urls(values: list[str]) -> list[str]:

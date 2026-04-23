@@ -14,6 +14,7 @@ if str(SCRIPTS) not in sys.path:
 
 
 import legacy_studio as legacy  # noqa: E402
+from core.image_assembly import assemble_body  # noqa: E402
 
 
 def _image_args(**overrides):
@@ -163,6 +164,7 @@ class ImageControlTests(unittest.TestCase):
                                 "id": "inline-01",
                                 "type": "正文插图",
                                 "prompt": "draw a compact editorial illustration",
+                                "required_text": ["关键判断", "下一步"],
                                 "aspect_ratio": "16:9",
                             }
                         ],
@@ -189,6 +191,8 @@ class ImageControlTests(unittest.TestCase):
             self.assertTrue((workspace / "codex-image-requests.md").exists())
             request_payload = json.loads((workspace / "codex-image-requests.json").read_text(encoding="utf-8"))
             self.assertEqual(request_payload["items"][0]["target_path"], "assets/images/inline-01.png")
+            self.assertEqual(request_payload["items"][0]["required_text"], ["关键判断", "下一步"])
+            self.assertIn("required_text: 关键判断 / 下一步", (workspace / "codex-image-requests.md").read_text(encoding="utf-8"))
 
     def test_generate_images_codex_registers_existing_workspace_image(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,6 +235,64 @@ class ImageControlTests(unittest.TestCase):
             self.assertEqual(generated["provider"], "codex")
             self.assertEqual(generated["asset_path"], "assets/images/inline-01.png")
             self.assertTrue(generated["source_meta"].get("codex_app_image"))
+
+    def test_codex_provider_requires_text_for_all_image_types(self):
+        for image_type in ["封面图", "正文插图", "流程图", "信息图", "对比图", "分隔图"]:
+            item = {
+                "id": "cover-01" if image_type == "封面图" else "inline-01",
+                "type": image_type,
+                "provider": "codex",
+                "section_heading": "OpenAI 团队协作新变化",
+                "section_excerpt": "团队把 AI Agent 接进流程后，最关键的是责任边界、验收和风险提醒。",
+                "text_policy": "none",
+            }
+            policy = legacy.resolve_image_text_policy({"image_provider": "codex", "label_language": "zh-CN"}, item)
+            self.assertIn(policy["mode"], {"short-zh", "short-zh-numeric"})
+            self.assertTrue(policy["required_text"], image_type)
+
+    def test_codex_prompt_has_required_text_without_no_text_ban(self):
+        item = {
+            "id": "cover-01",
+            "type": "封面图",
+            "provider": "codex",
+            "section_heading": "OpenAI 把 Agent 放进团队工作流",
+            "section_excerpt": "团队流程开始被 Agent 重写。",
+            "layout_variant_label": "中心主视觉",
+            "layout_variant_instruction": "Use one dominant hero object.",
+            "visual_theme": "组织流程变化",
+            "visual_style": "高识别封面插画",
+            "visual_mood": "克制清晰",
+            "visual_brief": "让标题字清楚出现。",
+            "text_policy": "none",
+        }
+        prompt = legacy.compose_prompt("OpenAI 把 Agent 放进团队工作流", "摘要", {"image_provider": "codex", "preset": "bold", "preset_label": "高对比海报"}, item, "公众号读者")
+        self.assertIn("Required exact text:", prompt)
+        self.assertIn("Must visibly render", prompt)
+        self.assertNotIn("Do not include any readable Chinese or English text", prompt)
+        self.assertNotIn("Allowed labels: none", prompt)
+        self.assertNotIn("no headline baked", prompt)
+
+    def test_assemble_promotes_first_inline_before_first_h2(self):
+        body, inserted = assemble_body(
+            ["首屏第一段。", "首屏第二段。"],
+            [
+                {"heading": "第一节", "level": 2, "blocks": ["章节正文。"]},
+                {"heading": "第二节", "level": 2, "blocks": ["更多正文。"]},
+            ],
+            [
+                {
+                    "id": "inline-01",
+                    "type": "正文插图",
+                    "insert_strategy": "section_middle",
+                    "target_section_index": 0,
+                    "placement_block_index": 0,
+                    "asset_path": "assets/images/inline-01.png",
+                    "alt": "首屏图",
+                }
+            ],
+        )
+        self.assertEqual(inserted[0]["id"], "inline-01")
+        self.assertLess(body.index("![首屏图]"), body.index("## 第一节"))
 
 
 if __name__ == "__main__":

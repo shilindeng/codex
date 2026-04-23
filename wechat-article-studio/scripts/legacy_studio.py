@@ -518,6 +518,18 @@ IMAGE_TEXT_POLICY_LABELS: dict[str, str] = {
 }
 IMAGE_LABEL_LANGUAGE_CHOICES = ("zh-CN", "any")
 IMAGE_LABEL_BAD_PREFIXES = ("如果", "看到", "不过", "这里", "真正", "因为", "不是", "而是", "所以", "这个", "那个")
+CODEX_IMAGE_STYLE_PRESET_CYCLE = (
+    "chalkboard",
+    "editorial-grain",
+    "notion",
+    "scientific-blueprint",
+    "professional-corporate",
+    "fresh",
+    "bold",
+    "minimal",
+)
+CODEX_IMAGE_LAYOUT_FAMILY_CYCLE = ("editorial", "process", "comparison", "hierarchy", "dashboard")
+CODEX_IMAGE_VISUAL_ROUTE_CYCLE = ("data-explainer", "cold-hard", "conflict-alert", "people-emotion")
 ARTICLE_VISUAL_HINT_WORDS: dict[str, tuple[str, ...]] = {
     "narrative": ("故事", "人物", "经历", "日常", "生活", "感受", "情绪", "焦虑", "治愈", "成长", "关系", "亲密", "家庭"),
     "business": ("商业", "增长", "市场", "变现", "策略", "决策", "竞争", "订阅", "广告", "公司", "收入", "利润", "品牌"),
@@ -2471,6 +2483,39 @@ def image_provider_from_env(explicit: str | None) -> str:
     return "gemini-web"
 
 
+def _cycle_pick(values: tuple[str, ...], seed: str, offset: int = 0) -> str:
+    if not values:
+        return ""
+    digest = int(hashlib.sha1(seed.encode("utf-8", errors="ignore")).hexdigest()[:8], 16)
+    return values[(digest + offset) % len(values)]
+
+
+def apply_codex_visual_diversity(workspace: Path, controls: dict[str, Any], article_strategy: dict[str, Any], *, explicit_controls: bool) -> None:
+    if explicit_controls:
+        return
+    seed = workspace.name or str(workspace)
+    preset = _cycle_pick(CODEX_IMAGE_STYLE_PRESET_CYCLE, seed)
+    layout_family = _cycle_pick(CODEX_IMAGE_LAYOUT_FAMILY_CYCLE, seed, offset=1)
+    route = _cycle_pick(CODEX_IMAGE_VISUAL_ROUTE_CYCLE, seed, offset=2)
+    controls["preset"] = preset
+    controls["preset_label"] = IMAGE_STYLE_PRESETS.get(preset, {}).get("label", controls.get("preset_label", ""))
+    controls["preset_cover"] = preset
+    controls["preset_inline"] = _cycle_pick(CODEX_IMAGE_STYLE_PRESET_CYCLE, seed, offset=3)
+    controls["preset_infographic"] = _cycle_pick(CODEX_IMAGE_STYLE_PRESET_CYCLE, seed, offset=5)
+    controls["preset_cover_label"] = IMAGE_STYLE_PRESETS.get(controls["preset_cover"], {}).get("label", "")
+    controls["preset_inline_label"] = IMAGE_STYLE_PRESETS.get(controls["preset_inline"], {}).get("label", "")
+    controls["preset_infographic_label"] = IMAGE_STYLE_PRESETS.get(controls["preset_infographic"], {}).get("label", "")
+    controls["layout_family"] = layout_family
+    article_strategy["visual_route"] = route
+    article_strategy["visual_route_label"] = {
+        "data-explainer": "数据解释型",
+        "cold-hard": "冷硬判断型",
+        "conflict-alert": "冲突警示型",
+        "people-emotion": "人物情绪型",
+    }.get(route, route)
+    article_strategy.setdefault("decision_reasoning", []).append(f"Codex 批量生图自动轮换视觉签名：{preset}/{layout_family}/{route}。")
+
+
 def fallback_image_provider(preferred: str) -> str | None:
     if preferred == "gemini-web":
         if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
@@ -2920,6 +2965,7 @@ def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) 
         "instructions": [
             "在当前 Codex App 对话里使用内置 image_gen 逐张生图。",
             "将每张成图保存为对应 target_path，或保存到 codex-images/<id>.png 后重新运行 generate-images --provider codex。",
+            "每张图都必须肉眼可见 required_text 中的短字；如果无字、乱码或缺字，请重新生成，不要登记。",
         ],
         "codex_generated_images_root": str(codex_generated_images_root()),
         "items": requests,
@@ -2939,6 +2985,8 @@ def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) 
                 f"- type: {item.get('type') or ''}",
                 f"- aspect_ratio: {item.get('aspect_ratio') or ''}",
                 f"- target_path: `{item['target_path']}`",
+                f"- required_text: {' / '.join(item.get('required_text') or []) if item.get('required_text') else '无'}",
+                "- check: 成图必须包含 required_text，且不能出现额外英文标签或大段文字。",
                 "",
                 "### Prompt",
                 "",
@@ -2968,6 +3016,7 @@ def prepare_codex_image_requests(workspace: Path, plan: dict[str, Any], images_d
                     "aspect_ratio": item.get("aspect_ratio") or "16:9",
                     "target_path": relative_posix(output_path, workspace),
                     "prompt_path": relative_posix(prompt_path, workspace) if prompt_path.exists() else "",
+                    "required_text": list(item.get("required_text") or item.get("label_strategy") or []),
                     "prompt": effective_prompt,
                 }
             )
@@ -3310,6 +3359,7 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         layout_spec = image_layout_spec(item)
         text_policy = resolve_image_text_policy(controls, item)
         label_strategy = text_policy["label_strategy"]
+        required_text = text_policy.get("required_text") or label_strategy
         outline_items.append(
             {
                 "id": item["id"],
@@ -3327,6 +3377,7 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
                 "visual_content": image_visual_content(item),
                 "visual_elements": image_visual_elements(item),
                 "label_strategy": label_strategy,
+                "required_text": required_text,
                 "text_budget": text_policy["text_budget"],
                 "text_policy": text_policy["mode"],
                 "text_policy_label": text_policy["label"],
@@ -3400,6 +3451,7 @@ def write_image_outline_artifacts(workspace: Path, title: str, audience: str, co
         lines.append(f"- 文字模式：{item.get('text_policy_label') or IMAGE_TEXT_POLICY_LABELS.get(item.get('text_policy') or 'auto', IMAGE_TEXT_POLICY_LABELS['auto'])}")
         lines.append(f"- 标签语言：{item.get('label_language') or 'zh-CN'}")
         lines.append(f"- 标签策略：{' / '.join(item['label_strategy']) if item['label_strategy'] else '尽量不用图中文字'}")
+        lines.append(f"- 必须出现文字：{' / '.join(item.get('required_text') or []) if item.get('required_text') else '无'}")
         lines.append(f"- 比例策略：{item['aspect_policy']}")
         lines.append(f"- Prompt 文件：`{item['prompt_path']}`")
         lines.append("")
@@ -3493,6 +3545,23 @@ def _has_explicit_image_controls(args: Any) -> bool:
         return int(getattr(args, "inline_count", 0) or 0) > 0
     except (TypeError, ValueError):
         return False
+
+
+def _has_explicit_visual_style_controls(args: Any) -> bool:
+    keys = [
+        "image_preset",
+        "image_style_mode",
+        "image_preset_cover",
+        "image_preset_infographic",
+        "image_preset_inline",
+        "image_layout_family",
+        "image_theme",
+        "image_style",
+        "image_type",
+        "image_mood",
+        "custom_visual_brief",
+    ]
+    return any(str(getattr(args, key, "") or "").strip() for key in keys)
 
 
 def infer_article_category_label(title: str, summary: str, body: str) -> str:
@@ -4467,6 +4536,8 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     summary = manifest.get("summary") or meta.get("summary") or extract_summary(body)
     account_strategy = load_account_strategy(workspace, manifest, create_if_missing=True) if load_account_strategy else (manifest.get("account_strategy") or {})
     controls = resolve_image_controls(manifest.get("image_controls"), args, title=title, summary=summary, body=body)
+    provider = image_provider_from_env(args.provider)
+    controls["image_provider"] = provider
     strategy_text_policy = dict((account_strategy.get("image_text_policy") or {})) if isinstance(account_strategy, dict) else {}
     controls["text_policy_overrides"] = strategy_text_policy
     controls["label_language"] = str(controls.get("label_language") or strategy_text_policy.get("label_language") or "zh-CN")
@@ -4478,6 +4549,7 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     intro_blocks, sections = normalize_sections_for_images(body)
     article_strategy = infer_article_visual_strategy(title, summary, body, audience, controls, sections)
     effective_controls = build_effective_image_controls(controls, article_strategy)
+    effective_controls["image_provider"] = provider
     effective_controls["profile_key"] = article_strategy.get("profile_key", "")
     if infer_visual_preset and not _has_explicit_image_controls(args):
         preset = infer_visual_preset(title, summary, body, account_strategy)
@@ -4495,7 +4567,8 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
         preferred_layout = str(account_strategy.get("image_layout_family") or "").strip()
         if preferred_layout and effective_controls.get("layout_family") not in {"process", "comparison"}:
             effective_controls["layout_family"] = preferred_layout
-    provider = image_provider_from_env(args.provider)
+    if provider == "codex":
+        apply_codex_visual_diversity(workspace, effective_controls, article_strategy, explicit_controls=_has_explicit_visual_style_controls(args))
     density_settings = resolve_inline_density_settings(
         body,
         int(getattr(args, "inline_count", 0) or effective_controls.get("inline_count") or 0),

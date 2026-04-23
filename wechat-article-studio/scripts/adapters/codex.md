@@ -11,8 +11,9 @@
   - 用户指定 `gemini-web` 时，传入 `--image-provider gemini-web`。
   - 用户指定 `codex` / `Codex App` / 当前对话生图时，拆成 `plan-images --provider codex`、当前 agent 内置 `image_gen` 生图、`generate-images --provider codex`、`assemble`、`render`；如果走 `hosted-run` 入口，对应参数是 `--image-provider codex`。
   - `codex` 模式不要尝试用 Python/CLI 直接调用内置生图工具；内置生图只在当前对话工具层可用。
+  - `codex` 默认要求模型直接画出短字：封面图写 1~2 行标题，其它图片写 2~4 个短中文标签；如果成图无字、缺字或乱码，必须重生。
 - 渲染约束：默认 `--wechat-header-mode drop-title`，公众号正文不重复标题，只保留摘要卡。
-- 正式发布：只有在用户明确确认后，才执行 `--to publish --confirmed-publish`。
+- 正式发布：只有在用户明确确认后，才执行 `--to publish --confirmed-publish`；自动流程不允许 `--force-publish`。
 - 多轮回炉：`hosted-run/run` 默认最多回炉 3 轮，可用 `--max-revision-rounds` 调整；可选注入样本 `--style-sample sample.md`（可重复）。
 - 上下文映射：
   - 用户主题 -> `--topic`

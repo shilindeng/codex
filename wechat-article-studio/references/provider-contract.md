@@ -101,7 +101,7 @@
 支持的图片 provider：
 
 - `gemini-web`：默认免费路径。要求用户已同意并存在可复用登录态。
-- `codex`：使用当前 Codex App 对话内置生图能力，不要求 `OPENAI_API_KEY`。CLI 只会生成 `codex-image-requests.md/json`、登记已保存图片并继续排版；当前 agent 需要调用内置 `image_gen`，把成图保存到 `assets/images/<id>.png` 或 `codex-images/<id>.png`，再重新运行 `generate-images --provider codex`。
+- `codex`：使用当前 Codex App 对话内置生图能力，不要求 `OPENAI_API_KEY`。CLI 会生成 `codex-image-requests.md/json`、写入每张图的 `required_text`，并在图片存在后登记排版；当前 agent 需要调用内置 `image_gen`，把成图保存到 `assets/images/<id>.png` 或 `codex-images/<id>.png`，再重新运行 `generate-images --provider codex`。如果成图无字、缺字或乱码，不允许登记通过。
 - `gemini-api`：官方 API 路径，需要 `GEMINI_API_KEY` 或 `GOOGLE_API_KEY`。
 - `openai-image`：官方 OpenAI 图片接口，需要 `OPENAI_API_KEY`。
 

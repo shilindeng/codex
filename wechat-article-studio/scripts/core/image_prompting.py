@@ -106,10 +106,130 @@ def image_text_budget(item: dict[str, Any]) -> str:
     return "minimal"
 
 
+AI_LABEL_ALLOWLIST = ("AI", "Agent", "OpenAI", "ChatGPT", "Gemini", "Google", "Meta", "API", "GPU", "Codex")
+LABEL_SOFT_PREFIXES = (
+    "最关键的是",
+    "关键的是",
+    "真正重要的是",
+    "真正该看的是",
+    "重点是",
+    "核心是",
+    "团队开始把",
+    "开始把",
+    "如果",
+    "这条",
+)
+
+
+def _clean_label_text(value: str, *, max_len: int = 8) -> str:
+    compact = re.sub(r"\s+", "", str(value or "")).strip("，。；：:、-| ")
+    compact = re.sub(r"^[一二三四五六七八九十0-9]+[.、：:\-]?", "", compact).strip("，。；：:、-| ")
+    for prefix in LABEL_SOFT_PREFIXES:
+        if compact.startswith(prefix):
+            compact = compact[len(prefix):].strip("，。；：:、-| ")
+    for token in sorted(AI_LABEL_ALLOWLIST, key=len, reverse=True):
+        compact = re.sub(re.escape(token), token, compact, flags=re.I)
+    if len(compact) > max_len:
+        compact = compact[:max_len]
+    return compact
+
+
+def _title_labels(value: str) -> list[str]:
+    text = re.sub(r"\s+", "", str(value or "")).strip("《》“”\"'，。；：:、-| ")
+    if not text:
+        return []
+    labels: list[str] = []
+    for token in sorted(AI_LABEL_ALLOWLIST, key=len, reverse=True):
+        if re.search(re.escape(token), text, flags=re.I):
+            labels.append(token)
+            text = re.sub(re.escape(token), "", text, flags=re.I)
+            break
+    parts = [part for part in re.split(r"[：:，,、｜|/／\s]+", text) if part]
+    for part in parts:
+        label = _clean_label_text(part, max_len=10)
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 2:
+            break
+    if not labels:
+        labels = [_clean_label_text(text, max_len=10)]
+    if len(labels) == 1 and len(labels[0]) > 6:
+        labels = [labels[0][:6], labels[0][6:12]]
+    return [item for item in labels if item][:2]
+
+
+def codex_required_text(item: dict[str, Any], *, cfg: ImagePromptingConfig) -> list[str]:
+    image_type = item.get("type", "正文插图")
+    heading = str(item.get("section_heading") or item.get("target_section") or "").strip()
+    excerpt = str(item.get("section_excerpt") or item.get("anchor_block_excerpt") or "").strip()
+    if image_type == "封面图":
+        return _title_labels(heading)
+    seed: list[str] = []
+    if heading and not cfg.is_generated_section_heading(heading):
+        seed.extend(_title_labels(heading))
+    corpus = f"{heading} {excerpt}"
+    for token in sorted(AI_LABEL_ALLOWLIST, key=len, reverse=True):
+        if re.search(re.escape(token), corpus, flags=re.I):
+            seed.append(token)
+    seed.extend(
+        [
+            _clean_label_text(part, max_len=8)
+            for part in re.split(r"[，。；：:、和与及]", excerpt or heading)
+            if _clean_label_text(part, max_len=8)
+        ]
+    )
+    labels = compact_label_strategy(seed, limit=4, max_len=8)
+    filtered: list[str] = []
+    for label in labels:
+        if cfg.is_generated_section_heading(label) or re.fullmatch(r"第[一二三四五六七八九十0-9]+节", label):
+            continue
+        if any(label != token and label.startswith(token) and token in labels for token in AI_LABEL_ALLOWLIST):
+            continue
+        if label not in filtered:
+            filtered.append(label)
+    labels = filtered
+    if labels:
+        return labels
+    seed.extend(short_sentence_chunks(excerpt or heading, limit=4, max_len=8, cfg=cfg))
+    labels = compact_label_strategy(seed, limit=4, max_len=8)
+    filtered = []
+    for label in labels:
+        if cfg.is_generated_section_heading(label) or re.fullmatch(r"第[一二三四五六七八九十0-9]+节", label):
+            continue
+        if any(label != token and label.startswith(token) and token in labels for token in AI_LABEL_ALLOWLIST):
+            continue
+        if label not in filtered:
+            filtered.append(label)
+    labels = filtered
+    if labels:
+        return labels
+    fallback = {
+        "流程图": ["第一步", "第二步", "验收"],
+        "信息图": ["关键点", "风险", "行动"],
+        "对比图": ["旧方式", "新方式"],
+        "分隔图": ["转折"],
+        "正文插图": ["关键判断", "下一步"],
+    }
+    return fallback.get(str(image_type), ["关键判断"])[:4]
+
+
 def image_label_strategy(item: dict[str, Any], *, cfg: ImagePromptingConfig) -> list[str]:
     heading = item.get("section_heading") or item.get("target_section") or ""
     excerpt = item.get("section_excerpt") or ""
     image_type = item.get("type", "正文插图")
+    if item.get("provider") == "codex":
+        if image_type == "封面图":
+            return _title_labels(str(heading))
+        base = short_sentence_chunks(excerpt or heading, limit=4, max_len=8, cfg=cfg)
+        if image_type == "流程图" and len(base) < 2:
+            base = [heading, "第一步", "第二步", "验收"]
+        elif image_type == "对比图" and len(base) < 2:
+            base = [heading, "旧方式", "新方式"]
+        elif image_type == "信息图" and not base:
+            base = [heading, "关键点", "风险"]
+        elif image_type in {"正文插图", "分隔图"} and not base:
+            base = [heading, "关键判断"]
+        return compact_label_strategy(base, limit=4, max_len=8)
     if image_type in {"封面图", "正文插图", "分隔图"}:
         return []
     labels = short_sentence_chunks(excerpt, limit=4, max_len=8, cfg=cfg)
@@ -185,7 +305,7 @@ def compact_label_strategy(values: Any, *, limit: int = 4, max_len: int = 6) -> 
 def image_text_policy_variant_instruction(policy: str, label_language: str, allowed_labels: Any = None) -> str:
     normalized = normalize_image_text_policy(policy)
     language = normalize_label_language(label_language)
-    labels = compact_label_strategy(allowed_labels)
+    labels = compact_label_strategy(allowed_labels, max_len=10)
     if normalized == "none":
         return "Do not include any readable Chinese or English text, letters, numbers, UI copy, or labels in the final image."
     if normalized == "short-zh":
@@ -197,15 +317,21 @@ def image_text_policy_variant_instruction(policy: str, label_language: str, allo
         if language == "zh-CN":
             base += " Prefer Simplified Chinese for this Chinese WeChat article."
     if labels and normalized != "none":
-        base += " Prefer labels such as: " + " / ".join(labels) + "."
+        joined = " / ".join(labels)
+        base += " Prefer labels such as: " + joined + ". Must visibly render these exact short labels: " + " / ".join(f"「{label}」" for label in labels) + ". Do not replace them with placeholder marks."
     return base
 
 
 def resolve_image_text_policy(controls: dict[str, Any], item: dict[str, Any], *, cfg: ImagePromptingConfig) -> dict[str, Any]:
     image_type = str(item.get("type") or "正文插图").strip() or "正文插图"
     strategy = dict(controls.get("text_policy_overrides") or {})
+    provider = str(item.get("provider") or controls.get("image_provider") or "").strip().lower()
+    codex_mode = provider == "codex"
     explicit_mode = normalize_image_text_policy(str(item.get("text_policy") or controls.get("text_policy") or ""))
-    if explicit_mode != "auto":
+    if codex_mode:
+        mode = "short-zh-numeric" if image_type in {"流程图", "信息图"} else "short-zh"
+        reason = "Codex App 生图默认要求模型直接画出中文短字。"
+    elif explicit_mode != "auto":
         mode = explicit_mode
         reason = "图片文字策略来自显式配置。"
     else:
@@ -213,13 +339,26 @@ def resolve_image_text_policy(controls: dict[str, Any], item: dict[str, Any], *,
         mode = cfg.image_text_policy_defaults.get(image_type, "none") if configured_mode == "auto" else configured_mode
         reason = "图片文字策略按图片类型和账号策略自动决定。"
     label_language = normalize_label_language(str(item.get("label_language") or controls.get("label_language") or strategy.get("label_language") or "zh-CN"))
-    label_strategy = compact_label_strategy(item.get("label_strategy") or image_label_strategy(item, cfg=cfg))
+    if codex_mode:
+        label_strategy = compact_label_strategy(
+            item.get("required_text") or codex_required_text(item, cfg=cfg),
+            limit=4,
+            max_len=10 if image_type == "封面图" else 8,
+        )
+    else:
+        label_strategy = compact_label_strategy(
+            item.get("required_text") or item.get("label_strategy") or image_label_strategy(item, cfg=cfg),
+            limit=4,
+            max_len=10 if image_type == "封面图" else 8,
+        )
     text_budget = str(item.get("text_budget") or image_text_budget(item)).strip() or image_text_budget(item)
+    if codex_mode and image_type == "封面图":
+        text_budget = "1 to 2 short title lines"
     prompt_lines = [image_text_policy_variant_instruction(mode, label_language, label_strategy)]
     if mode == "none":
         prompt_lines.append("Prefer pure imagery, symbols, objects, and composition over words.")
     elif mode in {"short-zh", "short-zh-numeric"}:
-        prompt_lines.append("No English labels, no copied paragraphs, and no dense text blocks inside the image.")
+        prompt_lines.append("The final image must contain the required Chinese short labels clearly and legibly. No dense text blocks, no copied paragraphs, and no extra English labels beyond allowed AI product names.")
     else:
         prompt_lines.append("Do not turn the image into a slide, spreadsheet, or UI card filled with text.")
     return {
@@ -228,6 +367,7 @@ def resolve_image_text_policy(controls: dict[str, Any], item: dict[str, Any], *,
         "reason": reason,
         "label_language": label_language,
         "label_strategy": label_strategy,
+        "required_text": label_strategy,
         "text_budget": text_budget,
         "prompt_lines": prompt_lines,
     }
@@ -350,7 +490,12 @@ def compose_prompt(
     instructions.append(f"Text policy: {text_policy['mode']}")
     instructions.append(f"Preferred label language: {text_policy['label_language']}")
     instructions.append("Allowed labels: " + (" / ".join(text_policy["label_strategy"]) if text_policy["label_strategy"] else "none"))
-    instructions.append(cfg.image_type_prompt_modules.get(item["type"], cfg.image_type_prompt_modules["正文插图"]))
+    if text_policy.get("required_text"):
+        instructions.append("Required exact text: " + " / ".join(f"「{label}」" for label in text_policy["required_text"]))
+    module = cfg.image_type_prompt_modules.get(item["type"], cfg.image_type_prompt_modules["正文插图"])
+    if str(item.get("provider") or controls.get("image_provider") or "").strip().lower() == "codex" and item.get("type") == "封面图":
+        module = "Create a high-recognition WeChat cover image with the required short title text clearly integrated into the composition."
+    instructions.append(module)
     instructions.extend(text_policy["prompt_lines"])
     instructions.append("Never render copied article paragraphs, generic section labels, or UI cards filled with body text.")
     instructions.extend(cfg.image_differentiation_modules)
@@ -364,6 +509,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
     visual_elements = image_visual_elements(item, cfg=cfg)
     text_policy = resolve_image_text_policy(controls, item, cfg=cfg)
     label_strategy = text_policy["label_strategy"]
+    required_text = text_policy.get("required_text") or label_strategy
     text_budget = text_policy["text_budget"]
     aspect_policy = image_aspect_policy(item)
     style_mode = item.get("style_mode") or controls.get("style_mode") or "uniform"
@@ -428,6 +574,7 @@ def prompt_markdown(title: str, audience: str, controls: dict[str, Any], item: d
         f"- 文字模式：{text_policy['label']}",
         f"- 标签语言：{text_policy['label_language']}",
         f"- 允许标签：{' / '.join(label_strategy) if label_strategy else '尽量不使用嵌入文字'}",
+        f"- 必须出现文字：{' / '.join(required_text) if required_text else '无'}",
         "",
         "## 比例策略",
         "",

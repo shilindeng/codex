@@ -41,6 +41,7 @@
 - 宿主导入的 `--article-file` 也必须先过 `enhance + generation-preflight + review + score`
 - 启用 `gemini-web` 前，必须先有用户同意
 - 图片 provider 未指定时默认 `gemini-web`；用户指定 `codex` 时，必须由当前 Codex agent 使用内置生图工具生成并保存图片，再运行 `generate-images --provider codex` 登记
+- `run` / `hosted-run` / `viral-run` 自动流程不允许 `--force-publish`；如果质量门未过，默认停在本地产物和修复建议
 - 进入 `publish` 前，必须确认用户已明确要求发布到草稿箱
 - 未显式传入 `--confirmed-publish` 前，不写入 `publish_intent=true`
 

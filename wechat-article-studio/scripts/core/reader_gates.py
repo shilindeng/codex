@@ -312,6 +312,8 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
     }
     cover_text_policy = str(cover.get("text_policy") or "")
     first_inline_text_policy = str(first_inline.get("text_policy") or "")
+    codex_mode = str(payload.get("provider") or "").strip().lower() == "codex"
+    cover_policy_ok = (not cover) or (cover_text_policy in {"short-zh", "short-zh-numeric"} if codex_mode else cover_text_policy == "none")
     density_mode = str(
         payload.get("density_mode")
         or (payload.get("image_controls") or {}).get("density_mode")
@@ -358,13 +360,13 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
         "visual_route_passed": bool(visual_route) and len(per_item_routes) <= 1,
         "visual_batch_uniqueness_passed": bool(batch_visual.get("passed", True)),
         "visual_batch": batch_visual,
-        "cover_text_policy_passed": not cover or cover_text_policy == "none",
+        "cover_text_policy_passed": cover_policy_ok,
         "first_inline_text_policy_passed": not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"},
         "density_passed": density_passed,
         "role_assignment_passed": role_assignment_passed,
         "explain_role_present": explain_role_present,
         "passed": (
-            (not cover or cover_text_policy == "none")
+            cover_policy_ok
             and (not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"})
             and density_passed
             and role_assignment_passed

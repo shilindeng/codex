@@ -7,6 +7,7 @@ def collect_insertable_items(plan_items: list[dict[str, Any]]) -> tuple[list[dic
     intro_items: list[dict[str, Any]] = []
     section_items: dict[int, list[dict[str, Any]]] = {}
     inserted: list[dict[str, Any]] = []
+    lead_inline_promoted = False
     for item in plan_items:
         asset_path = item.get("asset_path")
         if not asset_path:
@@ -16,6 +17,12 @@ def collect_insertable_items(plan_items: list[dict[str, Any]]) -> tuple[list[dic
         if item.get("type") == "封面图" or item.get("insert_strategy") == "cover_only":
             continue
         inserted.append({"id": item["id"], "asset_path": asset_path, "type": item["type"]})
+        if not lead_inline_promoted and str(item.get("id") or "").startswith("inline-") and item.get("insert_strategy") == "section_middle":
+            promoted = dict(item)
+            promoted["placement_block_index"] = max(0, len(intro_items))
+            intro_items.append(promoted)
+            lead_inline_promoted = True
+            continue
         target_index = item.get("target_section_index", -1)
         if target_index == -1:
             intro_items.append(item)

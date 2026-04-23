@@ -14,9 +14,10 @@ if str(SCRIPTS) not in sys.path:
 from core.ai_fingerprint import detect_ai_fingerprints  # noqa: E402
 from core.content_fingerprint import build_article_fingerprint, summarize_batch_collisions  # noqa: E402
 from core.quality_checks import metadata_integrity_report  # noqa: E402
-from core.quality_gates import build_reader_gate  # noqa: E402
+from core.quality_gates import build_reader_gate, build_visual_gate  # noqa: E402
 from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report  # noqa: E402
-from core.workflow import build_pipeline_readiness  # noqa: E402
+from core.workflow import assert_publish_request_ready, build_pipeline_readiness  # noqa: E402
+import argparse  # noqa: E402
 
 
 class QualityPipelineGuardTests(unittest.TestCase):
@@ -186,6 +187,82 @@ class QualityPipelineGuardTests(unittest.TestCase):
             readiness = build_pipeline_readiness(workspace, manifest)
             self.assertFalse(readiness["publish_ready"])
             self.assertTrue(any("final_gate.json" in item for item in readiness["publish_blockers"]))
+
+    def test_visual_gate_allows_ai_product_names_for_codex_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.wechat.html").write_text('<p>引入图</p><img src="assets/images/inline-01.png"/><h2>正文</h2>', encoding="utf-8")
+            image_path = workspace / "assets" / "images" / "inline-01.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"fake")
+            plan = {
+                "provider": "codex",
+                "density_mode": "balanced",
+                "planned_inline_count": 1,
+                "requested_inline_count": 1,
+                "inline_density_range": {"min": 1, "max": 2},
+                "article_visual_strategy": {"visual_route": "data-explainer"},
+                "items": [
+                    {
+                        "id": "inline-01",
+                        "type": "正文插图",
+                        "insert_strategy": "section_middle",
+                        "target_section_index": 0,
+                        "asset_path": "assets/images/inline-01.png",
+                        "text_policy": "short-zh",
+                        "required_text": ["OpenAI", "Agent", "AI流程"],
+                        "label_strategy": ["OpenAI", "Agent", "AI流程"],
+                        "role": "explain",
+                        "article_visual_strategy": {"visual_route": "data-explainer"},
+                    }
+                ],
+            }
+            gate = build_visual_gate(workspace, {"wechat_html_path": "article.wechat.html"}, image_plan=plan)
+            self.assertTrue(gate["passed"], gate.get("text_policy_failures"))
+
+    def test_visual_gate_blocks_non_whitelisted_english_label(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "article.wechat.html").write_text('<p>引入图</p><img src="assets/images/inline-01.png"/><h2>正文</h2>', encoding="utf-8")
+            image_path = workspace / "assets" / "images" / "inline-01.png"
+            image_path.parent.mkdir(parents=True, exist_ok=True)
+            image_path.write_bytes(b"fake")
+            plan = {
+                "provider": "codex",
+                "density_mode": "balanced",
+                "planned_inline_count": 1,
+                "requested_inline_count": 1,
+                "inline_density_range": {"min": 1, "max": 2},
+                "article_visual_strategy": {"visual_route": "data-explainer"},
+                "items": [
+                    {
+                        "id": "inline-01",
+                        "type": "正文插图",
+                        "insert_strategy": "section_middle",
+                        "target_section_index": 0,
+                        "asset_path": "assets/images/inline-01.png",
+                        "text_policy": "short-zh",
+                        "required_text": ["Workflow"],
+                        "label_strategy": ["Workflow"],
+                        "role": "explain",
+                        "article_visual_strategy": {"visual_route": "data-explainer"},
+                    }
+                ],
+            }
+            gate = build_visual_gate(workspace, {"wechat_html_path": "article.wechat.html"}, image_plan=plan)
+            self.assertFalse(gate["passed"])
+            self.assertTrue(any("英文" in item for item in gate["text_policy_failures"]))
+
+    def test_auto_publish_flow_rejects_force_publish(self):
+        with self.assertRaises(SystemExit):
+            assert_publish_request_ready(
+                argparse.Namespace(
+                    to="publish",
+                    dry_run_publish=False,
+                    confirmed_publish=True,
+                    force_publish=True,
+                )
+            )
 
     def test_detect_ai_fingerprints_catches_structural_templates(self):
         body = "\n\n".join(

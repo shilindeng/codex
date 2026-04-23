@@ -24,6 +24,9 @@ IMAGE_DENSITY_RANGES: dict[str, tuple[int, int]] = {
     "dense": (2, 4),
 }
 
+AI_LABEL_ALLOWLIST = ("AI", "Agent", "OpenAI", "ChatGPT", "Gemini", "Google", "Meta", "API", "GPU", "Codex")
+_UI_STYLE_WORDS = ("UI", "按钮", "界面", "面板", "dashboard", "screen", "app", "icon")
+
 _WEAK_TEXT_PATTERNS = (
     r"值得关注",
     r"很重要",
@@ -38,6 +41,13 @@ _SHARE_LINE_PATTERNS = (
     r"问题不在.{1,24}而在.{1,24}",
     r"真正.{0,10}不是.{1,24}而是.{1,24}",
 )
+
+
+def _has_disallowed_english_label(label: str) -> bool:
+    cleaned = str(label or "")
+    for token in sorted(AI_LABEL_ALLOWLIST, key=len, reverse=True):
+        cleaned = re.sub(re.escape(token), "", cleaned, flags=re.I)
+    return bool(re.search(r"[A-Za-z]{2,}", cleaned))
 
 _BLOCKED_TEMPLATE_PHRASES = (
     "真正值得看的是",
@@ -417,15 +427,21 @@ def build_visual_gate(
         closing_ok = not closing_items
     text_policy_failures: list[str] = []
     asset_failures: list[str] = []
+    codex_mode = str(payload.get("provider") or "").strip().lower() == "codex"
     for item in items:
         image_type = str(item.get("type") or "")
         policy = str(item.get("text_policy") or "")
         insert_strategy = str(item.get("insert_strategy") or "")
-        label_strategy = [str(value or "").strip() for value in (item.get("label_strategy") or []) if str(value or "").strip()]
+        label_strategy = [str(value or "").strip() for value in (item.get("required_text") or item.get("label_strategy") or []) if str(value or "").strip()]
         asset_path = _clean(str(item.get("asset_path") or ""))
         if asset_path and not (workspace / asset_path).exists():
             asset_failures.append(f"{item.get('id')} 缺少生成图片文件")
-        if image_type == "封面图" and policy != "none":
+        if codex_mode:
+            if policy not in {"short-zh", "short-zh-numeric", "short-any"}:
+                text_policy_failures.append(f"{item.get('id')} Codex 图片必须配置短字策略")
+            if not label_strategy:
+                text_policy_failures.append(f"{item.get('id')} Codex 图片缺少 required_text")
+        elif image_type == "封面图" and policy != "none":
             text_policy_failures.append(f"{item.get('id')} 封面图应为无文字")
         elif insert_strategy == "section_middle" and image_type in {"正文插图", "分隔图"} and policy != "none":
             text_policy_failures.append(f"{item.get('id')} 正文概念图应为无文字")
@@ -433,7 +449,7 @@ def build_visual_gate(
             text_policy_failures.append(f"{item.get('id')} 结构图文字策略不对")
         elif image_type == "对比图" and policy not in {"short-zh", "none"}:
             text_policy_failures.append(f"{item.get('id')} 对比图文字策略不对")
-        if insert_strategy == "section_middle" and any(re.search(r"[A-Za-z]{2,}", label) for label in label_strategy):
+        if insert_strategy == "section_middle" and any(_has_disallowed_english_label(label) for label in label_strategy):
             text_policy_failures.append(f"{item.get('id')} 正文图标签里出现英文")
         if insert_strategy == "section_middle" and any(len(label) >= 10 for label in label_strategy):
             text_policy_failures.append(f"{item.get('id')} 正文图标签过长")
