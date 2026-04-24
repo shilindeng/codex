@@ -161,6 +161,30 @@ def _pick_module_type(archetype: str, index: int, total: int, section: dict[str,
     return module_type, reason_map.get(module_type, "按篇型给这一节安排更合适的排版模块。")
 
 
+def _hero_template(title: str, summary: str, archetype: str) -> str:
+    corpus = " ".join([title or "", summary or "", archetype or ""])
+    if any(token in corpus for token in ["%", "倍", "亿元", "万", "TOPS", "75%"]):
+        return "数据钩子"
+    if any(token in corpus for token in ["不是", "风险", "争议", "侵权", "责任", "边界", "代价"]):
+        return "冲突钩子"
+    if any(token in corpus for token in ["先问", "先看", "判断", "怎么", "如何", "检查"]):
+        return "决策钩子"
+    return "场景钩子"
+
+
+def _ending_module_type(closing_module: str, section_modules: list[dict[str, Any]]) -> str:
+    tail = " ".join(str(item.get("module_type") or "") + " " + str(item.get("heading") or "") for item in section_modules[-2:])
+    if any(token in tail for token in ["risk", "boundary", "风险", "边界"]):
+        return "未来提醒"
+    if any(token in tail for token in ["decision", "judgment", "判断"]):
+        return "判断卡"
+    if any(token in tail for token in ["takeaway", "summary", "清单", "检查"]):
+        return "转发卡"
+    if str(closing_module or "") in {"soft-close"}:
+        return "留白收束"
+    return "判断卡"
+
+
 def build_layout_plan(title: str, summary: str, outline_meta: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
     blueprint = dict(outline_meta.get("viral_blueprint") or manifest.get("viral_blueprint") or {})
     sections = list(outline_meta.get("sections") or [])
@@ -199,16 +223,26 @@ def build_layout_plan(title: str, summary: str, outline_meta: dict[str, Any], ma
     # Keep legacy field for compatibility.
     section_plans = list(section_modules)
     recommended_style = profile["recommended_style"]
+    hero_template = _hero_template(title, summary, archetype)
+    ending_module_type = _ending_module_type(profile["closing_module"], section_modules)
     return {
         "title": title,
         "article_archetype": archetype,
         "layout_archetype": archetype,
+        "hero_template": hero_template,
         "hero_module": hero_module,
+        "lead_visual_strategy": {
+            "template": hero_template,
+            "first_image_before_first_h2": True,
+            "pre_h2_max_paragraphs": 4,
+        },
         "lead_visual_policy": "allow-before-first-h2",
         "lead_visual_deadline_ratio": 0.25,
         "pre_h2_max_paragraphs": 4,
         "summary_alignment_window": "first-3-paragraphs",
         "closing_module": profile["closing_module"],
+        "ending_module_type": ending_module_type,
+        "source_block_style": "light-source-card",
         "module_density": profile["module_density"],
         "spacing_profile": profile["spacing_profile"],
         "recommended_style": recommended_style,
@@ -225,12 +259,15 @@ def markdown_layout_plan(payload: dict[str, Any]) -> str:
         f"# 版式规划：{payload.get('title') or '未命名标题'}",
         "",
         f"- 篇型骨架：{payload.get('layout_archetype') or 'commentary'}",
+        f"- 首屏母版：{payload.get('hero_template') or ''}",
         f"- 首屏模块：{payload.get('hero_module') or ''}",
         f"- 首图策略：{payload.get('lead_visual_policy') or ''}",
         f"- 首图最晚位置：前 {int(float(payload.get('lead_visual_deadline_ratio') or 0) * 100)}% 阅读区间",
         f"- 首屏段落上限：{payload.get('pre_h2_max_paragraphs') or ''}",
         f"- 摘要对齐窗口：{payload.get('summary_alignment_window') or ''}",
         f"- 结尾模块：{payload.get('closing_module') or ''}",
+        f"- 结尾类型：{payload.get('ending_module_type') or ''}",
+        f"- 来源区样式：{payload.get('source_block_style') or ''}",
         f"- 模块密度：{payload.get('module_density') or ''}",
         f"- 留白策略：{payload.get('spacing_profile') or ''}",
         f"- 推荐皮肤：{payload.get('recommended_style') or 'magazine'}",

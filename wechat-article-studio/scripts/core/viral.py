@@ -25,7 +25,14 @@ from core.quality_checks import (
     lead_paragraph_count,
     metadata_integrity_report,
 )
-from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report
+from core.reader_gates import (
+    _share_lines,
+    _summary_duplicates_opening,
+    _takeaway_module_type,
+    abnormal_text_report,
+    first_screen_signal_report,
+    template_frequency_report,
+)
 from core.three_layers import build_takeaway_scaffold, build_three_layer_diagnostics, default_layer_strategies, normalize_layer_strategy
 from core.title_decision import title_integrity_report
 
@@ -2667,6 +2674,12 @@ def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
         total_score = min(total_score, 84)
     if not bool(quality_gates.get("first_screen_passed", True)):
         total_score = min(total_score, 82)
+    if not bool(quality_gates.get("opening_four_factors_passed", True)):
+        total_score = min(total_score, 82)
+    if not bool(quality_gates.get("share_lines_passed", True)):
+        total_score = min(total_score, 86)
+    if not bool(quality_gates.get("takeaway_module_passed", True)):
+        total_score = min(total_score, 84)
     if not bool(quality_gates.get("template_diversity_passed", True)):
         total_score = min(total_score, 80)
     if not bool(quality_gates.get("body_integrity_passed", True)):
@@ -2692,6 +2705,9 @@ def recompute_score_outcome(report: dict[str, Any]) -> dict[str, Any]:
         "similarity_passed",
         "citation_policy_passed",
         "editorial_review_passed",
+        "opening_four_factors_passed",
+        "share_lines_passed",
+        "takeaway_module_passed",
         *CRITICAL_QUALITY_GATES,
     }
     if "source_similarity_passed" in quality_gates:
@@ -3152,6 +3168,10 @@ def build_score_report(
     template_penalty_hits += int(ai_fingerprint_summary.get("strong_count") or 0) * 2 + int(ai_fingerprint_summary.get("medium_count") or 0)
     effective_signatures = _effective_signature_lines(review)
     analysis = review.get("viral_analysis", {}) or {}
+    share_lines = _share_lines(body, analysis_11d, analysis)
+    share_line_score = int(min(10, len(share_lines) * 3 + (1 if any(legacy.cjk_len(item) >= 20 for item in share_lines) else 0)))
+    takeaway_module_type = _takeaway_module_type(body)
+    opening_four_factors_passed = bool(first_screen.get("four_question_passed")) and not _summary_duplicates_opening(summary_text, body)
     ending_text = " ".join(legacy.list_paragraphs(body)[-2:])
     hard_cta_hits = _explicit_interaction_cta_hits(ending_text)
     question_bait_hits = _question_bait_hits(ending_text)
@@ -3334,6 +3354,9 @@ def build_score_report(
         batch_uniqueness=batch_uniqueness,
         three_layers=three_layer_diagnostics,
     )
+    quality_gates["opening_four_factors_passed"] = opening_four_factors_passed
+    quality_gates["share_lines_passed"] = share_line_score >= 8 and len(share_lines) >= 3
+    quality_gates["takeaway_module_passed"] = takeaway_module_type != "none"
     strengths = []
     weaknesses = []
     for item in breakdown:
@@ -3379,6 +3402,9 @@ def build_score_report(
             "前两段必须同时补出具体场景、真实冲突和为什么现在值得读。" if not quality_gates["first_screen_passed"] else "",
             "标题、开头和结尾还在重复同一类模板路数，必须换骨架重写。" if not quality_gates["template_diversity_passed"] else "",
             "先把标题和首屏钩子拉起来，别让读者在前两段就掉下去。" if not quality_gates["hook_quality_passed"] else "",
+            "首屏四要素没齐或副标题重复开头，先重写标题下方和前两段。" if not quality_gates["opening_four_factors_passed"] else "",
+            "补够 3 条能单独截图转发的传播句，不要只靠正文自然表达。" if not quality_gates["share_lines_passed"] else "",
+            "补一个可保存模块：三问卡、四步卡、对比表、判断卡或风险清单。" if not quality_gates["takeaway_module_passed"] else "",
             "先把中段写顺，补出一段真正展开的分析，不要继续堆判断卡片。" if not quality_gates["reading_flow_passed"] else "",
             "继续清理模板腔，压低 AI 痕迹，别再靠固定反转句和硬互动提分。" if not quality_gates["naturalness_floor_passed"] else "",
             *list(ai_fingerprint_summary.get("rewrite_hints") or []),
@@ -3492,6 +3518,11 @@ def build_score_report(
         "dimension_11d_summary": dimension_11d_summary,
         "quality_gates": quality_gates,
         "three_layer_diagnostics": three_layer_diagnostics,
+        "opening_four_factors_passed": opening_four_factors_passed,
+        "share_lines": share_lines,
+        "share_line_score": share_line_score,
+        "takeaway_module_type": takeaway_module_type,
+        "batch_uniqueness_inputs": batch_uniqueness.get("fingerprint") or batch_uniqueness.get("current") or {},
         "metadata_integrity": metadata_integrity,
         "first_screen": first_screen,
         "template_frequency": template_frequency,

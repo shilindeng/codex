@@ -4221,7 +4221,27 @@ def infer_article_visual_strategy(
         content_mode = "structural"
     elif narrative_score <= 2 and (technical_score >= 4 or business_score >= 4):
         content_mode = "conceptual"
-    if narrative_score >= max(explanatory_score, business_score, technical_score) + 1:
+    legal_or_rights = count_keyword_hits(lowered, ("侵权", "监管", "合规", "授权", "责任链", "治理", "整治", "版权")) >= 2
+    product_mechanism = count_keyword_hits(lowered, ("发布", "上线", "功能", "工作流", "平台", "agent", "workspace", "工具")) >= 2
+    career_context = count_keyword_hits(lowered, ("员工", "岗位", "医生", "工程师", "职场", "一线", "新人", "团队")) >= 2
+    hard_tech = count_keyword_hits(lowered, ("芯片", "算力", "tops", "gpu", "模型", "3d", "硬件", "自动驾驶")) >= 2
+    if legal_or_rights:
+        visual_route = "cold-hard"
+        visual_route_label = "冷硬判断型"
+        visual_route_reason = "法规、侵权或治理类选题优先走冷静判断路线，避免把责任边界做成泛科技海报。"
+    elif product_mechanism:
+        visual_route = "data-explainer"
+        visual_route_label = "数据解释型"
+        visual_route_reason = "产品机制类选题优先解释流程、边界和使用路径。"
+    elif career_context:
+        visual_route = "people-emotion"
+        visual_route_label = "人物情绪型"
+        visual_route_reason = "职业处境类选题优先让读者看到人和具体工作压力。"
+    elif hard_tech:
+        visual_route = "conflict-alert"
+        visual_route_label = "冲突警报型"
+        visual_route_reason = "硬科技类选题优先把参数背后的成本、能力和产业分歧做出来。"
+    elif narrative_score >= max(explanatory_score, business_score, technical_score) + 1:
         visual_route = "people-emotion"
         visual_route_label = "人物情绪型"
         visual_route_reason = "正文更依赖人物处境和情绪代入，视觉应先服务读者共感。"

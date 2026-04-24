@@ -82,7 +82,13 @@ class TopicDiscoveryTests(unittest.TestCase):
         first = reranked[0]
         self.assertIn("topic_score_100", first)
         self.assertIn("topic_score_dimensions", first)
-        self.assertEqual(set(first["topic_score_dimensions"].keys()), {"时效和证据", "冲突和代价", "目标读者清晰度", "判断卡沉淀能力", "互动传播潜力"})
+        self.assertEqual(set(first["topic_score_dimensions"].keys()), {"时效", "账号匹配", "现实代价", "传播分歧", "可转述性", "重复风险"})
+        self.assertIn("topic_package_type", first)
+        self.assertIn("title_direction_candidates", first)
+        self.assertEqual(len(first["title_direction_candidates"]), 3)
+        self.assertIn("spread_potential_score", first)
+        self.assertIn("consequence_score", first)
+        self.assertIn("repeat_risk_score", first)
         self.assertGreaterEqual(first["topic_score_100"], 70)
         self.assertTrue(first["topic_gate_passed"])
 

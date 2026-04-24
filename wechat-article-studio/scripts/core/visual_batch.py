@@ -33,6 +33,9 @@ def image_plan_signature(plan: dict[str, Any]) -> dict[str, Any]:
         "inline_preset": _normalize_key(first_inline.get("visual_preset") or plan.get("image_controls", {}).get("preset_inline") or strategy.get("preset_inline")),
         "cover_layout": _normalize_key(cover.get("layout_variant_key")),
         "inline_layout": _normalize_key(first_inline.get("layout_variant_key")),
+        "hero_template": _normalize_key(plan.get("hero_template") or (plan.get("layout_plan") or {}).get("hero_template")),
+        "ending_module_type": _normalize_key(plan.get("ending_module_type") or (plan.get("layout_plan") or {}).get("ending_module_type")),
+        "source_block_style": _normalize_key(plan.get("source_block_style") or (plan.get("layout_plan") or {}).get("source_block_style")),
     }
     signature["tags"] = [value for value in signature.values() if isinstance(value, str) and value]
     return signature
@@ -76,6 +79,8 @@ def summarize_visual_batch_collisions(current_workspace: Path, plan: dict[str, A
         same_route = bool(current_signature.get("visual_route")) and current_signature.get("visual_route") == other_signature.get("visual_route")
         same_layout = bool(current_signature.get("layout_family")) and current_signature.get("layout_family") == other_signature.get("layout_family")
         same_cover = bool(current_signature.get("cover_preset")) and current_signature.get("cover_preset") == other_signature.get("cover_preset")
+        same_hero = bool(current_signature.get("hero_template")) and current_signature.get("hero_template") == other_signature.get("hero_template")
+        same_ending = bool(current_signature.get("ending_module_type")) and current_signature.get("ending_module_type") == other_signature.get("ending_module_type")
         matched_rules: list[str] = []
         if same_route:
             matched_rules.append("same_visual_route")
@@ -83,6 +88,10 @@ def summarize_visual_batch_collisions(current_workspace: Path, plan: dict[str, A
             matched_rules.append("same_layout_family")
         if same_cover:
             matched_rules.append("same_cover_preset")
+        if same_hero:
+            matched_rules.append("same_hero_template")
+        if same_ending:
+            matched_rules.append("same_ending_module")
         if overlap >= 4:
             matched_rules.append("high_signature_overlap")
         max_overlap = max(max_overlap, overlap)

@@ -48,6 +48,9 @@
 - `hook_quality_passed = true`
 - `ending_naturalness_passed = true`
 - `material_coverage_passed = true`
+- `opening_four_factors_passed = true`
+- `share_lines_passed = true`
+- `takeaway_module_passed = true`
 - 如果启用了来源相似度闸门，还要 `source_similarity_passed = true`
 
 ## 素材覆盖门槛
@@ -81,6 +84,11 @@
 - `material_signals`
 - `ai_fingerprint_summary`
 - `quality_gates`
+- `opening_four_factors_passed`
+- `share_lines`
+- `share_line_score`
+- `takeaway_module_type`
+- `batch_uniqueness_inputs`
 - `mandatory_revisions`
 - `publish_blockers`
 
@@ -94,10 +102,17 @@
 ## 低分处理顺序
 
 1. 先修标题、首屏和中段推进
-2. 再补表格、引用、类比、对比、边界
-3. 再补 takeaway，让结尾有可收藏、可复用的带走内容
-4. 再清理模板腔和句式节奏
-5. 最后才补自然传播点和结尾收束
+2. 再修副标题重复、传播句不足、可保存模块缺位
+3. 再补表格、引用、类比、对比、边界
+4. 再补 takeaway，让结尾有可收藏、可复用的带走内容
+5. 再清理模板腔和句式节奏
+6. 最后才补自然传播点和结尾收束
+
+## 新增门槛解释
+
+- `opening_four_factors_passed`：前两段必须同时交代“人、动作、冲突、代价”，且摘要/副标题不能复述正文第一句。
+- `share_lines_passed`：正文至少要有 `3` 条可截图、可转述、可单独流通的传播句。
+- `takeaway_module_passed`：结尾必须落成可保存模块，当前只接受 `三问卡 / 四步卡 / 对比表 / 判断卡 / 风险清单`。
 
 ## 三层结构直判
 

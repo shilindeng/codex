@@ -37,6 +37,7 @@
 - `final_gate.json`：最终质量门禁，汇总评分、读者门、视觉门和验收结果
 - `final-delivery-report.json`：最终交付报告，分开记录质量、发布和回读状态
 - `final-delivery-report.md`：面向人读的最终交付报告
+- `factory-board.json`：可选的工厂看板快照，汇总多个工作目录的状态与批次指标
 - `references.json`：标准化引用清单与文末引用卡片数据
 - `image-plan.json`：配图规划
 - `image-outline.json`：结构化插图大纲
@@ -57,6 +58,8 @@
 - `reader_gate.json.passed = true`
 - `visual_gate.json.passed = true`
 - `final_gate.json.passed = true`
+- `final-delivery-report.json.quality_chain.status = passed`
+- `final-delivery-report.json.batch_chain.status = passed`
 - `layout-plan.json` 与 `layout-plan.md` 都存在
 - `image-plan.json` 存在，且计划中的图片资产已落盘
 - `publication.md` 与 `article.wechat.html` 都存在
@@ -109,6 +112,15 @@
 - `final_gate_path`
 - `delivery_report_path`
 - `delivery_report_markdown_path`
+- `quality_chain_status`
+- `publish_chain_status`
+- `batch_chain_status`
+- `canonical_job_id`
+- `retry_round`
+- `retry_reason`
+- `batch_id`
+- `batch_stage`
+- `factory_board_status`
 - `publication_path`
 - `publication_report_path`
 - `writing_persona`
@@ -131,6 +143,12 @@
 
 注意：`publish_status=verified` 和 `verify_status=passed` 只说明草稿箱回读成功，不代表文章质量通过。最终对外汇报必须同时看 `final-delivery-report.json` 的 `quality_passed`、`published`、`readback_passed`。
 
+当前还必须同时看三条链：
+
+- `publish_chain.status`
+- `quality_chain.status`
+- `batch_chain.status`
+
 ## `review-report.json` 关键字段
 
 - `summary`
@@ -152,6 +170,11 @@
 - `passed`
 - `score_breakdown`
 - `quality_gates`
+- `opening_four_factors_passed`
+- `share_lines`
+- `share_line_score`
+- `takeaway_module_type`
+- `batch_uniqueness_inputs`
 - `title_integrity`
 - `evidence_readiness`
 - `opening_continue_read_risk`
@@ -182,6 +205,15 @@
 - `revision_rounds`
 - `best_round`
 - `stop_reason`
+
+当前 `topic-discovery.json` 的候选至少会补充：
+
+- `audience_fit_score`
+- `spread_potential_score`
+- `consequence_score`
+- `repeat_risk_score`
+- `topic_package_type`
+- `title_direction_candidates`
 
 ## 设计约束
 

@@ -23,6 +23,16 @@ def _status(passed: bool | None, *, missing: bool = False) -> str:
     return "unknown"
 
 
+def _chain_status(values: list[bool | None], *, missing: bool = False) -> str:
+    if any(value is False for value in values):
+        return "failed"
+    if values and all(value is True for value in values):
+        return "passed"
+    if missing or not values or any(value is None for value in values):
+        return "missing"
+    return "unknown"
+
+
 def _failed_gate_names(payload: dict[str, Any]) -> list[str]:
     if not isinstance(payload, dict) or not payload:
         return []
@@ -32,6 +42,58 @@ def _failed_gate_names(payload: dict[str, Any]) -> list[str]:
         return [str(item) for item in payload.get("failed_gates") or []]
     gates = payload.get("quality_gates") or payload.get("gates") or payload.get("checks") or {}
     return [str(key) for key, ok in gates.items() if not ok]
+
+
+def _gate_value(payload: dict[str, Any], *path: str) -> bool | None:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current.get(key)
+    if current in (True, False):
+        return bool(current)
+    return None
+
+
+def _batch_chain_report(
+    *,
+    manifest: dict[str, Any],
+    score_report: dict[str, Any],
+    acceptance_report: dict[str, Any],
+    visual_gate: dict[str, Any],
+    final_gate: dict[str, Any],
+    layout_plan: dict[str, Any],
+) -> dict[str, Any]:
+    checks = {
+        "score_batch_uniqueness": _gate_value(score_report, "quality_gates", "batch_uniqueness_passed"),
+        "score_template_diversity": _gate_value(score_report, "quality_gates", "template_diversity_passed"),
+        "acceptance_batch_uniqueness": _gate_value(acceptance_report, "gates", "batch_uniqueness_passed"),
+        "acceptance_visual_batch_uniqueness": _gate_value(acceptance_report, "gates", "visual_batch_uniqueness_passed"),
+        "visual_batch_uniqueness": _gate_value(visual_gate, "image_plan_report", "visual_batch_uniqueness_passed"),
+        "final_batch_uniqueness": _gate_value(final_gate, "checks", "batch_uniqueness_passed"),
+        "final_skeleton_repeat": _gate_value(final_gate, "checks", "skeleton_repeat_passed"),
+    }
+    missing_fields = [name for name, value in checks.items() if value is None]
+    failed_checks = [name for name, value in checks.items() if value is False]
+    present_values = [value for value in checks.values() if value is not None]
+    status = _chain_status(present_values, missing=not present_values)
+    if failed_checks:
+        status = "failed"
+    if status == "passed" and missing_fields:
+        # Do not fail historical reports for missing optional detail, but keep the gap visible.
+        status = "passed"
+    return {
+        "status": status,
+        "passed": status == "passed",
+        "checks": checks,
+        "failed_checks": failed_checks,
+        "missing_fields": missing_fields,
+        "canonical_job_id": _clean(manifest.get("canonical_job_id")),
+        "batch_id": _clean(manifest.get("batch_id")),
+        "batch_stage": _clean(manifest.get("batch_stage")) or "unknown",
+        "hero_template": _clean(layout_plan.get("hero_template")),
+        "ending_module_type": _clean(layout_plan.get("ending_module_type")),
+    }
 
 
 def _artifact_exists(workspace: Path, manifest: dict[str, Any], key: str, default_name: str) -> tuple[bool, str]:
@@ -82,6 +144,7 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     publish_result = read_json(workspace / _clean(manifest.get("publish_result_path") or "publish-result.json"), default={}) or {}
     latest_draft = read_json(workspace / _clean(manifest.get("latest_draft_report_path") or "latest-draft-report.json"), default={}) or {}
     publication_report = read_json(workspace / _clean(manifest.get("publication_report_path") or "publication-report.json"), default={}) or {}
+    layout_plan = read_json(workspace / _clean(manifest.get("layout_plan_path") or "layout-plan.json"), default={}) or {}
 
     layout_exists, layout_rel = _artifact_exists(workspace, manifest, "layout_plan_path", "layout-plan.json")
     layout_md_exists = (workspace / "layout-plan.md").exists()
@@ -98,6 +161,65 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     published = bool(publish_result.get("draft_media_id") or (publish_result.get("response") or {}).get("media_id"))
     readback_passed = _clean(latest_draft.get("verify_status") or publish_result.get("verify_status")) == "passed"
     forced = bool(_clean(manifest.get("force_publish_reason")))
+    quality_chain_values = [
+        score_passed,
+        acceptance_passed,
+        reader_passed,
+        visual_passed,
+        final_passed,
+        layout_exists and layout_md_exists if layout_exists or layout_md_exists else None,
+        image_exists if image_exists else None,
+        wechat_html_exists and publication_exists if wechat_html_exists or publication_exists else None,
+    ]
+    quality_chain_status = _chain_status(quality_chain_values, missing=not bool(score_report or acceptance_report or final_gate))
+    publish_chain_values = [published if publish_result else None, readback_passed if latest_draft or publish_result else None]
+    publish_chain_status = _chain_status(publish_chain_values, missing=not bool(publish_result or latest_draft))
+    batch_chain = _batch_chain_report(
+        manifest=manifest,
+        score_report=score_report,
+        acceptance_report=acceptance_report,
+        visual_gate=visual_gate,
+        final_gate=final_gate,
+        layout_plan=layout_plan,
+    )
+    quality_chain = {
+        "status": quality_chain_status,
+        "passed": quality_chain_status == "passed",
+        "score_passed": score_passed,
+        "acceptance_passed": acceptance_passed,
+        "reader_gate_passed": reader_passed,
+        "visual_gate_passed": visual_passed,
+        "final_gate_passed": final_passed,
+        "layout_passed": layout_exists and layout_md_exists,
+        "image_plan_present": image_exists,
+        "render_passed": wechat_html_exists and publication_exists,
+        "failed_gates": sorted(set(_failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
+        "missing_artifacts": [
+            name
+            for ok, name in [
+                (bool(score_report), "score-report.json"),
+                (bool(acceptance_report), "acceptance-report.json"),
+                (bool(reader_gate), "reader_gate.json"),
+                (bool(visual_gate), "visual_gate.json"),
+                (bool(final_gate), "final_gate.json"),
+                (layout_exists and layout_md_exists, "layout-plan.json/layout-plan.md"),
+                (image_exists, "image-plan.json"),
+                (wechat_html_exists and publication_exists, "publication.md/article.wechat.html"),
+            ]
+            if not ok
+        ],
+    }
+    publish_chain = {
+        "status": publish_chain_status,
+        "passed": publish_chain_status == "passed",
+        "published": published,
+        "readback_passed": readback_passed,
+        "draft_media_id": _clean(publish_result.get("draft_media_id") or (publish_result.get("response") or {}).get("media_id")),
+        "force_publish": forced,
+        "force_reason": _clean(manifest.get("force_publish_reason")),
+        "force_publish_affects_quality": False,
+        "verify_status": _clean(latest_draft.get("verify_status") or publish_result.get("verify_status")),
+    }
 
     sections = {
         "title": _title_section(workspace, manifest, title),
@@ -180,8 +302,11 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         warnings.append("缺少版式规划，不能证明首屏和模块层次达标。")
     if not image_exists:
         warnings.append("缺少图片计划，不能证明配图分工达标。")
+    if batch_chain["status"] == "failed":
+        warnings.append("同批去重或结构差异未通过，当前稿件不适合作为合格批量成品。")
+        publish_blockers.extend(f"batch_chain：{item}" for item in batch_chain.get("failed_checks") or [])
 
-    overall_passed = quality_passed and (not published or readback_passed)
+    overall_passed = quality_chain["passed"] and publish_chain["passed"] and batch_chain["passed"]
     return {
         "schema_version": DELIVERY_SCHEMA_VERSION,
         "title": title,
@@ -190,6 +315,9 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         "quality_passed": quality_passed,
         "published": published,
         "readback_passed": readback_passed,
+        "publish_chain": publish_chain,
+        "quality_chain": quality_chain,
+        "batch_chain": batch_chain,
         "force_publish": forced,
         "publish_blockers": publish_blockers,
         "warnings": warnings,
@@ -208,6 +336,23 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
         f"- 发布结果：{'已发布' if payload.get('published') else '未发布'}",
         f"- 回读结果：{'通过' if payload.get('readback_passed') else '未通过或未执行'}",
     ]
+    chain_labels = {
+        "passed": "通过",
+        "failed": "未通过",
+        "missing": "缺失",
+        "unknown": "未知",
+    }
+    publish_chain = payload.get("publish_chain") or {}
+    quality_chain = payload.get("quality_chain") or {}
+    batch_chain = payload.get("batch_chain") or {}
+    if publish_chain or quality_chain or batch_chain:
+        lines.extend(
+            [
+                f"- 发布链：{chain_labels.get(str(publish_chain.get('status') or 'unknown'), str(publish_chain.get('status') or 'unknown'))}",
+                f"- 质量链：{chain_labels.get(str(quality_chain.get('status') or 'unknown'), str(quality_chain.get('status') or 'unknown'))}",
+                f"- 批次链：{chain_labels.get(str(batch_chain.get('status') or 'unknown'), str(batch_chain.get('status') or 'unknown'))}",
+            ]
+        )
     if payload.get("force_publish"):
         lines.append("- 强制发布：是")
     warnings = [str(item) for item in payload.get("warnings") or [] if str(item).strip()]
@@ -218,6 +363,13 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
     if publish_blockers:
         lines.extend(["", "## 未发布原因 / 需要修复", ""])
         lines.extend(f"- {item}" for item in publish_blockers[:12])
+    for label, chain in (("发布链", publish_chain), ("质量链", quality_chain), ("批次链", batch_chain)):
+        failed = [str(item) for item in chain.get("failed_checks") or [] if str(item).strip()]
+        missing = [str(item) for item in chain.get("missing_artifacts") or chain.get("missing_fields") or [] if str(item).strip()]
+        if failed or missing:
+            lines.extend(["", f"## {label}问题", ""])
+            lines.extend(f"- 未通过：{item}" for item in failed[:8])
+            lines.extend(f"- 缺失：{item}" for item in missing[:8])
     lines.extend(["", "## 分项结果", ""])
     labels = {
         "title": "标题",

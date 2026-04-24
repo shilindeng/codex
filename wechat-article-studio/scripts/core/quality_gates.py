@@ -6,8 +6,15 @@ from typing import Any
 
 from core.analysis_11d import build_analysis_11d, score_analysis_11d, summarize_analysis_11d
 from core.artifacts import extract_summary, now_iso, read_json, read_text, split_frontmatter
-from core.quality_checks import cost_signal_present, discussion_trigger_present, scene_signal_present, split_markdown_paragraphs
-from core.reader_gates import first_screen_signal_report, image_plan_gate_report, template_frequency_report
+from core.quality_checks import cost_signal_present, discussion_trigger_present, scene_signal_present, split_markdown_paragraphs, visible_length
+from core.reader_gates import (
+    _share_lines,
+    _summary_duplicates_opening,
+    _takeaway_module_type,
+    first_screen_signal_report,
+    image_plan_gate_report,
+    template_frequency_report,
+)
 from core.three_layers import build_three_layer_diagnostics
 
 IMAGE_ROLE_LABELS = {
@@ -321,6 +328,11 @@ def build_reader_gate(
     click_reason = _click_reason(title, first_screen, analysis)
     continue_reason = _continue_reason(body, first_screen)
     share_line = _clean(((analysis_11d.get("signature_quotes") or [""])[0])) or _share_line(body, analysis)
+    share_lines = _share_lines(body, analysis_11d, analysis)
+    share_line_score = min(10, len(share_lines) * 3 + (1 if any(visible_length(item) >= 20 for item in share_lines) else 0))
+    takeaway_module_type = _takeaway_module_type(body)
+    summary_opening_duplicate = _summary_duplicates_opening(summary, body)
+    opening_four_factors_passed = bool(first_screen.get("four_question_passed")) and not summary_opening_duplicate
     hooks = analysis_11d.get("interaction_hooks") or {}
     comment_seed = (
         _clean(((hooks.get("comment_triggers") or hooks.get("poll_prompts") or hooks.get("fill_blank_prompts") or [""])[0]))
@@ -342,12 +354,18 @@ def build_reader_gate(
         failed_checks.append("开头缺少具体场景")
     if first_screen and not first_screen.get("four_question_passed", False):
         failed_checks.append("首屏四问未齐：具体人、具体动作、关系/重要性、损失或冲突")
+    if summary_opening_duplicate:
+        failed_checks.append("副标题或摘要与正文第一句重复，浪费首屏空间")
     if cost_count < 1:
         failed_checks.append("正文缺少真实代价")
     if counterpoint_count < 1:
         failed_checks.append("正文缺少反方或边界")
     if not share_line:
         failed_checks.append("缺少可截图转述的一句话")
+    if len(share_lines) < 3:
+        failed_checks.append("可截图传播句不足 3 条")
+    if takeaway_module_type == "none":
+        failed_checks.append("缺少可保存模块：三问卡/四步卡/对比表/判断卡/风险清单")
     if not comment_seed:
         failed_checks.append("缺少自然评论触发点")
     if len(weak_fields) >= 2:
@@ -364,7 +382,12 @@ def build_reader_gate(
         "click_reason": click_reason,
         "continue_reason": continue_reason,
         "share_line": share_line,
+        "share_lines": share_lines,
+        "share_line_score": share_line_score,
         "comment_seed": comment_seed,
+        "takeaway_module_type": takeaway_module_type,
+        "summary_opening_duplicate": summary_opening_duplicate,
+        "opening_four_factors_passed": opening_four_factors_passed,
         "weak_fields": weak_fields,
         "evidence_count": evidence_count,
         "hard_evidence_types": sorted(evidence_types),
@@ -587,6 +610,9 @@ def build_final_gate(
         "argument_diversity_passed": len(analysis_11d.get("argument_diversity") or []) >= 3,
         "language_style_passed": str(language_style.get("rhythm") or "") != "偏平" and len(language_style.get("template_risk_signals") or []) <= 2,
         "interaction_hooks_passed": bool(interaction_hooks.get("comment_triggers") or interaction_hooks.get("share_triggers") or interaction_hooks.get("save_triggers")),
+        "opening_four_factors_passed": bool(reader_gate.get("opening_four_factors_passed")),
+        "share_lines_passed": int(reader_gate.get("share_line_score") or 0) >= 8 and len(reader_gate.get("share_lines") or []) >= 3,
+        "takeaway_module_passed": str(reader_gate.get("takeaway_module_type") or "none") != "none",
     }
     failed_checks = [name for name, ok in checks.items() if not ok]
     return {

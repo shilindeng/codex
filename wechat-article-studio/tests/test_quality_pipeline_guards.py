@@ -391,6 +391,87 @@ class QualityPipelineGuardTests(unittest.TestCase):
             self.assertIn("表格前缺少真实问题", joined)
             self.assertIn("模板腔黑名单", joined)
 
+    def test_reader_gate_flags_summary_duplicate_opening(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "research.json").write_text(
+                json.dumps(
+                    {
+                        "evidence_items": [
+                            {"type": "source", "value": "官方通报"},
+                            {"type": "number", "value": "75%"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            body = "\n\n".join(
+                [
+                    "周一早上九点，会议室里大家第一次认真讨论 AI 要替团队扛什么结果。",
+                    "周一早上九点，会议室里大家第一次认真讨论 AI 要替团队扛什么结果。",
+                    "如果生成速度继续快下去，真正先贵起来的不是代码，而是验收失手后的返工。",
+                    "现在最容易被漏掉的，不是 AI 会不会写，而是谁来对结果签字。",
+                    "真正会拉开差距的，不是手速，而是能不能把风险关在上线前。",
+                    "这件事最后要落成一个判断卡，而不是一句空泛总结。",
+                ]
+            )
+            report = build_reader_gate(
+                workspace,
+                {},
+                title="Google 75% 新代码背后缺的其实是验收",
+                summary="周一早上九点，会议室里大家第一次认真讨论 AI 要替团队扛什么结果。",
+                body=body,
+                score_report={},
+                review_report={},
+            )
+            self.assertFalse(report["passed"])
+            joined = " ".join(report["failed_checks"])
+            self.assertIn("副标题或摘要与正文第一句重复", joined)
+
+    def test_reader_gate_extracts_takeaway_module_and_share_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            (workspace / "research.json").write_text(
+                json.dumps(
+                    {
+                        "evidence_items": [
+                            {"type": "source", "value": "官方通报"},
+                            {"type": "number", "value": "75%"},
+                            {"type": "case", "value": "迁移项目"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            body = "\n\n".join(
+                [
+                    "周一早上九点，一个工程师打开跨仓库迁移任务单，第一反应不是快，而是这次出了错谁来回滚。",
+                    "Google 披露 75% 新代码由 AI 生成并经工程师审核，真正先变贵的是验收失手后的返工成本。",
+                    "AI 生成得越快，错误也可能成批进入主分支。",
+                    "写得快只是基础，验得准才值钱。",
+                    "真正的分水岭，不是你会不会写，而是你能不能把风险关在上线前。",
+                    "## 三问判断卡",
+                    "| 追问 | 为什么要先问 |",
+                    "| --- | --- |",
+                    "| 哪里最该验 | 决定返工成本 |",
+                    "| 哪一步能回滚 | 决定事故边界 |",
+                    "| 哪类错误最贵 | 决定验收优先级 |",
+                ]
+            )
+            report = build_reader_gate(
+                workspace,
+                {},
+                title="Google 75% 新代码背后缺的其实是验收",
+                summary="Google 披露 75% 新代码由 AI 生成并经工程师审核，真正先变贵的是验收。",
+                body=body,
+                score_report={},
+                review_report={},
+            )
+            self.assertEqual(report["takeaway_module_type"], "三问卡")
+            self.assertGreaterEqual(len(report["share_lines"]), 3)
+
     def test_abnormal_text_report_flags_suspicious_short_bullets(self):
         report = abnormal_text_report(
             "正常标题",

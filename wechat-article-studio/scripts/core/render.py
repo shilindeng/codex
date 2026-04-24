@@ -157,7 +157,8 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any], public
         return ""
     title = _reference_section_title(publication_style or str(manifest.get("wechat_publication_style") or manifest.get("publication_style") or manifest.get("layout_style") or "clean"))
     link_label = _reference_link_label(publication_style or str(manifest.get("wechat_publication_style") or manifest.get("publication_style") or manifest.get("layout_style") or "clean"))
-    cards: list[str] = ['<section data-wx-role="reference-list">', f"<h2>{html.escape(title)}</h2>"]
+    source_style = html.escape(str(manifest.get("source_block_style") or (manifest.get("layout_plan") or {}).get("source_block_style") or "light-source-card").strip() or "light-source-card")
+    cards: list[str] = [f'<section data-wx-role="reference-list" data-wx-source-style="{source_style}">', f"<h2>{html.escape(title)}</h2>"]
     for item in items:
         index = int(item.get("index") or 0)
         title = html.escape(str(item.get("title") or "参考资料").strip())
@@ -168,7 +169,7 @@ def build_reference_cards_html(workspace: Path, manifest: dict[str, Any], public
         if note:
             meta_html += f'<span data-wx-role="reference-dot">·</span>{note}'
         card_parts = [
-            '<section data-wx-role="reference-card">',
+            f'<section data-wx-role="reference-card" data-wx-source-style="{source_style}">',
             f'<p data-wx-role="reference-title"><span data-wx-role="reference-index">[{index}]</span>{title}</p>',
             f'<p data-wx-role="reference-meta">{meta_html}</p>',
         ]

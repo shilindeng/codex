@@ -2,7 +2,7 @@
 
 ## 阶段顺序
 
-0. `discover-topics`：用户无主题（或只说“开始 / 开启公众号创作”）时，先发现最近 12/24 小时热点选题（默认 RSS 优先，必要时 Tavily 回退）
+0. `discover-topics`：用户无主题（或只说“开始 / 开启公众号创作”）时，先发现最近 12/24 小时热点选题（默认 RSS 优先，必要时 Tavily 回退）；当前候选要补 6 维评分、`topic_package_type` 和 `title_direction_candidates`
 0. `hosted-run`：宿主 agent 生成 research / 标题 / 大纲 / 正文后，继续自动跑后链路
 1. `research`：收集主题、来源、信息缺口
    - 默认同时读取 `account-strategy.json`，确认当前账号定位、目标读者、首要目标和最小证据要求
@@ -11,11 +11,12 @@
 4. `enhance`：在写作前补角度、细节、证据、边界与写作人格，产出 `content-enhancement.*`
 5. `write`：写出 `article.md`（必须消费 `viral_blueprint`、`writing_persona`、`content_enhancement`）
 6. `review`：生成结构化编辑拆解（爆款拆解 + 句式提炼 + AI 味问题 + 改稿优先级）
-7. `score`：运行启发式评分 + `quality_gates`（硬门槛）+ `humanness_signals`
+7. `score`：运行启发式评分 + `quality_gates`（硬门槛）+ `humanness_signals`；必须额外产出 `opening_four_factors_passed`、`share_lines`、`share_line_score`、`takeaway_module_type`
 8. `revise`：低分时按“先补角度/事实/细节/边界，再处理模板腔”的顺序生成候选稿
 9. `plan-images` / `generate-images`
 10. `assemble` / `render`
 11. `publish` / `verify-draft`
+12. `factory-board`：在 `.wechat-jobs` 根目录聚合多个工作目录，输出“选题池 / 生产中 / 待清理 / 已交付”与批次指标
 
 ## 可移植性约定
 
@@ -34,6 +35,8 @@
 - `discover-topics` 产出的候选方向未经用户确认前，不进入正式正文生成
 - 标题与方向未确认前，不进入正式发布
 - `score` 未达阈值时，不进入正式发布；最多只允许 `--dry-run-publish` 做链路检查
+- `final-delivery-report.json.quality_chain.status != passed` 时，不进入正式发布
+- `final-delivery-report.json.batch_chain.status != passed` 时，不进入正式发布
 - 评论/案例类稿件未满足最小证据要求时，不进入正式 `render` 或正式发布
 - 标题在 `manifest.json`、`ideation.json`、标题报告和成稿之间不一致时，不进入正式发布
 - 未通过 `quality_gates`（含“情绪价值/刺痛/金句/去 AI 味/可信度”等硬门槛）时，不进入正式发布
@@ -42,6 +45,7 @@
 - 启用 `gemini-web` 前，必须先有用户同意
 - 图片 provider 未指定时默认 `gemini-web`；用户指定 `codex` 时，必须由当前 Codex agent 使用内置生图工具生成并保存图片，再运行 `generate-images --provider codex` 登记
 - `run` / `hosted-run` / `viral-run` 自动流程不允许 `--force-publish`；如果质量门未过，默认停在本地产物和修复建议
+- `publish` 的强制发布只允许越过发布链，不允许把质量链或批次链改成通过
 - 进入 `publish` 前，必须确认用户已明确要求发布到草稿箱
 - 未显式传入 `--confirmed-publish` 前，不写入 `publish_intent=true`
 
@@ -79,4 +83,12 @@ python {SKILL_DIR}/scripts/studio.py hosted-run \
   --article-file <agent-generated-markdown> \
   --to publish \
   --confirmed-publish
+```
+
+工厂看板：
+
+```bash
+python {SKILL_DIR}/scripts/studio.py factory-board \
+  --root <jobs-root> \
+  --output factory-board.json
 ```

@@ -27,6 +27,15 @@ MANIFEST_STATUS_DEFAULTS = {
     "visual_gate_status": "unknown",
     "final_gate_status": "unknown",
     "delivery_report_status": "unknown",
+    "quality_chain_status": "unknown",
+    "publish_chain_status": "unknown",
+    "batch_chain_status": "unknown",
+    "canonical_job_id": "",
+    "retry_round": 0,
+    "retry_reason": "",
+    "batch_id": "",
+    "batch_stage": "unknown",
+    "factory_board_status": "unknown",
 }
 
 ARTIFACT_DEFAULTS = {

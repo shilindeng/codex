@@ -15,8 +15,8 @@ from core.layout_plan import build_layout_plan  # noqa: E402
 class LayoutPlanV2Tests(unittest.TestCase):
     def test_commentary_plan_outputs_hero_and_closing_modules(self):
         plan = build_layout_plan(
-            "测试标题",
-            "摘要",
+            "这件事真正危险的不是成本，而是判断顺序",
+            "这次变化最该看的，是风险和分工怎么重排。",
             {
                 "sections": [
                     {"heading": "大家真正误判了什么", "goal": "先拆误区", "evidence_need": "案例和误判"},
@@ -30,10 +30,14 @@ class LayoutPlanV2Tests(unittest.TestCase):
         self.assertEqual(plan.get("hero_module"), "hero-judgment")
         self.assertEqual(plan.get("closing_module"), "takeaway-card")
         self.assertEqual(plan.get("lead_visual_policy"), "allow-before-first-h2")
+        self.assertEqual(plan.get("hero_template"), "冲突钩子")
         self.assertEqual(plan.get("lead_visual_deadline_ratio"), 0.25)
         self.assertEqual(plan.get("pre_h2_max_paragraphs"), 4)
+        self.assertEqual(plan.get("lead_visual_strategy", {}).get("first_image_before_first_h2"), True)
         self.assertEqual(plan.get("section_modules")[0].get("heading_role"), "section-break")
         self.assertEqual(plan.get("section_modules")[-1].get("module_type"), "takeaway-card")
+        self.assertEqual(plan.get("ending_module_type"), "判断卡")
+        self.assertEqual(plan.get("source_block_style"), "light-source-card")
 
     def test_tutorial_plan_uses_checkpoint_and_action_close(self):
         plan = build_layout_plan(
@@ -52,6 +56,7 @@ class LayoutPlanV2Tests(unittest.TestCase):
         self.assertEqual(plan.get("hero_module"), "hero-checkpoint")
         self.assertEqual(plan.get("closing_module"), "action-close")
         self.assertIn("step-stack", [item.get("module_type") for item in plan.get("section_modules") or []])
+        self.assertIn(plan.get("hero_template"), {"场景钩子", "决策钩子"})
 
 
 if __name__ == "__main__":

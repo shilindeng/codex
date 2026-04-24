@@ -34,7 +34,13 @@ class DeliveryReportTests(unittest.TestCase):
             )
             (workspace / "reader_gate.json").write_text(json.dumps({"passed": False, "failed_checks": ["首屏四问未齐"]}, ensure_ascii=False), encoding="utf-8")
             (workspace / "visual_gate.json").write_text(json.dumps({"passed": True, "planned_inline_count": 3}, ensure_ascii=False), encoding="utf-8")
-            (workspace / "final_gate.json").write_text(json.dumps({"passed": False, "failed_checks": ["score_total_passed"]}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "final_gate.json").write_text(
+                json.dumps(
+                    {"passed": False, "failed_checks": ["score_total_passed", "batch_uniqueness_passed"], "checks": {"batch_uniqueness_passed": False}},
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             (workspace / "layout-plan.json").write_text(json.dumps({"recommended_style": "magazine"}, ensure_ascii=False), encoding="utf-8")
             (workspace / "layout-plan.md").write_text("# 版式规划\n", encoding="utf-8")
             (workspace / "image-plan.json").write_text(json.dumps({"items": []}, ensure_ascii=False), encoding="utf-8")
@@ -68,11 +74,17 @@ class DeliveryReportTests(unittest.TestCase):
             self.assertFalse(report["quality_passed"])
             self.assertTrue(report["published"])
             self.assertTrue(report["readback_passed"])
+            self.assertEqual(report["publish_chain"]["status"], "passed")
+            self.assertEqual(report["quality_chain"]["status"], "failed")
+            self.assertEqual(report["batch_chain"]["status"], "failed")
             self.assertIn("hook_layer_passed", report["sections"]["quality"]["failed_gates"])
             self.assertTrue(any("质量门未通过" in item for item in report["warnings"]))
             rendered = markdown_delivery_report(report)
             self.assertIn("质量结果：未通过", rendered)
             self.assertIn("回读结果：通过", rendered)
+            self.assertIn("发布链：通过", rendered)
+            self.assertIn("质量链：未通过", rendered)
+            self.assertIn("批次链：未通过", rendered)
 
 
 if __name__ == "__main__":

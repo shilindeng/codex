@@ -71,6 +71,7 @@ from core.viral_pipeline import (
     write_source_corpus_artifacts,
 )
 from core.editorial_anchor import build_editorial_anchor_plan, write_editorial_anchor_artifacts
+from core.factory_board import build_factory_board
 from core.generation_strategy import build_generation_strategy, ensure_batch_guidance
 from core.images import cmd_assemble as legacy_assemble
 from core.images import cmd_generate_images as legacy_generate_images
@@ -503,7 +504,15 @@ def placeholder_reasons(workspace: Path, manifest: dict[str, Any]) -> list[str]:
 
 def collect_publish_blockers(workspace: Path, manifest: dict[str, Any]) -> list[str]:
     readiness = build_pipeline_readiness(workspace, manifest)
-    return list(readiness.get("publish_blockers") or [])
+    blockers = list(readiness.get("publish_blockers") or [])
+    chain_labels = {
+        "quality_chain_status": "质量链未通过",
+        "batch_chain_status": "批次链未通过",
+    }
+    for key, label in chain_labels.items():
+        if str(manifest.get(key) or "").strip() == "failed" and label not in blockers:
+            blockers.append(label)
+    return blockers
 
 
 def assert_publish_request_ready(args: argparse.Namespace) -> None:
@@ -896,6 +905,13 @@ def write_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     manifest["delivery_report_path"] = "final-delivery-report.json"
     manifest["delivery_report_markdown_path"] = "final-delivery-report.md"
     manifest["delivery_report_status"] = "passed" if payload.get("overall_status") == "passed" else "failed"
+    manifest["publish_chain_status"] = str((payload.get("publish_chain") or {}).get("status") or "unknown")
+    manifest["quality_chain_status"] = str((payload.get("quality_chain") or {}).get("status") or "unknown")
+    manifest["batch_chain_status"] = str((payload.get("batch_chain") or {}).get("status") or "unknown")
+    if not str(manifest.get("canonical_job_id") or "").strip():
+        manifest["canonical_job_id"] = workspace.name
+    if not str(manifest.get("batch_id") or "").strip():
+        manifest["batch_id"] = workspace_batch_key(workspace)
     return payload
 
 
@@ -1132,6 +1148,63 @@ def _load_json_payload(path: Path) -> dict[str, Any]:
     return copy.deepcopy(payload) if isinstance(payload, dict) else {}
 
 
+def _topic_package_type(corpus: str, content_kind: str) -> str:
+    value = str(corpus or "")
+    if any(keyword in value for keyword in ["侵权", "监管", "合规", "授权", "责任链", "治理", "整治"]):
+        return "规则/争议"
+    if any(keyword in value for keyword in ["员工", "岗位", "医生", "工程师", "职场", "一线", "新人"]):
+        return "职业处境"
+    if any(keyword in value for keyword in ["芯片", "算力", "TOPS", "大模型", "3D", "硬件", "自动驾驶"]):
+        return "硬科技"
+    if content_kind == "教程/工具" or any(keyword in value for keyword in ["教程", "工具", "Agent", "工作流", "Workspace", "平台"]):
+        return "工具实操"
+    if content_kind == "产品更新" or any(keyword in value for keyword in ["发布", "上线", "版本", "功能"]):
+        return "产品机制"
+    return "行业趋势"
+
+
+def _title_direction_candidates(topic: str, package_type: str, corpus: str) -> list[dict[str, str]]:
+    short_topic = extract_summary(str(topic or corpus or "这个变化"), 24)
+    package_type = str(package_type or "行业趋势")
+    if package_type == "规则/争议":
+        directions = [
+            ("责任边界", f"{short_topic}，最该看清谁该负责"),
+            ("授权代价", f"{short_topic}背后，先补的是授权账"),
+            ("治理信号", f"{short_topic}不是热闹，是规则开始补课"),
+        ]
+    elif package_type == "职业处境":
+        directions = [
+            ("身份代入", f"写给一线从业者：{short_topic}先改变的不是岗位名"),
+            ("能力变化", f"{short_topic}之后，真正变贵的是判断力"),
+            ("现实代价", f"{short_topic}最先压到普通人的这一步"),
+        ]
+    elif package_type == "硬科技":
+        directions = [
+            ("成本锚点", f"{short_topic}，别只看参数，要看成本怎么变"),
+            ("产业拐点", f"{short_topic}把竞争推到下一层"),
+            ("落地信号", f"{short_topic}真正值得盯的是交付能力"),
+        ]
+    elif package_type == "工具实操":
+        directions = [
+            ("使用门槛", f"{short_topic}上线后，先把这一步做对"),
+            ("流程变化", f"{short_topic}最先改写的是重复交接"),
+            ("检查清单", f"{short_topic}能不能用，先问这三件事"),
+        ]
+    elif package_type == "产品机制":
+        directions = [
+            ("机制变化", f"{short_topic}不是多了功能，是换了使用方式"),
+            ("用户代价", f"{short_topic}之后，用户最容易卡在这一步"),
+            ("商业信号", f"{short_topic}背后，真正变的是交付节奏"),
+        ]
+    else:
+        directions = [
+            ("趋势判断", f"{short_topic}背后，真正要看的是影响路径"),
+            ("误判提醒", f"{short_topic}别只看热闹，先看谁会受影响"),
+            ("可转述判断", f"{short_topic}最值得带走的一层判断"),
+        ]
+    return [{"trigger": trigger, "direction": direction} for trigger, direction in directions[:3]]
+
+
 def rerank_discovery_candidates(
     candidates: list[dict[str, Any]],
     recent_titles: list[str],
@@ -1251,19 +1324,48 @@ def rerank_discovery_candidates(
             + discussion_score
             - repeat_penalty
         )
+        consequence_keywords = {"成本", "代价", "岗位", "影响", "误判", "风险", "责任", "损失", "谁会先", "吃亏"}
+        controversy_keywords = {"争议", "责任", "边界", "监管", "侵权", "治理", "该不该", "风险", "授权"}
+        repeat_risk_score = int(min(10, max(0, repeat_penalty + len(repeat_hits) + (2 if title_pattern in title_patterns else 0))))
+        repeat_safety_score = int(max(8, 16 - repeat_risk_score))
+        consequence_score = int(
+            min(
+                18,
+                6
+                + max(1, reader_value_score)
+                + (4 if any(keyword in corpus for keyword in consequence_keywords) else 0)
+                + (2 if content_kind in {"事件解读", "趋势观点"} else 0),
+            )
+        )
+        spread_potential_score = int(
+            min(
+                16,
+                4
+                + min(discussion_score, 10)
+                + min(3, max(1, propagation_score) // 4)
+                + (2 if any(keyword in corpus for keyword in controversy_keywords) else 0),
+            )
+        )
+        retell_bonus = 3 if any(keyword in corpus for keyword in {"清单", "步骤", "对比", "判断", "框架"}) else 0
+        retell_score = int(min(18, 6 + writeability_score + min(4, len(item.get("viewpoints") or []) + len(item.get("angles") or [])) + retell_bonus))
         topic_score_dimensions = {
-            "时效和证据": min(20, evidence_potential * 2 + min(2, int(item.get("hit_count") or 0)) * 2),
-            "冲突和代价": min(20, min(discussion_score, 10) + int(max(1, min(10, reader_value_score))) + (2 if any(keyword in corpus for keyword in {"成本", "代价", "岗位", "影响", "误判", "风险", "谁会先"}) else 0)),
-            "目标读者清晰度": min(20, audience_fit_score * 2),
-            "判断卡沉淀能力": min(20, writeability_score * 2),
-            "互动传播潜力": min(20, propagation_score + min(discussion_score, 10)),
+            "时效": int(min(18, 6 + evidence_potential + min(2, int(item.get("hit_count") or 0)) + (2 if str(item.get("source_tier") or "") == "官方" else 0))),
+            "账号匹配": int(min(16, 6 + audience_fit_score + max(0, reader_value_score // 3) + (2 if priority_keywords and any(keyword in corpus for keyword in priority_keywords) else 0))),
+            "现实代价": consequence_score,
+            "传播分歧": spread_potential_score,
+            "可转述性": retell_score,
+            "重复风险": repeat_safety_score,
         }
         topic_score_100 = int(sum(topic_score_dimensions.values()))
+        topic_package_type = _topic_package_type(corpus, content_kind)
         item["novelty_score"] = novelty_score
         item["differentiation_score"] = differentiation_score
         item["angle_freshness_score"] = angle_freshness_score
         item["audience_fit_score"] = audience_fit_score
         item["propagation_score"] = propagation_score
+        item["spread_potential_score"] = spread_potential_score
+        item["consequence_score"] = consequence_score
+        item["repeat_risk_score"] = repeat_risk_score
         item["discussion_score"] = min(discussion_score, 10)
         item["evidence_score"] = evidence_potential
         item["reader_value_score"] = int(max(1, min(10, reader_value_score)))
@@ -1273,7 +1375,10 @@ def rerank_discovery_candidates(
         item["decision_score"] = int(decision_score)
         item["topic_score_100"] = topic_score_100
         item["topic_score_dimensions"] = topic_score_dimensions
-        item["topic_gate_passed"] = topic_score_100 >= 70 and min(topic_score_dimensions.values()) >= 10
+        item["topic_gate_passed"] = topic_score_100 >= 70 and min(topic_score_dimensions.values()) >= 9
+        item["topic_package_type"] = topic_package_type
+        item["title_direction_candidates"] = _title_direction_candidates(topic, topic_package_type, corpus)
+        item["recommended_title_is_direction_hint"] = True
         item["recommended_archetype"] = recommended_archetype
         item["recommended_enhancement_strategy"] = enhancement_strategy_for_archetype(recommended_archetype, title)
         item["writeability_score"] = int(writeability_score)
@@ -3052,6 +3157,19 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_factory_board(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    payload = build_factory_board(root)
+    output = getattr(args, "output", None)
+    if output:
+        output_path = Path(output)
+        if not output_path.is_absolute():
+            output_path = root / output_path
+        write_json(output_path, payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_consent(args: argparse.Namespace) -> int:
     return legacy.cmd_consent(args)
 
@@ -3319,6 +3437,9 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "topic_score_dimensions": candidate.get("topic_score_dimensions") or {},
             "topic_gate_passed": candidate.get("topic_gate_passed"),
             "topic_novelty_reason": candidate.get("novelty_reason") or "",
+            "topic_package_type": candidate.get("topic_package_type") or "",
+            "title_direction_candidates": candidate.get("title_direction_candidates") or [],
+            "selected_title_source": "discovery_direction_hint",
         }
     )
 
@@ -3334,6 +3455,8 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "topic_score_100": candidate.get("topic_score_100"),
             "topic_score_dimensions": candidate.get("topic_score_dimensions") or {},
             "topic_gate_passed": candidate.get("topic_gate_passed"),
+            "topic_package_type": candidate.get("topic_package_type") or "",
+            "title_direction_candidates": candidate.get("title_direction_candidates") or [],
         }
     )
     write_json(workspace / "ideation.json", ideation)
@@ -5113,6 +5236,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="检查 Python、文本 provider、图片 provider、去 AI 外部桥接、微信凭证")
     doctor.add_argument("--workspace")
     doctor.set_defaults(func=cmd_doctor)
+
+    factory_board = subparsers.add_parser("factory-board", help="汇总公众号内容工厂目录状态与批次指标")
+    factory_board.add_argument("--root", required=True, help="包含多个 .wechat-jobs 子目录的根目录")
+    factory_board.add_argument("--output", help="可选：把看板 JSON 写入指定路径")
+    factory_board.set_defaults(func=cmd_factory_board)
 
     consent = subparsers.add_parser("consent", help="管理 gemini-web 的显式同意状态")
     consent.add_argument("--accept", action="store_true")

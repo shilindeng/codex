@@ -133,6 +133,70 @@ def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _dedupe_texts(values: list[str], limit: int = 6) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        value = _normalize_text(raw)
+        if not value or len(value) < 12:
+            continue
+        key = re.sub(r"\W+", "", value.lower())[:40]
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(value)
+        if len(output) >= limit:
+            break
+    return output
+
+
+def _summary_duplicates_opening(summary: str, body: str) -> bool:
+    paragraphs = split_markdown_paragraphs(body)
+    if not paragraphs:
+        return False
+    summary_text = normalize_visible_text(summary)
+    opening_text = normalize_visible_text(paragraphs[0])
+    if not summary_text or not opening_text:
+        return False
+    if summary_text[:28] and summary_text[:28] in opening_text:
+        return True
+    summary_tokens = set(re.findall(r"[\u4e00-\u9fff]{2,4}|[A-Za-z0-9]{3,}", summary_text))
+    opening_tokens = set(re.findall(r"[\u4e00-\u9fff]{2,4}|[A-Za-z0-9]{3,}", opening_text))
+    if not summary_tokens:
+        return False
+    return len(summary_tokens & opening_tokens) / max(1, len(summary_tokens)) >= 0.72
+
+
+def _share_lines(body: str, analysis_11d: dict[str, Any], analysis: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    candidates.extend(str(item) for item in (analysis_11d.get("signature_quotes") or []) if str(item).strip())
+    candidates.extend(str(item) for item in (analysis.get("social_currency_points") or []) if str(item).strip())
+    candidates.extend(str(item.get("text") or "") for item in (analysis.get("signature_lines") or []) if isinstance(item, dict))
+    if len(candidates) < 3:
+        for paragraph in split_markdown_paragraphs(body):
+            plain = normalize_visible_text(paragraph)
+            if 18 <= visible_length(plain) <= 80 and any(word in plain for word in ["不是", "而是", "关键", "代价", "风险", "分水岭", "值钱", "稀缺"]):
+                candidates.append(plain)
+    return _dedupe_texts(candidates, limit=6)
+
+
+def _takeaway_module_type(body: str) -> str:
+    tail = "\n".join(split_markdown_paragraphs(body)[-8:])
+    headings = [match.group(1).strip() for match in re.finditer(r"(?m)^##\s+(.+)$", body or "")]
+    corpus = " ".join([tail, headings[-1] if headings else ""])
+    if re.search(r"三问|3\s*问|问.*问.*问", corpus):
+        return "三问卡"
+    if re.search(r"四步|4\s*步|步骤|护栏|清单", corpus):
+        return "四步卡"
+    if re.search(r"^\|.+\|", tail, flags=re.M) or "对比" in corpus:
+        return "对比表"
+    if re.search(r"判断卡|判断框架|判断", corpus):
+        return "判断卡"
+    if re.search(r"风险|边界|责任|避坑", corpus):
+        return "风险清单"
+    return "none"
+
+
 def classify_opening_route(text: str) -> str:
     value = _normalize_text(text)
     if not value:

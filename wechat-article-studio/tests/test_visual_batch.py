@@ -24,6 +24,8 @@ class VisualBatchTests(unittest.TestCase):
             other.mkdir()
             current_plan = {
                 "layout_family": "comparison",
+                "hero_template": "数据钩子",
+                "ending_module_type": "判断卡",
                 "image_controls": {"preset": "notion", "preset_cover": "notion", "preset_inline": "notion"},
                 "article_visual_strategy": {"visual_route": "data-explainer", "style_family": "知识解释"},
                 "items": [
@@ -33,6 +35,8 @@ class VisualBatchTests(unittest.TestCase):
             }
             other_plan = {
                 "layout_family": "comparison",
+                "hero_template": "数据钩子",
+                "ending_module_type": "判断卡",
                 "image_controls": {"preset": "notion", "preset_cover": "notion", "preset_inline": "notion"},
                 "article_visual_strategy": {"visual_route": "data-explainer", "style_family": "知识解释"},
                 "items": [
@@ -44,6 +48,8 @@ class VisualBatchTests(unittest.TestCase):
             report = summarize_visual_batch_collisions(current, current_plan)
             self.assertFalse(report["passed"])
             self.assertTrue(report["similar_items"])
+            self.assertIn("same_hero_template", report["similar_items"][0]["matched_rules"])
+            self.assertIn("same_ending_module", report["similar_items"][0]["matched_rules"])
 
 
 if __name__ == "__main__":
