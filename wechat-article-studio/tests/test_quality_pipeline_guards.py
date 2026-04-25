@@ -14,8 +14,8 @@ if str(SCRIPTS) not in sys.path:
 from core.ai_fingerprint import detect_ai_fingerprints  # noqa: E402
 from core.content_fingerprint import build_article_fingerprint, summarize_batch_collisions  # noqa: E402
 from core.quality_checks import metadata_integrity_report  # noqa: E402
-from core.quality_gates import build_reader_gate, build_visual_gate  # noqa: E402
-from core.reader_gates import abnormal_text_report, first_screen_signal_report, template_frequency_report  # noqa: E402
+from core.quality_gates import _comment_seed, build_reader_gate, build_visual_gate  # noqa: E402
+from core.reader_gates import abnormal_text_report, first_screen_signal_report, image_plan_gate_report, template_frequency_report  # noqa: E402
 from core.workflow import assert_publish_request_ready, build_pipeline_readiness  # noqa: E402
 import argparse  # noqa: E402
 
@@ -285,6 +285,45 @@ class QualityPipelineGuardTests(unittest.TestCase):
             gate = build_visual_gate(workspace, {"wechat_html_path": "article.wechat.html"}, image_plan=plan)
             self.assertFalse(gate["passed"])
             self.assertTrue(any("英文" in item for item in gate["text_policy_failures"]))
+
+    def test_image_plan_gate_report_blocks_inline_english_label(self):
+        plan = {
+            "provider": "codex",
+            "density_mode": "balanced",
+            "inline_density_range": {"min": 1, "max": 2},
+            "article_visual_strategy": {"visual_route": "data-explainer"},
+            "items": [
+                {
+                    "id": "inline-01",
+                    "type": "流程图",
+                    "insert_strategy": "section_middle",
+                    "text_policy": "short-zh",
+                    "suggested_text": ["Workflow"],
+                    "label_strategy": ["Workflow"],
+                    "role": "explain",
+                    "article_visual_strategy": {"visual_route": "data-explainer"},
+                }
+            ],
+        }
+        report = image_plan_gate_report(plan)
+        self.assertFalse(report["passed"])
+        self.assertTrue(report["label_language_failures"])
+
+    def test_comment_seed_falls_back_from_generic_secondary_viewpoints(self):
+        seed = _comment_seed(
+            "标题测试",
+            "周一早上九点，会议室里大家都在等老板开口。\n\n真正的问题不是要不要上 AI，而是出了错谁来回滚。",
+            {
+                "secondary_viewpoints": [
+                    "泛科技读者 最容易被表面信号牵着走",
+                    "一篇能被转发的分析稿，不是观点更大，而是判断更硬",
+                ],
+                "core_viewpoint": "责任边界要先补",
+            },
+        )
+        self.assertIn("责任边界要先补", seed)
+        self.assertNotIn("泛科技读者", seed)
+        self.assertNotIn("分析稿", seed)
 
     def test_auto_publish_flow_rejects_force_publish(self):
         with self.assertRaises(SystemExit):

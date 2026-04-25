@@ -124,6 +124,8 @@ _LEAD_ACTION_PATTERNS = (
     r"摔倒",
     r"联系",
 )
+_IMAGE_LABEL_ALLOWLIST = ("AI", "Agent", "OpenAI", "ChatGPT", "Gemini", "Google", "Meta", "API", "GPU", "Codex", "Claude", "DeepSeek", "Kimi", "MCP")
+_IMAGE_UI_STYLE_WORDS = ("UI", "按钮", "界面", "面板", "dashboard", "screen", "app", "icon")
 
 _SUSPICIOUS_BULLET_RE = re.compile(r"^\s*[-*+]\s+")
 _SUSPICIOUS_BULLET_DIGIT_RE = re.compile(r"\d")
@@ -319,35 +321,33 @@ def abnormal_text_report(title: str, summary: str, body: str) -> dict[str, Any]:
     }
 
 
-def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path | None = None) -> dict[str, Any]:
-    payload = image_plan or {}
-    items = list(payload.get("items") or [])
-    cover = next((item for item in items if str(item.get("type") or "") == "封面图"), {})
-    first_inline = next((item for item in items if str(item.get("id") or "").startswith("inline-")), {})
-    article_strategy = payload.get("article_visual_strategy") or {}
-    visual_route = str(article_strategy.get("visual_route") or "")
-    per_item_routes = {
-        str((item.get("article_visual_strategy") or {}).get("visual_route") or visual_route)
-        for item in items
-        if str((item.get("article_visual_strategy") or {}).get("visual_route") or visual_route).strip()
-    }
-    cover_text_policy = str(cover.get("text_policy") or "")
-    first_inline_text_policy = str(first_inline.get("text_policy") or "")
-    batch_visual = summarize_visual_batch_collisions(workspace, payload) if workspace is not None else {"passed": True, "similar_items": []}
-    return {
-        "visual_route": visual_route,
-        "visual_route_passed": bool(visual_route) and len(per_item_routes) <= 1,
-        "visual_batch_uniqueness_passed": bool(batch_visual.get("passed", True)),
-        "visual_batch": batch_visual,
-        "cover_text_policy_passed": not cover or cover_text_policy == "none",
-        "first_inline_text_policy_passed": not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"},
-        "passed": (
-            (not cover or cover_text_policy == "none")
-            and (not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"})
-            and (not visual_route or len(per_item_routes) <= 1)
-            and bool(batch_visual.get("passed", True))
-        ),
-    }
+def _label_language_failures(items: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    for item in items:
+        insert_strategy = str(item.get("insert_strategy") or "")
+        item_id = str(item.get("id") or "")
+        if insert_strategy != "section_middle" and not item_id.startswith("inline-"):
+            continue
+        labels = [
+            str(label or "").strip()
+            for label in [
+                *(item.get("required_text") or []),
+                *(item.get("suggested_text") or []),
+                *(item.get("label_strategy") or []),
+            ]
+            if str(label or "").strip()
+        ]
+        for label in labels:
+            cleaned = label
+            for token in sorted(_IMAGE_LABEL_ALLOWLIST, key=len, reverse=True):
+                cleaned = re.sub(re.escape(token), "", cleaned, flags=re.I)
+            if re.search(r"[A-Za-z]{2,}", cleaned):
+                failures.append(f"{item_id} 正文图标签里出现英文")
+                break
+            if any(word in label for word in _IMAGE_UI_STYLE_WORDS):
+                failures.append(f"{item_id} 正文图标签带 UI 说明词")
+                break
+    return failures
 
 
 def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path | None = None) -> dict[str, Any]:
@@ -419,6 +419,7 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
     role_assignment_passed = all(role in valid_roles for role in inferred_roles) if items else False
     explain_role_present = any(role == "explain" for role, item in zip(inferred_roles, items) if item in inline_items) if inline_items else True
     batch_visual = summarize_visual_batch_collisions(workspace, payload) if workspace is not None else {"passed": True, "similar_items": []}
+    label_language_failures = _label_language_failures(items)
     return {
         "visual_route": visual_route,
         "visual_route_passed": bool(visual_route) and len(per_item_routes) <= 1,
@@ -429,12 +430,15 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
         "density_passed": density_passed,
         "role_assignment_passed": role_assignment_passed,
         "explain_role_present": explain_role_present,
+        "label_language_failures": label_language_failures,
+        "label_language_passed": not label_language_failures,
         "passed": (
             cover_policy_ok
             and (not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"})
             and density_passed
             and role_assignment_passed
             and explain_role_present
+            and not label_language_failures
             and (not visual_route or len(per_item_routes) <= 1)
             and bool(batch_visual.get("passed", True))
         ),

@@ -115,16 +115,25 @@ def _load_article(workspace: Path, manifest: dict[str, Any]) -> tuple[str, str, 
 def _title_section(workspace: Path, manifest: dict[str, Any], title: str) -> dict[str, Any]:
     title_decision = read_json(workspace / _clean(manifest.get("title_decision_report_path") or "title-decision-report.json"), default={}) or {}
     title_report = read_json(workspace / _clean(manifest.get("title_report_path") or "title-report.json"), default={}) or {}
+    report_present = bool(title_decision or title_report)
     selected = _clean(title_decision.get("selected_title") or title_report.get("selected_title") or title)
     candidates = title_decision.get("candidates") or []
     selected_candidate = next((item for item in candidates if _clean(item.get("title")) == selected), {})
     risks = list(title_decision.get("selected_title_risks") or selected_candidate.get("selected_title_risks") or [])
     explicit_passed = selected_candidate.get("title_gate_passed")
     if explicit_passed in (None, ""):
-        explicit_passed = None if not title_decision and not title_report else not risks and bool(selected)
+        explicit_passed = title_decision.get("selected_title_contract", {}).get("passed")
+    if explicit_passed in (None, ""):
+        explicit_passed = title_report.get("title_gate_passed")
+    if explicit_passed in (None, ""):
+        explicit_passed = not risks and bool(selected) if report_present else False
+    if not report_present:
+        risks.insert(0, "缺少标题决策报告，不能证明标题经过打开率和同批去重检查。")
     return {
-        "status": _status(bool(explicit_passed) if explicit_passed is not None else None, missing=not bool(selected)),
+        "status": _status(bool(explicit_passed), missing=not report_present),
         "selected_title": selected,
+        "report_present": report_present,
+        "gate_passed": bool(explicit_passed),
         "target_reader": _clean(title_decision.get("audience") or manifest.get("audience") or "大众读者"),
         "primary_trigger": _clean(selected_candidate.get("title_family") or ""),
         "secondary_trigger": _clean(selected_candidate.get("title_emotion_mode") or ""),
@@ -151,17 +160,20 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     image_exists, image_rel = _artifact_exists(workspace, manifest, "image_plan_path", "image-plan.json")
     wechat_html_exists, wechat_html_rel = _artifact_exists(workspace, manifest, "wechat_html_path", "article.wechat.html")
     publication_exists, publication_rel = _artifact_exists(workspace, manifest, "publication_path", "publication.md")
+    title_section = _title_section(workspace, manifest, title)
+    title_passed = title_section.get("status") == "passed"
 
     score_passed = bool(score_report.get("passed")) if score_report else None
     acceptance_passed = bool(acceptance_report.get("passed")) if acceptance_report else None
     reader_passed = bool(reader_gate.get("passed")) if reader_gate else None
     visual_passed = bool(visual_gate.get("passed")) if visual_gate else None
     final_passed = bool(final_gate.get("passed")) if final_gate else None
-    quality_passed = bool(score_passed and acceptance_passed and reader_passed and visual_passed and final_passed)
+    quality_passed = bool(title_passed and score_passed and acceptance_passed and reader_passed and visual_passed and final_passed)
     published = bool(publish_result.get("draft_media_id") or (publish_result.get("response") or {}).get("media_id"))
     readback_passed = _clean(latest_draft.get("verify_status") or publish_result.get("verify_status")) == "passed"
     forced = bool(_clean(manifest.get("force_publish_reason")))
     quality_chain_values = [
+        title_passed,
         score_passed,
         acceptance_passed,
         reader_passed,
@@ -185,6 +197,7 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     quality_chain = {
         "status": quality_chain_status,
         "passed": quality_chain_status == "passed",
+        "title_passed": title_passed,
         "score_passed": score_passed,
         "acceptance_passed": acceptance_passed,
         "reader_gate_passed": reader_passed,
@@ -193,10 +206,11 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         "layout_passed": layout_exists and layout_md_exists,
         "image_plan_present": image_exists,
         "render_passed": wechat_html_exists and publication_exists,
-        "failed_gates": sorted(set(_failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
+        "failed_gates": sorted(set((["title_gate_passed"] if not title_passed else []) + _failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
         "missing_artifacts": [
             name
             for ok, name in [
+                (title_section.get("report_present"), "title-decision-report.json/title-report.json"),
                 (bool(score_report), "score-report.json"),
                 (bool(acceptance_report), "acceptance-report.json"),
                 (bool(reader_gate), "reader_gate.json"),
@@ -222,7 +236,7 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     }
 
     sections = {
-        "title": _title_section(workspace, manifest, title),
+        "title": title_section,
         "article": {
             "status": _status(bool(body.strip()), missing=not bool(body.strip())),
             "summary": summary,
@@ -237,12 +251,13 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
             "status": _status(quality_passed, missing=not bool(score_report or acceptance_report or final_gate)),
             "score": score_report.get("total_score"),
             "threshold": score_report.get("threshold"),
+            "title_passed": title_passed,
             "score_passed": score_passed,
             "acceptance_passed": acceptance_passed,
             "reader_gate_passed": reader_passed,
             "visual_gate_passed": visual_passed,
             "final_gate_passed": final_passed,
-            "failed_gates": sorted(set(_failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
+            "failed_gates": sorted(set((["title_gate_passed"] if not title_passed else []) + _failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
         },
         "layout": {
             "status": _status(layout_exists and layout_md_exists, missing=not layout_exists or not layout_md_exists),
@@ -282,6 +297,10 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     warnings: list[str] = []
     publish_blockers: list[str] = []
     if not quality_passed:
+        if not title_section.get("report_present"):
+            publish_blockers.append("缺少标题决策报告，标题还没有完成验收")
+        elif not title_passed:
+            publish_blockers.append("标题未通过完整性或打开率检查")
         if score_passed is False:
             publish_blockers.append("score-report.json 未通过")
         if acceptance_passed is False:
@@ -293,11 +312,13 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         if final_passed is False:
             publish_blockers.extend(f"final_gate.json：{item}" for item in _failed_gate_names(final_gate)[:4])
     if published and readback_passed and not quality_passed:
-        warnings.append("草稿箱已发布并回读通过，但质量门未通过。")
+        warnings.append("草稿箱已发布并回读通过，但这还不是合格成品。")
     if not published and publish_blockers:
         warnings.append("质量或视觉门未通过，已阻止发布。")
     if forced:
         warnings.append("本次使用了强制发布，需要保留质量风险说明。")
+    if not title_section.get("report_present"):
+        warnings.append("缺少标题报告，不能证明标题已经过专门验收。")
     if not layout_exists or not layout_md_exists:
         warnings.append("缺少版式规划，不能证明首屏和模块层次达标。")
     if not image_exists:
@@ -353,6 +374,8 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
                 f"- 批次链：{chain_labels.get(str(batch_chain.get('status') or 'unknown'), str(batch_chain.get('status') or 'unknown'))}",
             ]
         )
+    if payload.get("published") and not payload.get("quality_passed"):
+        lines.append("- 成品状态：已发布，但质量未过，不能按合格成品计")
     if payload.get("force_publish"):
         lines.append("- 强制发布：是")
     warnings = [str(item) for item in payload.get("warnings") or [] if str(item).strip()]

@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 
+from core.editorial_strategy import generate_diverse_title_variants  # noqa: E402
 from core.title_decision import build_title_decision_report, title_integrity_report  # noqa: E402
 from core.workflow import select_scored_title  # noqa: E402
 
@@ -73,6 +75,30 @@ class TitleDecisionTests(unittest.TestCase):
         )
         self.assertFalse(report["passed"])
         self.assertTrue(any("拼接" in item or "高风险碎片" in item for item in report["issues"]))
+
+    def test_title_integrity_rejects_truncated_ascii_token(self):
+        report = title_integrity_report("OpenAI推出ChatGPTW，最先吃亏的是组织流程")
+        self.assertFalse(report["passed"])
+        self.assertTrue(any("截断英文词" in item for item in report["issues"]))
+
+    def test_generate_diverse_title_variants_does_not_cut_english_product_name_midway(self):
+        titles = [
+            item["title"]
+            for item in generate_diverse_title_variants(
+                topic="OpenAI推出ChatGPT Workspace，组织里最先被改写的是验收流程",
+                angle="验收流程",
+                audience="产品团队",
+                count=8,
+            )
+        ]
+        self.assertTrue(titles)
+        self.assertFalse(any("ChatGPTW" in title or "Workspac" in title for title in titles))
+        self.assertFalse(
+            any(
+                re.search(r"[A-Za-z]{4,}(?=[，,:：。！？?]|$)", title) and ("ChatGPTW" in title or "Workspac" in title)
+                for title in titles
+            )
+        )
 
     def test_select_scored_title_triggers_rewrite_round_when_top_three_are_weak(self):
         with tempfile.TemporaryDirectory() as tmp:

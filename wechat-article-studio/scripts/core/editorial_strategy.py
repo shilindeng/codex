@@ -665,6 +665,29 @@ def _short_focus(topic: str, angle: str = "") -> str:
         return "这个问题"
     if len(compact) <= 16:
         return compact
+    segments = re.findall(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+", compact)
+    if not segments:
+        return compact[:16]
+    clipped = ""
+    allowlist = ("AI", "Agent", "OpenAI", "ChatGPT", "Gemini", "Google", "Meta", "API", "GPU", "Codex", "Claude", "DeepSeek", "Kimi", "MCP")
+    for segment in segments:
+        remaining = 16 - len(clipped)
+        if remaining <= 0:
+            break
+        if len(segment) <= remaining:
+            clipped += segment
+            continue
+        if re.fullmatch(r"[A-Za-z0-9]+", segment):
+            for token in sorted(allowlist, key=len, reverse=True):
+                if len(token) <= remaining and segment.lower().startswith(token.lower()):
+                    clipped += token
+                    break
+            break
+        clipped += segment[:remaining]
+        break
+    clipped = clipped.strip("，,:：。！？? ")
+    if clipped:
+        return clipped
     return compact[:16]
 
 
@@ -827,7 +850,26 @@ def _trim_title_length(title: str) -> str:
     shorter = shorter.replace("更该看清", "看清").replace("真正会", "")
     if len(shorter) <= 28:
         return shorter
-    return ""
+    separators = [sep for sep in ["，", "：", ":", "｜", "|"] if sep in shorter]
+    for sep in separators:
+        left = shorter.split(sep, 1)[0].strip("，,:：。！？? ")
+        if 12 <= len(left) <= 28:
+            return left
+    compact = re.sub(r"\s+", "", shorter)
+    segments = re.findall(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+", compact)
+    clipped = ""
+    for segment in segments:
+        remaining = 28 - len(clipped)
+        if remaining <= 0:
+            break
+        if len(segment) <= remaining:
+            clipped += segment
+            continue
+        if re.fullmatch(r"[A-Za-z0-9]+", segment):
+            break
+        clipped += segment[:remaining]
+        break
+    return clipped.strip("，,:：。！？? ")
 
 
 def _build_title_entry(

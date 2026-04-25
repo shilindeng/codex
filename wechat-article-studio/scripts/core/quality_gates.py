@@ -48,6 +48,7 @@ _SHARE_LINE_PATTERNS = (
     r"问题不在.{1,24}而在.{1,24}",
     r"真正.{0,10}不是.{1,24}而是.{1,24}",
 )
+_COMMENT_SEED_BLOCKLIST = ("泛科技读者", "分析稿", "这篇稿", "这篇文章", "一篇能被转发", "一条能被转发")
 
 
 def _text_density_limits(image_type: str) -> tuple[int, int]:
@@ -225,17 +226,42 @@ def _share_line(body: str, analysis: dict[str, Any]) -> str:
 
 
 def _comment_seed(title: str, body: str, analysis: dict[str, Any]) -> str:
+    def _normalize_seed(value: str, *, limit: int = 24) -> str:
+        cleaned = _clean(value).strip("，,:：。！？? ")
+        cleaned = re.sub(r"[，,:：。！？?]{2,}", "，", cleaned)
+        cleaned = re.sub(r"\s+", "", cleaned)
+        if not cleaned or len(cleaned) < 6:
+            return ""
+        if any(token in cleaned for token in _COMMENT_SEED_BLOCKLIST):
+            return ""
+        if cleaned.count("，") >= 2 and not any(keyword in cleaned for keyword in ["代价", "风险", "误判", "责任", "边界", "返工", "判断", "顺序"]):
+            return ""
+        return cleaned[:limit].strip("，,:：。！？? ")
+
     for paragraph in split_markdown_paragraphs(body):
         if discussion_trigger_present(paragraph):
-            return _clean(paragraph)[:48]
-    viewpoints = [_clean(str(item)) for item in (analysis.get("secondary_viewpoints") or []) if _clean(str(item))]
+            seed = _normalize_seed(paragraph, limit=30)
+            if seed:
+                return seed
+    hooks = analysis.get("interaction_hooks") or {}
+    candidates = [
+        *[str(item) for item in (hooks.get("comment_triggers") or [])],
+        *[str(item) for item in (hooks.get("poll_prompts") or [])],
+        *[str(item) for item in (analysis.get("controversy_anchors") or [])],
+    ]
+    for item in candidates:
+        seed = _normalize_seed(item)
+        if seed:
+            return f"你认同这个判断吗：{seed}？"
+    viewpoints = [_normalize_seed(str(item), limit=18) for item in (analysis.get("secondary_viewpoints") or [])]
+    viewpoints = [item for item in viewpoints if item]
     if len(viewpoints) >= 2:
-        left = viewpoints[0][:18]
-        right = viewpoints[1][:18]
-        return f"你更认同哪一种：{left}，还是{right}？"
-    core = _clean(str(analysis.get("core_viewpoint") or ""))
+        left = viewpoints[0]
+        right = viewpoints[1]
+        return f"你更认同哪种判断：{left}，还是{right}？"
+    core = _normalize_seed(str(analysis.get("core_viewpoint") or ""), limit=20)
     if core:
-        return f"如果是你，你会先处理“{core[:20]}”吗？"
+        return f"如果是你，你会先处理“{core}”吗？"
     if title:
         return f"如果是你，你会怎么处理这件事：{title[:22]}？"
     return ""

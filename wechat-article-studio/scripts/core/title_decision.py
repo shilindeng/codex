@@ -70,6 +70,8 @@ ARCHETYPE_FAMILY_PRIORITIES = {
     "tutorial": {"method-rule": 1.0, "pain-truth": 0.8, "viewpoint-direct": 0.5, "counterintuitive": 0.3, "cost-consequence": 0.2},
     "narrative": {"pain-truth": 1.0, "viewpoint-direct": 0.7, "counterintuitive": 0.4, "cost-consequence": 0.3, "method-rule": 0.1},
 }
+ASCII_TITLE_ALLOWLIST = ("AI", "Agent", "OpenAI", "ChatGPT", "Gemini", "Google", "Meta", "API", "GPU", "Codex", "Claude", "DeepSeek", "Kimi", "MCP")
+ASCII_TITLE_COMPLETIONS = ("workspace", "workflow", "platform", "response", "system", "service", "studio", "factory", "reader", "process", "market")
 
 
 def infer_title_family(title: str, candidate: dict[str, Any] | None = None) -> str:
@@ -132,6 +134,22 @@ def _title_similarity_score(left: str, right: str) -> float:
     prefix_bonus = 0.2 if compact_left[:10] and compact_left[:10] == compact_right[:10] else 0.0
     family_bonus = 0.1 if title_template_key(left) == title_template_key(right) else 0.0
     return min(1.0, token_overlap + prefix_bonus + family_bonus)
+
+
+def _broken_ascii_fragment(title: str) -> str:
+    compact = _normalize_text(title)
+    if not re.search(r"[\u4e00-\u9fff]", compact):
+        return ""
+    for match in re.finditer(r"[A-Za-z]{4,}(?=[，,:：。！？?]|$)", compact):
+        token = match.group(0)
+        lower = token.lower()
+        if any(lower == allowed.lower() for allowed in ASCII_TITLE_ALLOWLIST):
+            continue
+        if any(allowed.lower().startswith(lower) or lower.startswith(allowed.lower()) for allowed in ASCII_TITLE_ALLOWLIST):
+            return token
+        if any(word.startswith(lower) and word != lower for word in ASCII_TITLE_COMPLETIONS):
+            return token
+    return ""
 
 
 def _candidate_bucket(candidate: dict[str, Any]) -> str:
@@ -522,10 +540,14 @@ def title_integrity_report(title: str, *, topic: str = "", account_strategy: dic
     if any(re.search(pattern, title) for pattern in ANSWER_COMPLETE_TITLE_PATTERNS):
         score -= 2.2
         issues.append("标题把判断和答案说得太满，点击欲会被压掉。")
+    broken_ascii = _broken_ascii_fragment(title)
+    if broken_ascii:
+        score -= 4.0
+        issues.append(f"标题里出现截断英文词“{broken_ascii}”，像是被硬切断了。")
     if topic and normalized and normalized == _normalize_text(topic) and len(fragment_hits) >= 1:
         score -= 1.5
         issues.append("原始主题本身已经像标题模板，不能直接拿来发。")
-    passed = score >= 6.0 and len(normalized) <= TITLE_LENGTH_HARD_MAX and not any("残句" in item or "硬拼接" in item for item in issues)
+    passed = score >= 6.0 and len(normalized) <= TITLE_LENGTH_HARD_MAX and not any(("残句" in item or "硬拼接" in item or "截断英文词" in item) for item in issues)
     notes = [] if issues else ["标题语义完整，句法顺，读起来不像拼出来的。"]
     return {
         "score": round(max(0.0, min(score, 10.0)), 2),
