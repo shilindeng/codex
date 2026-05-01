@@ -220,7 +220,10 @@ def _inline_image_limit(workspace: Path, manifest: dict[str, Any], body: str, ar
     )
     explicit_count = int(controls.get("inline_count") or manifest.get("image_inline_target") or 0)
     if density_mode in {"auto", "none", "minimal", "balanced", "dense", "custom"}:
-        return int(legacy.estimate_inline_image_count(body, explicit_count, density_mode))
+        estimated = int(legacy.estimate_inline_image_count(body, explicit_count, density_mode))
+        if density_mode == "auto" and estimated <= 0 and (_MARKDOWN_IMAGE_RE.search(body) or _RAW_HTML_IMAGE_RE.search(body)):
+            return 1
+        return estimated
     return 3 if archetype == "tutorial" else 2
 
 

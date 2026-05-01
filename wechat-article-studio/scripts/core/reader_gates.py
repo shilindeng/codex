@@ -350,6 +350,25 @@ def _label_language_failures(items: list[dict[str, Any]]) -> list[str]:
     return failures
 
 
+def _codex_visible_text_failures(provider: str, items: list[dict[str, Any]]) -> list[str]:
+    if provider.strip().lower() != "codex":
+        return []
+    failures: list[str] = []
+    for item in items:
+        labels = [
+            str(label or "").strip()
+            for label in [
+                *(item.get("required_text") or []),
+                *(item.get("suggested_text") or []),
+                *(item.get("label_strategy") or []),
+            ]
+            if str(label or "").strip()
+        ]
+        if not labels:
+            failures.append(f"{item.get('id')} Codex 图片缺少可见中文短字")
+    return failures
+
+
 def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path | None = None) -> dict[str, Any]:
     payload = image_plan or {}
     items = list(payload.get("items") or [])
@@ -420,6 +439,7 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
     explain_role_present = any(role == "explain" for role, item in zip(inferred_roles, items) if item in inline_items) if inline_items else True
     batch_visual = summarize_visual_batch_collisions(workspace, payload) if workspace is not None else {"passed": True, "similar_items": []}
     label_language_failures = _label_language_failures(items)
+    visible_text_failures = _codex_visible_text_failures(str(payload.get("provider") or ""), items)
     return {
         "visual_route": visual_route,
         "visual_route_passed": bool(visual_route) and len(per_item_routes) <= 1,
@@ -432,6 +452,8 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
         "explain_role_present": explain_role_present,
         "label_language_failures": label_language_failures,
         "label_language_passed": not label_language_failures,
+        "visible_text_failures": visible_text_failures,
+        "visible_text_passed": not visible_text_failures,
         "passed": (
             cover_policy_ok
             and (not first_inline or first_inline_text_policy in {"none", "short-zh", "short-zh-numeric"})
@@ -439,6 +461,7 @@ def image_plan_gate_report(image_plan: dict[str, Any] | None, *, workspace: Path
             and role_assignment_passed
             and explain_role_present
             and not label_language_failures
+            and not visible_text_failures
             and (not visual_route or len(per_item_routes) <= 1)
             and bool(batch_visual.get("passed", True))
         ),

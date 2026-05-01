@@ -56,6 +56,8 @@ def _text_density_limits(image_type: str) -> tuple[int, int]:
         return 2, 14
     if image_type in {"流程图", "信息图", "对比图"}:
         return 3, 12
+    if image_type == "分隔图":
+        return 1, 6
     return 1, 6
 
 
@@ -505,10 +507,10 @@ def build_visual_gate(
         if codex_mode:
             if policy not in {"short-zh", "short-zh-numeric", "short-any"}:
                 text_policy_failures.append(f"{item.get('id')} Codex 图片必须配置短字策略")
+            if not label_strategy:
+                text_policy_failures.append(f"{item.get('id')} Codex 图片缺少可见中文短字")
             if image_type == "封面图" and not required_labels:
-                text_policy_failures.append(f"{item.get('id')} Codex 图片缺少 required_text")
-            if image_type != "封面图" and required_labels and image_type not in {"流程图", "信息图", "对比图"}:
-                text_policy_failures.append(f"{item.get('id')} 正文概念图不应强制 required_text")
+                text_policy_failures.append(f"{item.get('id')} Codex 封面图缺少 required_text")
             max_count, max_chars = _text_density_limits(image_type)
             if len(label_strategy) > max_count:
                 text_policy_failures.append(f"{item.get('id')} 图中文字数量过多")

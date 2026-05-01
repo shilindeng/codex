@@ -309,6 +309,27 @@ class QualityPipelineGuardTests(unittest.TestCase):
         self.assertFalse(report["passed"])
         self.assertTrue(report["label_language_failures"])
 
+    def test_image_plan_gate_report_blocks_codex_items_without_visible_text(self):
+        plan = {
+            "provider": "codex",
+            "density_mode": "balanced",
+            "inline_density_range": {"min": 1, "max": 2},
+            "article_visual_strategy": {"visual_route": "scene-metaphor"},
+            "items": [
+                {
+                    "id": "inline-01",
+                    "type": "正文插图",
+                    "insert_strategy": "section_middle",
+                    "text_policy": "short-zh",
+                    "role": "explain",
+                    "article_visual_strategy": {"visual_route": "scene-metaphor"},
+                }
+            ],
+        }
+        report = image_plan_gate_report(plan)
+        self.assertFalse(report["passed"])
+        self.assertTrue(report["visible_text_failures"])
+
     def test_comment_seed_falls_back_from_generic_secondary_viewpoints(self):
         seed = _comment_seed(
             "标题测试",

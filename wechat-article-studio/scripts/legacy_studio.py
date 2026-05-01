@@ -336,11 +336,11 @@ IMAGE_TYPE_ALIASES = {
 }
 IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
     "封面图": [
-        {"key": "hero-object", "label": "中心主视觉", "instruction": "Use one dominant hero object in the center with strong negative space and no embedded headline text."},
-        {"key": "editorial-collage", "label": "编辑拼贴", "instruction": "Use an editorial collage composition with layered shapes and two or three visual clusters, without text blocks."},
-        {"key": "symbolic-scene", "label": "象征场景", "instruction": "Use a symbolic scene with depth and atmosphere, showing the article idea through metaphor instead of labels."},
-        {"key": "diagonal-poster", "label": "斜向张力", "instruction": "Use a diagonal poster composition with directional energy and one clear focal object, keeping text out of the image."},
-        {"key": "framed-window", "label": "窗景框构", "instruction": "Use a framed-window composition that creates depth and hierarchy through nested planes instead of text."},
+        {"key": "headline-poster", "label": "标题海报", "instruction": "Use one dominant WeChat cover poster composition with the required Chinese title text large, clear, and inside the safe crop area."},
+        {"key": "editorial-collage", "label": "编辑拼贴", "instruction": "Use an editorial collage composition with layered shapes, one clear focal object, and the required Chinese title text integrated as poster typography."},
+        {"key": "symbolic-scene", "label": "象征场景", "instruction": "Use a symbolic scene with depth and atmosphere, plus readable Chinese title text that feels designed rather than pasted on."},
+        {"key": "diagonal-poster", "label": "斜向张力", "instruction": "Use a diagonal poster composition with directional energy, one clear focal object, and readable Chinese title text."},
+        {"key": "framed-window", "label": "窗景框构", "instruction": "Use a framed-window composition that creates depth and hierarchy, keeping the required Chinese title text clear in the foreground."},
     ],
     "信息图": [
         {"key": "stacked-cards", "label": "纵向卡片", "instruction": "Use a stacked-card infographic layout with 3 to 5 modules and only short keywords if absolutely needed."},
@@ -352,11 +352,11 @@ IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
         {"key": "map-geography", "label": "地理映射", "instruction": "Use a map-driven layout with location markers or regions, minimizing text and emphasizing spatial relationships."},
     ],
     "正文插图": [
-        {"key": "scene-metaphor", "label": "场景隐喻", "instruction": "Use a scene-based metaphor with clear foreground and background, and avoid embedded text entirely."},
-        {"key": "object-closeup", "label": "物件特写", "instruction": "Use one or two symbolic objects in close-up, emphasizing texture and concept rather than labels."},
-        {"key": "abstract-geometry", "label": "抽象图形", "instruction": "Use abstract geometric composition to express the idea without any readable text."},
-        {"key": "editorial-panel", "label": "编辑画面", "instruction": "Use an editorial illustration panel with one strong concept frame and no embedded text."},
-        {"key": "cutaway-layer", "label": "剖面分层", "instruction": "Use a cutaway or layered depth composition to reveal the concept without resorting to labels."},
+        {"key": "scene-metaphor", "label": "场景隐喻", "instruction": "Use a scene-based WeChat editorial metaphor with clear foreground/background and one readable Chinese keyword integrated into the scene."},
+        {"key": "object-closeup", "label": "物件特写", "instruction": "Use one or two symbolic objects in close-up, with one readable Chinese keyword as a designed label or poster word."},
+        {"key": "reader-moment", "label": "读者瞬间", "instruction": "Show a human work/life moment the reader can recognize, with one readable Chinese keyword anchoring the emotion."},
+        {"key": "editorial-panel", "label": "编辑画面", "instruction": "Use an editorial illustration panel with one strong concept frame and one readable Chinese keyword, not a diagram."},
+        {"key": "cutaway-layer", "label": "剖面分层", "instruction": "Use a layered depth composition to reveal the concept with one readable Chinese keyword, avoiding software architecture visuals."},
     ],
     "流程图": [
         {"key": "path-nodes", "label": "路径节点", "instruction": "Use a node-and-path flow layout with arrows and milestones, limiting text to tiny step tags only if unavoidable."},
@@ -373,9 +373,9 @@ IMAGE_LAYOUT_VARIANTS: dict[str, list[dict[str, str]]] = {
         {"key": "before-after", "label": "前后对照", "instruction": "Use a before-versus-after composition emphasizing transition and difference rather than descriptive text."},
     ],
     "分隔图": [
-        {"key": "motif-band", "label": "主题带状", "instruction": "Use a wide motif band as a visual pause, with no embedded text and a strong thematic cue."},
-        {"key": "symbol-break", "label": "象征断点", "instruction": "Use a symbolic break image that resets rhythm between sections while staying visually minimal."},
-        {"key": "atmospheric-divider", "label": "氛围分隔", "instruction": "Use an atmospheric divider composition with strong mood and no readable text."},
+        {"key": "motif-band", "label": "主题带状", "instruction": "Use a wide motif band as a visual pause, with one readable Chinese keyword and a strong thematic cue."},
+        {"key": "symbol-break", "label": "象征断点", "instruction": "Use a symbolic break image that resets rhythm between sections, anchored by one readable Chinese keyword."},
+        {"key": "atmospheric-divider", "label": "氛围分隔", "instruction": "Use an atmospheric divider composition with strong mood and one readable Chinese keyword."},
     ],
 }
 IMAGE_DENSITY_CHOICES = ("auto", "none", "minimal", "balanced", "dense", "custom")
@@ -480,12 +480,12 @@ IMAGE_CONTENT_MODE_MODULES: dict[str, str] = {
     "data": "Use selective quantitative cues, contrast, and information layers. Keep labels extremely sparse and avoid turning every image into a dashboard.",
 }
 IMAGE_TYPE_PROMPT_MODULES: dict[str, str] = {
-    "封面图": "Create a high-recognition hero image for WeChat: one dominant focal idea, strong atmosphere, strong crop safety, and no headline baked into the image.",
-    "信息图": "Compress the key structure into a scan-friendly visual summary. Favor modular grouping, icon logic, and one clear reading path before adding any short labels.",
-    "流程图": "Show a real sequence or operational path with just enough direction cues to be understood. Use arrows, nodes, and spacing first; only add very short labels when the flow would otherwise become unclear.",
+    "封面图": "Create a high-recognition WeChat cover poster: readable Chinese title typography, one dominant focal idea, strong atmosphere, and safe cropping for the public-account feed.",
+    "信息图": "Create a collectible WeChat summary visual. Favor poster-like modules, icons, and short readable Chinese judgments; avoid software dashboard aesthetics.",
+    "流程图": "Show a real sequence or operational path only when the section contains steps. Keep it editorial and human-readable, not a system architecture diagram.",
     "对比图": "Make the contrast obvious at first glance through composition, grouping, and opposing cues. Let objects, position, color, and metaphor do most of the work, and use only very short labels if they truly help the comparison.",
-    "分隔图": "Reset the reading rhythm with a thematic visual pause that still belongs to the article's visual world.",
-    "正文插图": "Support the nearby paragraph through metaphor, objects, scenes, or conceptual framing. Do not fall back to a generic diagram unless the text truly demands structure.",
+    "分隔图": "Reset the reading rhythm with a thematic visual pause and one readable Chinese keyword that still belongs to the article's visual world.",
+    "正文插图": "Support the nearby paragraph through a WeChat editorial scene, symbolic object, reader moment, or conceptual poster frame. Include one readable Chinese keyword; do not fall back to a generic diagram.",
 }
 IMAGE_STYLE_FAMILY_MODULES: dict[str, str] = {
     "editorial-analysis": "Use editorial collage language, premium print rhythm, restrained palette shifts, and a thought-piece tone.",
@@ -519,17 +519,16 @@ IMAGE_TEXT_POLICY_LABELS: dict[str, str] = {
 IMAGE_LABEL_LANGUAGE_CHOICES = ("zh-CN", "any")
 IMAGE_LABEL_BAD_PREFIXES = ("如果", "看到", "不过", "这里", "真正", "因为", "不是", "而是", "所以", "这个", "那个")
 CODEX_IMAGE_STYLE_PRESET_CYCLE = (
-    "chalkboard",
     "editorial-grain",
-    "notion",
-    "scientific-blueprint",
-    "professional-corporate",
     "fresh",
     "bold",
+    "illustrated-handdrawn",
+    "photoreal-sketch",
+    "luxury-minimal",
     "minimal",
 )
-CODEX_IMAGE_LAYOUT_FAMILY_CYCLE = ("editorial", "process", "comparison", "hierarchy", "dashboard")
-CODEX_IMAGE_VISUAL_ROUTE_CYCLE = ("data-explainer", "cold-hard", "conflict-alert", "people-emotion")
+CODEX_IMAGE_LAYOUT_FAMILY_CYCLE = ("editorial", "comparison", "timeline", "radial")
+CODEX_IMAGE_VISUAL_ROUTE_CYCLE = ("cover-poster", "scene-metaphor", "reader-emotion", "share-card", "contrast-poster")
 ARTICLE_VISUAL_HINT_WORDS: dict[str, tuple[str, ...]] = {
     "narrative": ("故事", "人物", "经历", "日常", "生活", "感受", "情绪", "焦虑", "治愈", "成长", "关系", "亲密", "家庭"),
     "business": ("商业", "增长", "市场", "变现", "策略", "决策", "竞争", "订阅", "广告", "公司", "收入", "利润", "品牌"),
@@ -2508,12 +2507,17 @@ def apply_codex_visual_diversity(workspace: Path, controls: dict[str, Any], arti
     controls["layout_family"] = layout_family
     article_strategy["visual_route"] = route
     article_strategy["visual_route_label"] = {
+        "cover-poster": "公众号海报型",
+        "scene-metaphor": "场景隐喻型",
+        "reader-emotion": "读者情绪型",
+        "share-card": "转发卡片型",
+        "contrast-poster": "对照海报型",
         "data-explainer": "数据解释型",
         "cold-hard": "冷硬判断型",
         "conflict-alert": "冲突警示型",
         "people-emotion": "人物情绪型",
     }.get(route, route)
-    article_strategy.setdefault("decision_reasoning", []).append(f"Codex 批量生图自动轮换视觉签名：{preset}/{layout_family}/{route}。")
+    article_strategy.setdefault("decision_reasoning", []).append(f"Codex 批量生图自动轮换公众号视觉签名：{preset}/{layout_family}/{route}。")
 
 
 def fallback_image_provider(preferred: str) -> str | None:
@@ -2961,12 +2965,13 @@ def ensure_codex_image_available(workspace: Path, item: dict[str, Any], output_p
 def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) -> None:
     payload = {
         "provider": "codex",
+        "target_model": "gpt-image-2",
         "generated_at": now_iso(),
         "instructions": [
-            "在当前 Codex App 对话里使用内置 image_gen 逐张生图。",
+            "在当前 Codex App 对话里使用内置 image_gen 逐张生图；当前提示词按 gpt-image-2 的中文短字能力设计。",
             "将每张成图保存为对应 target_path，或保存到 codex-images/<id>.png 后重新运行 generate-images --provider codex。",
-            "每张图都必须肉眼可见 required_text 中的短字；如果无字、乱码或缺字，请重新生成，不要登记。",
-            "正文插图以画面隐喻优先；suggested_text 只是可选微文字，不能把图片做成文字卡片。",
+            "每张图都必须肉眼可见 required_text 中的中文短字；如果无字、乱码、缺字或字体太小，请重新生成，不要登记。",
+            "正文插图以公众号场景、物件、人物压力和海报感为主；不能做成架构图、流程图、仪表板或文字卡片。",
         ],
         "codex_generated_images_root": str(codex_generated_images_root()),
         "items": requests,
@@ -2975,7 +2980,9 @@ def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) 
     lines = [
         "# Codex 图片生成清单",
         "",
-        "使用当前 Codex App 对话的内置生图工具逐张生成。生成后，把图片保存到 `target_path`，或保存到 `codex-images/<id>.png` 后重新运行 `generate-images --provider codex`。",
+        "使用当前 Codex App 对话的内置生图工具逐张生成。提示词已按 `gpt-image-2` 优化：所有图片都要有清晰中文短字，同时避免架构图、流程图、仪表板化。",
+        "",
+        "生成后，把图片保存到 `target_path`，或保存到 `codex-images/<id>.png` 后重新运行 `generate-images --provider codex`。",
         "",
     ]
     for index, item in enumerate(requests, 1):
@@ -2988,7 +2995,7 @@ def write_codex_image_requests(workspace: Path, requests: list[dict[str, Any]]) 
                 f"- target_path: `{item['target_path']}`",
                 f"- required_text: {' / '.join(item.get('required_text') or []) if item.get('required_text') else '无'}",
                 f"- suggested_text: {' / '.join(item.get('suggested_text') or []) if item.get('suggested_text') else '无'}",
-                "- check: 封面必须包含 required_text；正文图以画面为主，最多一个很小的 suggested_text；不能出现大段文字或文字墙。",
+                "- check: 必须包含 required_text；正文图要像公众号配图，有场景/物件/情绪/海报感，不能变成架构图、流程图、仪表板或文字墙。",
                 "",
                 "### Prompt",
                 "",
@@ -3011,6 +3018,10 @@ def prepare_codex_image_requests(workspace: Path, plan: dict[str, Any], images_d
             item["prompt"] = prompt_override
         source_meta = ensure_codex_image_available(workspace, item, output_path)
         if source_meta is None:
+            required_text = list(item.get("required_text") or [])
+            suggested_text = list(item.get("suggested_text") or item.get("label_strategy") or [])
+            if not required_text and suggested_text:
+                required_text = suggested_text[:1]
             missing.append(
                 {
                     "id": item.get("id"),
@@ -3018,8 +3029,8 @@ def prepare_codex_image_requests(workspace: Path, plan: dict[str, Any], images_d
                     "aspect_ratio": item.get("aspect_ratio") or "16:9",
                     "target_path": relative_posix(output_path, workspace),
                     "prompt_path": relative_posix(prompt_path, workspace) if prompt_path.exists() else "",
-                    "required_text": list(item.get("required_text") or []),
-                    "suggested_text": list(item.get("suggested_text") or item.get("label_strategy") or []),
+                    "required_text": required_text,
+                    "suggested_text": suggested_text,
                     "prompt": effective_prompt,
                 }
             )
@@ -3122,11 +3133,11 @@ def count_keyword_hits(text: str, keywords: Iterable[str]) -> int:
 def infer_layout_family_from_strategy(content_mode: str, type_bias: dict[str, float]) -> str:
     dominant_type = max(type_bias.items(), key=lambda item: item[1])[0] if type_bias else "正文插图"
     if dominant_type == "流程图":
-        return "process"
+        return "timeline"
     if dominant_type == "对比图":
         return "comparison"
     if dominant_type == "信息图":
-        return "dashboard" if content_mode == "data" else "hierarchy"
+        return "radial" if content_mode == "data" else "editorial"
     return "editorial"
 
 
@@ -4196,10 +4207,10 @@ def infer_article_visual_strategy(
 
     type_bias = normalize_type_bias(
         {
-            "正文插图": 0.62 + narrative_score * 0.04 - tutorial_score * 0.03 - data_score * 0.02,
-            "对比图": 0.12 + comparison_score * 0.06 + business_score * 0.01,
-            "信息图": 0.14 + data_score * 0.05 + tutorial_score * 0.02,
-            "流程图": 0.12 + tutorial_score * 0.05 - narrative_score * 0.03,
+            "正文插图": 0.76 + narrative_score * 0.05 - tutorial_score * 0.02 - data_score * 0.015,
+            "对比图": 0.10 + comparison_score * 0.055 + business_score * 0.01,
+            "信息图": 0.08 + data_score * 0.035 + tutorial_score * 0.01,
+            "流程图": 0.06 + tutorial_score * 0.035 - narrative_score * 0.03,
         }
     )
     layout_family = controls.get("layout_family") or infer_layout_family_from_strategy(
@@ -4230,9 +4241,9 @@ def infer_article_visual_strategy(
         visual_route_label = "冷硬判断型"
         visual_route_reason = "法规、侵权或治理类选题优先走冷静判断路线，避免把责任边界做成泛科技海报。"
     elif product_mechanism:
-        visual_route = "data-explainer"
-        visual_route_label = "数据解释型"
-        visual_route_reason = "产品机制类选题优先解释流程、边界和使用路径。"
+        visual_route = "scene-metaphor"
+        visual_route_label = "场景隐喻型"
+        visual_route_reason = "产品机制类选题先做成公众号可感知的使用场景，再用少量短字提示边界。"
     elif career_context:
         visual_route = "people-emotion"
         visual_route_label = "人物情绪型"
@@ -4246,9 +4257,9 @@ def infer_article_visual_strategy(
         visual_route_label = "人物情绪型"
         visual_route_reason = "正文更依赖人物处境和情绪代入，视觉应先服务读者共感。"
     elif data_score >= max(narrative_score, 4) or explanatory_score >= 7:
-        visual_route = "data-explainer"
-        visual_route_label = "数据解释型"
-        visual_route_reason = "正文更依赖结构、对比和信息压缩，视觉应先服务理解。"
+        visual_route = "share-card"
+        visual_route_label = "转发卡片型"
+        visual_route_reason = "正文更依赖结构、对比和信息压缩，视觉应做成可收藏、可转发的公众号卡片。"
     elif count_keyword_hits(lowered, ("风险", "代价", "警报", "踩空", "边界", "失控", "误判", "冲突")) >= 3:
         visual_route = "conflict-alert"
         visual_route_label = "冲突警报型"
@@ -4565,6 +4576,19 @@ def cmd_plan_images(args: argparse.Namespace) -> int:
     provider = image_provider_from_env(args.provider)
     controls["image_provider"] = provider
     strategy_text_policy = dict((account_strategy.get("image_text_policy") or {})) if isinstance(account_strategy, dict) else {}
+    if provider == "codex":
+        strategy_text_policy.update(
+            {
+                "default": "short-zh",
+                "封面图": "short-zh",
+                "正文插图": "short-zh",
+                "分隔图": "short-zh",
+                "流程图": "short-zh-numeric",
+                "信息图": "short-zh-numeric",
+                "对比图": "short-zh",
+                "label_language": strategy_text_policy.get("label_language") or "zh-CN",
+            }
+        )
     controls["text_policy_overrides"] = strategy_text_policy
     controls["label_language"] = str(controls.get("label_language") or strategy_text_policy.get("label_language") or "zh-CN")
     if infer_visual_preset and not _has_explicit_image_controls(args):
@@ -5870,7 +5894,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate_images.add_argument("--provider", choices=IMAGE_PROVIDER_CHOICES)
     generate_images.add_argument("--dry-run", action="store_true")
     generate_images.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
-    generate_images.add_argument("--openai-model", default="gpt-image-1")
+    generate_images.add_argument("--openai-model", default="gpt-image-2")
     generate_images.set_defaults(func=cmd_generate_images)
 
     assemble = subparsers.add_parser("assemble", help="把图片插回 Markdown")
@@ -5921,7 +5945,7 @@ def build_parser() -> argparse.ArgumentParser:
     all_cmd.add_argument("--dry-run-publish", action="store_true")
     all_cmd.add_argument("--confirmed-publish", action="store_true")
     all_cmd.add_argument("--gemini-model", default="gemini-2.0-flash-preview-image-generation")
-    all_cmd.add_argument("--openai-model", default="gpt-image-1")
+    all_cmd.add_argument("--openai-model", default="gpt-image-2")
     all_cmd.add_argument("--accent-color", default="#0F766E")
     all_cmd.set_defaults(func=cmd_all)
 

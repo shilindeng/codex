@@ -190,12 +190,15 @@ class ImageControlTests(unittest.TestCase):
                 )
             self.assertTrue((workspace / "codex-image-requests.md").exists())
             request_payload = json.loads((workspace / "codex-image-requests.json").read_text(encoding="utf-8"))
+            self.assertEqual(request_payload["target_model"], "gpt-image-2")
             self.assertEqual(request_payload["items"][0]["target_path"], "assets/images/inline-01.png")
-            self.assertEqual(request_payload["items"][0]["required_text"], [])
+            self.assertEqual(request_payload["items"][0]["required_text"], ["责任边界"])
             self.assertEqual(request_payload["items"][0]["suggested_text"], ["责任边界"])
             request_md = (workspace / "codex-image-requests.md").read_text(encoding="utf-8")
-            self.assertIn("required_text: 无", request_md)
+            self.assertIn("gpt-image-2", request_md)
+            self.assertIn("required_text: 责任边界", request_md)
             self.assertIn("suggested_text: 责任边界", request_md)
+            self.assertIn("不能变成架构图", request_md)
 
     def test_generate_images_codex_registers_existing_workspace_image(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -239,7 +242,7 @@ class ImageControlTests(unittest.TestCase):
             self.assertEqual(generated["asset_path"], "assets/images/inline-01.png")
             self.assertTrue(generated["source_meta"].get("codex_app_image"))
 
-    def test_codex_provider_uses_sparse_text_by_image_type(self):
+    def test_codex_provider_requires_readable_short_text_by_image_type(self):
         for image_type in ["封面图", "正文插图", "流程图", "信息图", "对比图", "分隔图"]:
             item = {
                 "id": "cover-01" if image_type == "封面图" else "inline-01",
@@ -251,13 +254,11 @@ class ImageControlTests(unittest.TestCase):
             }
             policy = legacy.resolve_image_text_policy({"image_provider": "codex", "label_language": "zh-CN"}, item)
             self.assertIn(policy["mode"], {"short-zh", "short-zh-numeric"})
-            if image_type == "封面图":
-                self.assertTrue(policy["required_text"], image_type)
-            elif image_type in {"流程图", "信息图", "对比图"}:
+            self.assertTrue(policy["required_text"], image_type)
+            if image_type in {"流程图", "信息图", "对比图"}:
                 self.assertLessEqual(len(policy["required_text"]), 2)
             else:
-                self.assertFalse(policy["required_text"], image_type)
-                self.assertLessEqual(len(policy["suggested_text"]), 1)
+                self.assertLessEqual(len(policy["required_text"]), 1 if image_type != "封面图" else 2)
 
     def test_codex_prompt_has_required_text_without_no_text_ban(self):
         item = {
@@ -276,6 +277,8 @@ class ImageControlTests(unittest.TestCase):
         }
         prompt = legacy.compose_prompt("OpenAI 把 Agent 放进团队工作流", "摘要", {"image_provider": "codex", "preset": "bold", "preset_label": "高对比海报"}, item, "公众号读者")
         self.assertIn("Required exact text:", prompt)
+        self.assertIn("gpt-image-2", prompt)
+        self.assertIn("WeChat cover poster", prompt)
         self.assertIn("clearly and legibly", prompt)
         self.assertNotIn("Do not include any readable Chinese or English text", prompt)
         self.assertNotIn("Allowed labels: none", prompt)
