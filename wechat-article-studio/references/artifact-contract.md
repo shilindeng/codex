@@ -37,6 +37,11 @@
 - `final_gate.json`：最终质量门禁，汇总评分、读者门、视觉门和验收结果
 - `final-delivery-report.json`：最终交付报告，分开记录质量、发布和回读状态
 - `final-delivery-report.md`：面向人读的最终交付报告
+- `factory-acceptance-report.json` / `.md`：爆款工厂验收结果，明确区分“真合格成品”“已发布但不合格”“待返工”
+- `topic-package.json`：选题包，记录热点理由、争议点、受众身份、素材潜力和重复风险
+- `material-pack.json`：素材包，记录来源、引用、案例、对比、类比、反方边界和判断表格
+- `viral-moment-map.json`：传播点地图，记录首屏钩子、分享句、评论引子、收藏模块和结尾带走内容
+- `layout-render-audit.json`：排版与渲染观感检查，记录首图、标题层级、图片密度、表格和来源区块
 - `factory-board.json`：可选的工厂看板快照，汇总多个工作目录的状态与批次指标
 - `references.json`：标准化引用清单与文末引用卡片数据
 - `image-plan.json`：配图规划
@@ -60,6 +65,7 @@
 - `final_gate.json.passed = true`
 - `final-delivery-report.json.quality_chain.status = passed`
 - `final-delivery-report.json.batch_chain.status = passed`
+- `factory-acceptance-report.json.status = passed`
 - `layout-plan.json` 与 `layout-plan.md` 都存在
 - `image-plan.json` 存在，且计划中的图片资产已落盘
 - `publication.md` 与 `article.wechat.html` 都存在

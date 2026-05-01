@@ -71,6 +71,7 @@ from core.viral_pipeline import (
     write_source_corpus_artifacts,
 )
 from core.editorial_anchor import build_editorial_anchor_plan, write_editorial_anchor_artifacts
+from core.factory_acceptance import build_factory_audit, markdown_factory_acceptance_report
 from core.factory_board import build_factory_board
 from core.generation_strategy import build_generation_strategy, ensure_batch_guidance
 from core.images import cmd_assemble as legacy_assemble
@@ -902,8 +903,29 @@ def write_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     payload = build_delivery_report(workspace, manifest)
     write_json(workspace / "final-delivery-report.json", payload)
     write_text(workspace / "final-delivery-report.md", markdown_delivery_report(payload))
+    factory_acceptance = payload.get("factory_acceptance") or {}
+    if factory_acceptance:
+        write_json(workspace / "factory-acceptance-report.json", factory_acceptance)
+        write_text(workspace / "factory-acceptance-report.md", markdown_factory_acceptance_report(factory_acceptance))
+        for key, filename in (
+            ("topic_package", "topic-package.json"),
+            ("material_pack", "material-pack.json"),
+            ("viral_moment_map", "viral-moment-map.json"),
+            ("layout_render_audit", "layout-render-audit.json"),
+        ):
+            if factory_acceptance.get(key):
+                write_json(workspace / filename, factory_acceptance[key])
     manifest["delivery_report_path"] = "final-delivery-report.json"
     manifest["delivery_report_markdown_path"] = "final-delivery-report.md"
+    manifest["factory_acceptance_report_path"] = "factory-acceptance-report.json"
+    manifest["factory_acceptance_report_markdown_path"] = "factory-acceptance-report.md"
+    manifest["topic_package_path"] = "topic-package.json"
+    manifest["material_pack_path"] = "material-pack.json"
+    manifest["viral_moment_map_path"] = "viral-moment-map.json"
+    manifest["layout_render_audit_path"] = "layout-render-audit.json"
+    manifest["factory_acceptance_status"] = str(factory_acceptance.get("status") or "unknown")
+    manifest["factory_grade_label"] = str(factory_acceptance.get("grade_label") or "")
+    manifest["factory_ready"] = bool(factory_acceptance.get("status") == "passed")
     manifest["delivery_report_status"] = "passed" if payload.get("overall_status") == "passed" else "failed"
     manifest["publish_chain_status"] = str((payload.get("publish_chain") or {}).get("status") or "unknown")
     manifest["quality_chain_status"] = str((payload.get("quality_chain") or {}).get("status") or "unknown")
@@ -3170,6 +3192,19 @@ def cmd_factory_board(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_factory_audit(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    payload = build_factory_audit(root)
+    output = getattr(args, "output", None)
+    if output:
+        output_path = Path(output)
+        if not output_path.is_absolute():
+            output_path = root / output_path
+        write_json(output_path, payload)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_consent(args: argparse.Namespace) -> int:
     return legacy.cmd_consent(args)
 
@@ -5241,6 +5276,11 @@ def build_parser() -> argparse.ArgumentParser:
     factory_board.add_argument("--root", required=True, help="包含多个 .wechat-jobs 子目录的根目录")
     factory_board.add_argument("--output", help="可选：把看板 JSON 写入指定路径")
     factory_board.set_defaults(func=cmd_factory_board)
+
+    factory_audit = subparsers.add_parser("factory-audit", help="只读诊断公众号内容工厂的质量短板与返工优先级")
+    factory_audit.add_argument("--root", required=True, help="包含多个 .wechat-jobs 子目录的根目录")
+    factory_audit.add_argument("--output", help="可选：把诊断 JSON 写入指定路径")
+    factory_audit.set_defaults(func=cmd_factory_audit)
 
     consent = subparsers.add_parser("consent", help="管理 gemini-web 的显式同意状态")
     consent.add_argument("--accept", action="store_true")

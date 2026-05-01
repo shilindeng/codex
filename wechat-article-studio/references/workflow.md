@@ -16,7 +16,8 @@
 9. `plan-images` / `generate-images`
 10. `assemble` / `render`
 11. `publish` / `verify-draft`
-12. `factory-board`：在 `.wechat-jobs` 根目录聚合多个工作目录，输出“选题池 / 生产中 / 待清理 / 已交付”与批次指标
+12. `factory-board`：在 `.wechat-jobs` 根目录聚合多个工作目录，输出“选题池 / 生产中 / 待返工 / 已发布但不合格 / 真合格成品”等批次指标
+13. `factory-audit`：只读扫描本地历史产物，输出强制发布率、已发布但不合格、缺失产物和失败原因排行
 
 ## 可移植性约定
 
@@ -37,6 +38,7 @@
 - `score` 未达阈值时，不进入正式发布；最多只允许 `--dry-run-publish` 做链路检查
 - `final-delivery-report.json.quality_chain.status != passed` 时，不进入正式发布
 - `final-delivery-report.json.batch_chain.status != passed` 时，不进入正式发布
+- `factory-acceptance-report.json.status != passed` 时，不计入真合格成品；除非用户明确要求草稿箱优先，否则不进入正式发布
 - 评论/案例类稿件未满足最小证据要求时，不进入正式 `render` 或正式发布
 - 标题在 `manifest.json`、`ideation.json`、标题报告和成稿之间不一致时，不进入正式发布
 - 未通过 `quality_gates`（含“情绪价值/刺痛/金句/去 AI 味/可信度”等硬门槛）时，不进入正式发布
@@ -91,4 +93,10 @@ python {SKILL_DIR}/scripts/studio.py hosted-run \
 python {SKILL_DIR}/scripts/studio.py factory-board \
   --root <jobs-root> \
   --output factory-board.json
+```
+
+```bash
+python {SKILL_DIR}/scripts/studio.py factory-audit \
+  --root <jobs-root> \
+  --output factory-audit.json
 ```

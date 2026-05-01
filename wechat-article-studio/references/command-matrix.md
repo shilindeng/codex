@@ -215,6 +215,20 @@
 - `all`：兼容别名，行为等价于 `run`
 - `publish` / `verify-draft`：兼容旧版微信发布链路
 
+## `factory-board`
+
+- 输入：`--root <jobs-root> [--output factory-board.json]`
+- 依赖：多个工作目录中的 `manifest.json`
+- 输出：工厂看板 JSON，区分“选题池 / 生产中 / 待返工 / 已发布但不合格 / 真合格成品”
+- 说明：用于批量查看哪些内容只是发出去了，哪些真正过了工厂验收。
+
+## `factory-audit`
+
+- 输入：`--root <jobs-root> [--output factory-audit.json]`
+- 依赖：多个工作目录中的 `manifest.json`，会只读读取评分、读者门、视觉门、交付报告和工厂验收报告
+- 输出：本地历史产物诊断 JSON，包括强制发布率、已发布但不合格、缺失产物、失败原因排行和返工优先级
+- 说明：用于复盘 `.wechat-jobs`，不要把它当成会修改产物的修复命令。
+
 ## `prepare-publication`
 
 - 输入：`--workspace [--input]`

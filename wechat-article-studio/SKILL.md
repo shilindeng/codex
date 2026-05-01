@@ -97,6 +97,8 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - `review-report.json`、`score-report.json`、`quality_gates` 全部过线。
 - `reader_gate.json`、`visual_gate.json`、`final_gate.json` 全部过线。
 - `final-delivery-report.md` 必须清楚分开说明质量、发布和回读状态。
+- `factory-acceptance-report.json` 必须把文章标成“真合格成品”后，才算爆款工厂模式完成；已发布但未合格只能算待返工。
+- `topic-package.json`、`material-pack.json`、`viral-moment-map.json`、`layout-render-audit.json` 是工厂模式的关键产物，用来证明选题、素材、传播点和排版观感都达标。
 - 发布前要实际跑通渲染、配图和验收链路。
 
 ## 硬约束

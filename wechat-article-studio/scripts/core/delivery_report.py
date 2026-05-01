@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from core.artifacts import extract_summary, now_iso, read_json, read_text, split_frontmatter
+from core.factory_acceptance import build_factory_acceptance_report
 
 
 DELIVERY_SCHEMA_VERSION = "2026-04-v1"
@@ -328,7 +329,7 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         publish_blockers.extend(f"batch_chain：{item}" for item in batch_chain.get("failed_checks") or [])
 
     overall_passed = quality_chain["passed"] and publish_chain["passed"] and batch_chain["passed"]
-    return {
+    payload = {
         "schema_version": DELIVERY_SCHEMA_VERSION,
         "title": title,
         "summary": summary,
@@ -345,6 +346,17 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         "sections": sections,
         "generated_at": now_iso(),
     }
+    factory_acceptance = build_factory_acceptance_report(workspace, manifest, payload)
+    payload["factory_acceptance"] = factory_acceptance
+    payload["factory_status"] = factory_acceptance.get("status")
+    payload["factory_grade_label"] = factory_acceptance.get("grade_label")
+    payload["factory_ready"] = factory_acceptance.get("status") == "passed"
+    if not payload["factory_ready"]:
+        payload["overall_status"] = "failed"
+        for action in factory_acceptance.get("top_rework_actions") or []:
+            if action not in payload["publish_blockers"]:
+                payload["publish_blockers"].append(action)
+    return payload
 
 
 def markdown_delivery_report(payload: dict[str, Any]) -> str:
@@ -378,6 +390,10 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
         lines.append("- 成品状态：已发布，但质量未过，不能按合格成品计")
     if payload.get("force_publish"):
         lines.append("- 强制发布：是")
+    factory_acceptance = payload.get("factory_acceptance") or {}
+    if factory_acceptance:
+        lines.append(f"- 工厂验收：{factory_acceptance.get('grade_label') or '未知'}")
+        lines.append(f"- 真合格成品：{'是' if payload.get('factory_ready') else '否'}")
     warnings = [str(item) for item in payload.get("warnings") or [] if str(item).strip()]
     if warnings:
         lines.extend(["", "## 风险提醒", ""])
@@ -386,6 +402,9 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
     if publish_blockers:
         lines.extend(["", "## 未发布原因 / 需要修复", ""])
         lines.extend(f"- {item}" for item in publish_blockers[:12])
+    if factory_acceptance.get("top_rework_actions"):
+        lines.extend(["", "## 工厂优先返工", ""])
+        lines.extend(f"- {item}" for item in (factory_acceptance.get("top_rework_actions") or [])[:5])
     for label, chain in (("发布链", publish_chain), ("质量链", quality_chain), ("批次链", batch_chain)):
         failed = [str(item) for item in chain.get("failed_checks") or [] if str(item).strip()]
         missing = [str(item) for item in chain.get("missing_artifacts") or chain.get("missing_fields") or [] if str(item).strip()]

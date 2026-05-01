@@ -47,6 +47,7 @@ class FactoryBoardTests(unittest.TestCase):
                         "publish_chain": {"status": "passed", "published": True},
                         "quality_chain": {"status": "passed", "passed": True},
                         "batch_chain": {"status": "passed", "passed": True},
+                        "factory_acceptance": {"status": "passed", "grade_label": "真合格成品", "blocking_reasons": [], "top_rework_actions": []},
                     },
                     ensure_ascii=False,
                 ),
@@ -77,6 +78,12 @@ class FactoryBoardTests(unittest.TestCase):
                         "quality_chain": {"status": "failed", "passed": False, "missing_artifacts": ["title-decision-report.json/title-report.json"]},
                         "batch_chain": {"status": "passed", "passed": True},
                         "sections": {"title": {"status": "missing"}},
+                        "factory_acceptance": {
+                            "status": "force_publish_only",
+                            "grade_label": "已发布但不合格",
+                            "blocking_reasons": ["title_report_missing", "quality_chain_failed"],
+                            "top_rework_actions": ["补齐标题决策报告，保留候选、评分、重写理由和最终选择证据。"],
+                        },
                     },
                     ensure_ascii=False,
                 ),
@@ -89,18 +96,22 @@ class FactoryBoardTests(unittest.TestCase):
 
             board = build_factory_board(root)
             self.assertEqual(board["metrics"]["total"], 4)
-            self.assertEqual(board["metrics"]["status_counts"]["已交付"], 1)
-            self.assertEqual(board["metrics"]["status_counts"]["生产中"], 2)
+            self.assertEqual(board["metrics"]["status_counts"]["真合格成品"], 1)
+            self.assertEqual(board["metrics"]["status_counts"]["待返工"], 1)
             self.assertEqual(board["metrics"]["status_counts"]["待清理"], 1)
+            self.assertEqual(board["metrics"]["status_counts"]["已发布但不合格"], 1)
             self.assertAlmostEqual(board["metrics"]["full_chain_pass_rate"], 1 / 4, places=4)
             self.assertEqual(board["metrics"]["title_report_missing_count"], 1)
-            self.assertEqual(board["metrics"]["needs_rework_count"], 1)
+            self.assertEqual(board["metrics"]["needs_rework_count"], 2)
+            self.assertEqual(board["metrics"]["true_qualified_count"], 1)
+            self.assertEqual(board["metrics"]["published_unqualified_count"], 1)
             delivered_item = next(item for item in board["items"] if item["workspace"] == "20260423-google-ai-code")
-            self.assertEqual(delivered_item["status"], "已交付")
+            self.assertEqual(delivered_item["status"], "真合格成品")
             rework_item = next(item for item in board["items"] if item["workspace"] == "20260423-openai-workspace")
             self.assertTrue(rework_item["published_but_unqualified"])
             self.assertTrue(rework_item["title_report_missing"])
-            self.assertEqual(rework_item["completion_status"], "已发布待返工")
+            self.assertEqual(rework_item["completion_status"], "已发布但不合格")
+            self.assertIn("title_report_missing", rework_item["blocking_reasons"])
 
 
 if __name__ == "__main__":
