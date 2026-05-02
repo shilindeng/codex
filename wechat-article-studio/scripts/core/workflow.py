@@ -52,6 +52,12 @@ from core.content_enhancement import (
     load_content_enhancement,
     write_content_enhancement_artifacts,
 )
+from core.content_factory_quality import (
+    build_draft_readability_audit,
+    build_title_performance_report,
+    build_topic_heat_pack,
+    build_topic_viral_bridge,
+)
 from core.delivery_report import build_delivery_report, markdown_delivery_report
 from core.viral_pipeline import (
     PLATFORM_CHOICES as VIRAL_PLATFORM_CHOICES,
@@ -182,6 +188,14 @@ VIRAL_QUERY_RESET_PATHS = [
     "acceptance-report.md",
     "similarity-report.json",
     "similarity-report.md",
+    "topic-heat-pack.json",
+    "topic-viral-bridge.json",
+    "fact-source-map.json",
+    "section-quality-map.json",
+    "draft-readability-audit.json",
+    "image-asset-audit.json",
+    "content-version-audit.json",
+    "title-performance-report.json",
     "image-plan.json",
     "image-outline.json",
     "image-outline.md",
@@ -884,6 +898,15 @@ def write_acceptance_artifacts(workspace: Path, manifest: dict[str, Any]) -> dic
     write_json(workspace / "reader_gate.json", reader_gate)
     write_json(workspace / "visual_gate.json", visual_gate)
     write_json(workspace / "final_gate.json", final_gate)
+    if reader_gate.get("fact_source_map"):
+        write_json(workspace / "fact-source-map.json", reader_gate["fact_source_map"])
+        manifest["fact_source_map_path"] = "fact-source-map.json"
+    if reader_gate.get("section_quality_map"):
+        write_json(workspace / "section-quality-map.json", reader_gate["section_quality_map"])
+        manifest["section_quality_map_path"] = "section-quality-map.json"
+    if visual_gate.get("image_asset_audit"):
+        write_json(workspace / "image-asset-audit.json", visual_gate["image_asset_audit"])
+        manifest["image_asset_audit_path"] = "image-asset-audit.json"
     write_json(workspace / "acceptance-report.json", payload)
     write_text(workspace / "acceptance-report.md", markdown_acceptance_report(payload))
     manifest["acceptance_report_path"] = "acceptance-report.json"
@@ -908,10 +931,17 @@ def write_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         write_json(workspace / "factory-acceptance-report.json", factory_acceptance)
         write_text(workspace / "factory-acceptance-report.md", markdown_factory_acceptance_report(factory_acceptance))
         for key, filename in (
+            ("topic_heat_pack", "topic-heat-pack.json"),
             ("topic_package", "topic-package.json"),
             ("material_pack", "material-pack.json"),
+            ("fact_source_map", "fact-source-map.json"),
+            ("section_quality_map", "section-quality-map.json"),
             ("viral_moment_map", "viral-moment-map.json"),
             ("layout_render_audit", "layout-render-audit.json"),
+            ("draft_readability_audit", "draft-readability-audit.json"),
+            ("image_asset_audit", "image-asset-audit.json"),
+            ("content_version_audit", "content-version-audit.json"),
+            ("title_performance_report", "title-performance-report.json"),
         ):
             if factory_acceptance.get(key):
                 write_json(workspace / filename, factory_acceptance[key])
@@ -920,9 +950,15 @@ def write_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     manifest["factory_acceptance_report_path"] = "factory-acceptance-report.json"
     manifest["factory_acceptance_report_markdown_path"] = "factory-acceptance-report.md"
     manifest["topic_package_path"] = "topic-package.json"
+    manifest["topic_heat_pack_path"] = "topic-heat-pack.json"
     manifest["material_pack_path"] = "material-pack.json"
+    manifest["fact_source_map_path"] = "fact-source-map.json"
+    manifest["section_quality_map_path"] = "section-quality-map.json"
     manifest["viral_moment_map_path"] = "viral-moment-map.json"
     manifest["layout_render_audit_path"] = "layout-render-audit.json"
+    manifest["draft_readability_audit_path"] = "draft-readability-audit.json"
+    manifest["image_asset_audit_path"] = "image-asset-audit.json"
+    manifest["title_performance_report_path"] = "title-performance-report.json"
     manifest["factory_acceptance_status"] = str(factory_acceptance.get("status") or "unknown")
     manifest["factory_grade_label"] = str(factory_acceptance.get("grade_label") or "")
     manifest["factory_ready"] = bool(factory_acceptance.get("status") == "passed")
@@ -960,6 +996,12 @@ def cmd_reader_gate(args: argparse.Namespace) -> int:
         review_report=review_report,
     )
     write_json(workspace / "reader_gate.json", payload)
+    if payload.get("fact_source_map"):
+        write_json(workspace / "fact-source-map.json", payload["fact_source_map"])
+        manifest["fact_source_map_path"] = "fact-source-map.json"
+    if payload.get("section_quality_map"):
+        write_json(workspace / "section-quality-map.json", payload["section_quality_map"])
+        manifest["section_quality_map_path"] = "section-quality-map.json"
     manifest["reader_gate_path"] = "reader_gate.json"
     manifest["reader_gate_status"] = "passed" if payload.get("passed") else "failed"
     save_manifest(workspace, manifest)
@@ -973,6 +1015,9 @@ def cmd_visual_gate(args: argparse.Namespace) -> int:
     image_plan = read_json(workspace / str(manifest.get("image_plan_path") or "image-plan.json"), default={}) or {}
     payload = build_visual_gate(workspace, manifest, image_plan=image_plan)
     write_json(workspace / "visual_gate.json", payload)
+    if payload.get("image_asset_audit"):
+        write_json(workspace / "image-asset-audit.json", payload["image_asset_audit"])
+        manifest["image_asset_audit_path"] = "image-asset-audit.json"
     manifest["visual_gate_path"] = "visual_gate.json"
     manifest["visual_gate_status"] = "passed" if payload.get("passed") else "failed"
     save_manifest(workspace, manifest)
@@ -1092,6 +1137,9 @@ def cmd_learn_performance(args: argparse.Namespace) -> int:
     payload["updated_at"] = now_iso()
     write_json(feedback_path, payload)
     manifest["performance_feedback_path"] = "performance-feedback.json"
+    report = build_title_performance_report(workspace, manifest | {"performance_feedback_path": "performance-feedback.json"})
+    write_json(workspace / "title-performance-report.json", report)
+    manifest["title_performance_report_path"] = "title-performance-report.json"
     save_manifest(workspace, manifest)
     notes = entry["notes"]
     if notes:
@@ -1102,7 +1150,7 @@ def cmd_learn_performance(args: argparse.Namespace) -> int:
         playbook["recent_learnings"] = learnings[-50:]
         playbook["updated_at"] = now_iso()
         write_json(playbook_path, playbook)
-    print(json.dumps(entry, ensure_ascii=False, indent=2))
+    print(json.dumps({"entry": entry, "title_performance_report": report}, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -3243,6 +3291,9 @@ def cmd_discover_topics(args: argparse.Namespace) -> int:
     controls.setdefault("density", str(strategy.get("image_density") or "balanced"))
     controls.setdefault("layout_family", str(strategy.get("image_layout_family") or "editorial"))
     manifest["image_controls"] = controls
+    heat_pack = build_topic_heat_pack(workspace, manifest, discovery=payload)
+    write_json(workspace / "topic-heat-pack.json", heat_pack)
+    manifest["topic_heat_pack_path"] = "topic-heat-pack.json"
     save_manifest(workspace, manifest)
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
@@ -3442,8 +3493,12 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
 
     audience = str(getattr(args, "audience", "") or "").strip() or str(manifest.get("audience") or "大众读者")
     selected_title = str(candidate.get("recommended_title") or candidate.get("hot_title") or new_topic).strip()
-    source_url = str(candidate.get("source_url") or "").strip()
-    source_urls = [source_url] if source_url else []
+    candidate_urls = candidate.get("source_urls") or candidate.get("urls") or []
+    if isinstance(candidate_urls, str):
+        candidate_urls = [candidate_urls]
+    source_url = str(candidate.get("source_url") or candidate.get("url") or "").strip()
+    source_urls = [str(item or "").strip() for item in [source_url, *list(candidate_urls)] if str(item or "").strip()]
+    source_urls = list(dict.fromkeys(source_urls))
     recommended_archetype = str(candidate.get("recommended_archetype") or "").strip()
     recommended_enhancement_strategy = str(candidate.get("recommended_enhancement_strategy") or "").strip()
 
@@ -3477,6 +3532,17 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "selected_title_source": "discovery_direction_hint",
         }
     )
+    heat_pack = build_topic_heat_pack(workspace, manifest, discovery=discovery, selected_candidate=candidate)
+    viral_bridge = build_topic_viral_bridge(workspace, manifest, discovery=discovery, selected_candidate=candidate)
+    write_json(workspace / "topic-heat-pack.json", heat_pack)
+    write_json(workspace / "topic-viral-bridge.json", viral_bridge)
+    manifest["topic_heat_pack_path"] = "topic-heat-pack.json"
+    manifest["topic_viral_bridge_path"] = "topic-viral-bridge.json"
+    manifest["topic_viral_bridge"] = {
+        "passed": bool(viral_bridge.get("passed")),
+        "sample_count": len(viral_bridge.get("similar_viral_samples") or []),
+        "comment_emotion_hints": list(viral_bridge.get("comment_emotion_hints") or []),
+    }
 
     ideation = read_json(workspace / "ideation.json", default={}) or {}
     ideation.update(
@@ -3492,6 +3558,8 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
             "topic_gate_passed": candidate.get("topic_gate_passed"),
             "topic_package_type": candidate.get("topic_package_type") or "",
             "title_direction_candidates": candidate.get("title_direction_candidates") or [],
+            "topic_heat_pack": heat_pack,
+            "topic_viral_bridge": viral_bridge,
         }
     )
     write_json(workspace / "ideation.json", ideation)
@@ -3506,6 +3574,8 @@ def cmd_select_topic(args: argparse.Namespace) -> int:
                 "direction": angle,
                 "selected_title": selected_title,
                 "source_urls": source_urls,
+                "topic_heat_pack_path": "topic-heat-pack.json",
+                "topic_viral_bridge_path": "topic-viral-bridge.json",
             },
             ensure_ascii=False,
             indent=2,

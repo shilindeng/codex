@@ -72,7 +72,7 @@ SCORE_DIMENSIONS: list[tuple[str, int, str]] = [
     ("具体处境/边界/反方", 6, "naturalness"),
 ]
 
-DEFAULT_THRESHOLD = 86
+DEFAULT_THRESHOLD = 88
 SCORE_SCHEMA_VERSION = "2026-04-v3"
 
 EMOTION_VALUE_THRESHOLD = 6

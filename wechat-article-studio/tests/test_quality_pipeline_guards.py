@@ -1,4 +1,5 @@
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,11 @@ from core.quality_gates import _comment_seed, build_reader_gate, build_visual_ga
 from core.reader_gates import abnormal_text_report, first_screen_signal_report, image_plan_gate_report, template_frequency_report  # noqa: E402
 from core.workflow import assert_publish_request_ready, build_pipeline_readiness  # noqa: E402
 import argparse  # noqa: E402
+
+
+def write_fake_png(path: Path, width: int = 800, height: int = 450) -> None:
+    header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00"
+    path.write_bytes(header + (b"0" * 5000))
 
 
 class QualityPipelineGuardTests(unittest.TestCase):
@@ -194,7 +200,7 @@ class QualityPipelineGuardTests(unittest.TestCase):
             (workspace / "article.wechat.html").write_text('<p>引入图</p><img src="assets/images/inline-01.png"/><h2>正文</h2>', encoding="utf-8")
             image_path = workspace / "assets" / "images" / "inline-01.png"
             image_path.parent.mkdir(parents=True, exist_ok=True)
-            image_path.write_bytes(b"fake")
+            write_fake_png(image_path)
             plan = {
                 "provider": "codex",
                 "density_mode": "balanced",

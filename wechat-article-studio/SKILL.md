@@ -151,3 +151,11 @@ python {SKILL_DIR}/scripts/studio.py hosted-run --workspace <job-dir> --topic "<
 - ClaudeCode：读 `scripts/adapters/claudecode.md`
 - OpenClaw：读 `scripts/adapters/openclaw.md`
 - 只要宿主平台能运行 Python CLI，并消费标准工作目录产物，就能接入
+
+## 2026-05 爆款工厂验收补充
+
+- 真合格成品必须同时满足：总分至少 88、标题验收通过、首屏通过、证据与来源可对应、核心章节有观点/事实/分析推进、分享场景明确、排版观感通过、图片实物可用、草稿回读通过。
+- `discover-topics` 会补 `topic-heat-pack.json`，`select-topic` 会补 `topic-viral-bridge.json`，先判断热点是否真的有上升热度、多来源、争议/读者相关性和重复风险。
+- `reader-gate` 会补 `fact-source-map.json`、`section-quality-map.json` 和分享场景；正文不能只靠空话、表格或漂亮标题撑版面。
+- `visual-gate` 会补 `image-asset-audit.json`，图片必须存在、尺寸正常、不是 1x1 占位图，同篇不能重复用同一张图。
+- `verify-draft` / `delivery-report` / `factory-audit` 会按新口径区分“已发布但不合格”和“真合格成品”；强制发布永远不算真合格。

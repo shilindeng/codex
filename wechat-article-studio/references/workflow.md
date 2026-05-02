@@ -100,3 +100,11 @@ python {SKILL_DIR}/scripts/studio.py factory-audit \
   --root <jobs-root> \
   --output factory-audit.json
 ```
+
+## 2026-05 爆款工厂链路补充
+
+- `discover-topics` 之后自动写入 `topic-heat-pack.json`，不要把普通资讯误判成热点。
+- `select-topic` 之后自动写入 `topic-viral-bridge.json`，先看相近爆款样本、评论情绪和标题骨架，再进入写作。
+- `reader-gate` 同步写 `fact-source-map.json`、`section-quality-map.json`，正文必须有事实来源和章节推进。
+- `visual-gate` 同步写 `image-asset-audit.json`，图片必须是真文件、正常尺寸、非重复图。
+- `verify-draft` / `delivery-report` / `factory-audit` 会把草稿观感、图片实物、内容版本一致性纳入最终判断。

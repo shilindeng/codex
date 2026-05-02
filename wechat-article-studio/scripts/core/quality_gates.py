@@ -6,6 +6,7 @@ from typing import Any
 
 from core.analysis_11d import build_analysis_11d, score_analysis_11d, summarize_analysis_11d
 from core.artifacts import extract_summary, now_iso, read_json, read_text, split_frontmatter
+from core.content_factory_quality import build_fact_source_map, build_image_asset_audit, build_section_quality_map, build_share_scene_map
 from core.quality_checks import cost_signal_present, discussion_trigger_present, scene_signal_present, split_markdown_paragraphs, visible_length
 from core.reader_gates import (
     _share_lines,
@@ -366,6 +367,9 @@ def build_reader_gate(
         _clean(((hooks.get("comment_triggers") or hooks.get("poll_prompts") or hooks.get("fill_blank_prompts") or [""])[0]))
         or _comment_seed(title, body, analysis)
     )
+    fact_source_map = build_fact_source_map(workspace, manifest)
+    section_quality_map = build_section_quality_map(workspace, manifest)
+    share_scene_map = build_share_scene_map(body, {"share_lines": share_lines, "comment_seed": comment_seed, "takeaway_module_type": takeaway_module_type})
     fields = {
         "click_reason": click_reason,
         "continue_reason": continue_reason,
@@ -394,6 +398,12 @@ def build_reader_gate(
         failed_checks.append("可截图传播句不足 3 条")
     if takeaway_module_type == "none":
         failed_checks.append("缺少可保存模块：三问卡/四步卡/对比表/判断卡/风险清单")
+    if not fact_source_map.get("passed"):
+        failed_checks.append("关键事实缺少来源对应")
+    if not section_quality_map.get("passed"):
+        failed_checks.append("核心章节缺少观点、证据或分析推进")
+    if not share_scene_map.get("passed"):
+        failed_checks.append("缺少明确分享场景")
     if not comment_seed:
         failed_checks.append("缺少自然评论触发点")
     if len(weak_fields) >= 2:
@@ -414,6 +424,9 @@ def build_reader_gate(
         "share_line_score": share_line_score,
         "comment_seed": comment_seed,
         "takeaway_module_type": takeaway_module_type,
+        "share_scene_map": share_scene_map,
+        "fact_source_map": fact_source_map,
+        "section_quality_map": section_quality_map,
         "summary_opening_duplicate": summary_opening_duplicate,
         "opening_four_factors_passed": opening_four_factors_passed,
         "weak_fields": weak_fields,
@@ -439,6 +452,7 @@ def build_visual_gate(
     payload = image_plan or {}
     items = [dict(item) for item in (payload.get("items") or [])]
     image_plan_report = image_plan_gate_report(payload, workspace=workspace)
+    image_asset_audit = build_image_asset_audit(workspace, manifest, payload)
     wechat_html_path = workspace / str(manifest.get("wechat_html_path") or "article.wechat.html")
     wechat_html = read_text(wechat_html_path) if wechat_html_path.exists() else ""
     density_mode = _normalize_density_mode(
@@ -553,6 +567,8 @@ def build_visual_gate(
         failed_checks.append("图片文字策略不符合当前规则")
     if asset_failures:
         failed_checks.append("图片计划中的生成文件不存在")
+    if not image_asset_audit.get("passed", True):
+        failed_checks.append("图片实物验收未通过")
     if not image_plan_report.get("passed", True):
         failed_checks.append("图片路线或视觉约束未通过")
     if not lead_visual_passed:
@@ -573,6 +589,7 @@ def build_visual_gate(
         "explain_role_present": explain_role_present,
         "text_policy_failures": text_policy_failures,
         "asset_failures": asset_failures,
+        "image_asset_audit": image_asset_audit,
         "lead_visual_passed": lead_visual_passed,
         "image_plan_report": image_plan_report,
         "failed_checks": failed_checks,

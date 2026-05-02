@@ -87,6 +87,8 @@ class SelectTopicTests(unittest.TestCase):
             self.assertEqual(manifest.get("article_archetype"), "comparison")
             self.assertEqual(manifest.get("recommended_enhancement_strategy"), "real-voice-comparison")
             self.assertEqual(manifest.get("writeability_score"), 8)
+            self.assertEqual(manifest.get("topic_heat_pack_path"), "topic-heat-pack.json")
+            self.assertEqual(manifest.get("topic_viral_bridge_path"), "topic-viral-bridge.json")
             self.assertEqual(manifest.get("stage"), "initialized")
             self.assertEqual(manifest.get("research_status"), "not_started")
             self.assertEqual(manifest.get("render_status"), "not_started")
@@ -95,6 +97,8 @@ class SelectTopicTests(unittest.TestCase):
             self.assertEqual(ideation.get("selected_title"), "推荐标题")
             self.assertEqual(ideation.get("topic"), "测试主题")
             self.assertEqual(ideation.get("recommended_archetype"), "comparison")
+            self.assertTrue((workspace / "topic-heat-pack.json").exists())
+            self.assertTrue((workspace / "topic-viral-bridge.json").exists())
 
 
 if __name__ == "__main__":

@@ -6,6 +6,15 @@ from pathlib import Path
 from typing import Any
 
 from core.artifacts import extract_summary, now_iso, read_json, read_text, split_frontmatter
+from core.content_factory_quality import (
+    build_content_version_audit,
+    build_draft_readability_audit,
+    build_fact_source_map,
+    build_image_asset_audit,
+    build_section_quality_map,
+    build_title_performance_report,
+    build_topic_heat_pack,
+)
 
 
 FACTORY_ACCEPTANCE_SCHEMA_VERSION = "2026-05-factory-acceptance-v1"
@@ -171,10 +180,12 @@ def build_viral_moment_map(workspace: Path, manifest: dict[str, Any]) -> dict[st
     final_gate = _load_json(workspace, manifest, "final_gate_path", "final_gate.json")
     score_report = _load_json(workspace, manifest, "score_report_path", "score-report.json")
     share_lines = [str(item).strip() for item in reader_gate.get("share_lines") or [] if str(item).strip()]
+    share_scene_map = reader_gate.get("share_scene_map") or {}
     takeaway_module = _clean(reader_gate.get("takeaway_module_type"))
     checks = {
         "opening_four_factors_passed": _bool(reader_gate.get("opening_four_factors_passed")) or _bool((final_gate.get("checks") or {}).get("opening_four_factors_passed")),
         "share_lines_passed": len(share_lines) >= 3 and int(reader_gate.get("share_line_score") or 0) >= 8,
+        "share_scene_passed": bool((share_scene_map or {}).get("passed", True)),
         "comment_seed_passed": bool(_clean(reader_gate.get("comment_seed"))),
         "takeaway_module_passed": bool(takeaway_module) and _bool((final_gate.get("checks") or {}).get("takeaway_module_passed") if final_gate else True),
         "template_control_passed": _bool((score_report.get("quality_gates") or {}).get("template_penalty_passed")) or not any("模板腔" in item for item in _failed_checks(reader_gate)),
@@ -188,6 +199,7 @@ def build_viral_moment_map(workspace: Path, manifest: dict[str, Any]) -> dict[st
         "share_line": _clean(reader_gate.get("share_line")),
         "share_lines": share_lines[:8],
         "share_line_score": int(reader_gate.get("share_line_score") or 0),
+        "share_scene_map": share_scene_map,
         "comment_seed": _clean(reader_gate.get("comment_seed")),
         "takeaway_module_type": takeaway_module,
         "checks": checks,
@@ -249,16 +261,30 @@ REWORK_ACTIONS = {
     "force_publish_used": "标记为强制发布，不得计入真合格成品。",
     "quality_chain_failed": "继续走针对性回炉，直到评分、读者门、视觉门和最终门同时通过。",
     "topic_package_failed": "补齐选题包：热点理由、争议点、受众身份、素材潜力和重复风险。",
+    "topic_heat_failed": "补齐热点热度包：升温理由、多来源覆盖、争议强度、受众相关性和重复风险。",
+    "fact_source_failed": "补齐事实来源对应表，让关键数字、时间、政策和产品能力都能对上来源。",
+    "section_quality_failed": "按章节返工，每个核心段落都要有观点、证据或例子、分析推进。",
+    "draft_readability_failed": "回读草稿箱真实内容，修复列表塌陷、长段压迫、首图位置、来源区和重复标签。",
+    "image_asset_failed": "重做图片实物验收，确保图片存在、尺寸正常、不是占位图或重复图。",
+    "content_version_failed": "重新生成过期产物，确保标题、正文、评分、验收、渲染和发布稿是同一版本。",
 }
 
 
 def build_factory_acceptance_report(workspace: Path, manifest: dict[str, Any], delivery_report: dict[str, Any] | None = None) -> dict[str, Any]:
     delivery_report = delivery_report or _load_json(workspace, manifest, "delivery_report_path", "final-delivery-report.json")
     has_content_artifacts = bool(delivery_report) or any((workspace / name).exists() for name in ("article.md", "score-report.json", "reader_gate.json", "visual_gate.json", "final_gate.json", "article.wechat.html"))
+    topic_heat_pack = build_topic_heat_pack(workspace, manifest)
     topic_package = build_topic_package(workspace, manifest, delivery_report=delivery_report)
     material_pack = build_material_pack(workspace, manifest)
+    fact_source_map = build_fact_source_map(workspace, manifest)
+    section_quality_map = build_section_quality_map(workspace, manifest)
     viral_moment_map = build_viral_moment_map(workspace, manifest)
     layout_render_audit = build_layout_render_audit(workspace, manifest)
+    draft_readability_audit = build_draft_readability_audit(workspace, manifest)
+    image_plan = _load_json(workspace, manifest, "image_plan_path", "image-plan.json")
+    image_asset_audit = build_image_asset_audit(workspace, manifest, image_plan)
+    content_version_audit = build_content_version_audit(workspace, manifest)
+    title_performance_report = build_title_performance_report(workspace, manifest)
     visual_gate = _load_json(workspace, manifest, "visual_gate_path", "visual_gate.json")
     final_gate = _load_json(workspace, manifest, "final_gate_path", "final_gate.json")
     title_report_present = (workspace / _clean(manifest.get("title_decision_report_path") or "title-decision-report.json")).exists() or (workspace / _clean(manifest.get("title_report_path") or "title-report.json")).exists()
@@ -266,13 +292,31 @@ def build_factory_acceptance_report(workspace: Path, manifest: dict[str, Any], d
     publish_chain = delivery_report.get("publish_chain") or {}
     batch_chain = delivery_report.get("batch_chain") or {}
     force_publish = bool(delivery_report.get("force_publish") or publish_chain.get("force_publish") or manifest.get("force_publish_reason"))
-    published = bool(delivery_report.get("published") or publish_chain.get("published"))
-    readback = bool(delivery_report.get("readback_passed") or publish_chain.get("readback_passed"))
+    publish_result = _load_json(workspace, manifest, "publish_result_path", "publish-result.json")
+    latest_draft = _load_json(workspace, manifest, "latest_draft_report_path", "latest-draft-report.json")
+    published = bool(
+        delivery_report.get("published")
+        or publish_chain.get("published")
+        or publish_result.get("draft_media_id")
+        or (publish_result.get("response") or {}).get("media_id")
+        or manifest.get("draft_media_id")
+    )
+    readback = bool(
+        delivery_report.get("readback_passed")
+        or publish_chain.get("readback_passed")
+        or _clean(latest_draft.get("verify_status") or publish_result.get("verify_status") or manifest.get("verify_status")) == "passed"
+    )
     blocking_reasons: list[str] = []
     if not title_report_present:
         blocking_reasons.append("title_report_missing")
+    if not topic_heat_pack.get("passed"):
+        blocking_reasons.append("topic_heat_failed")
     if not topic_package.get("passed"):
         blocking_reasons.append("topic_package_failed")
+    if not fact_source_map.get("passed"):
+        blocking_reasons.append("fact_source_failed")
+    if not section_quality_map.get("passed"):
+        blocking_reasons.append("section_quality_failed")
     if not viral_moment_map["checks"].get("opening_four_factors_passed"):
         blocking_reasons.append("first_screen_failed")
     if not material_pack.get("passed"):
@@ -281,13 +325,19 @@ def build_factory_acceptance_report(workspace: Path, manifest: dict[str, Any], d
         blocking_reasons.append("viral_moment_failed")
     if not layout_render_audit.get("passed"):
         blocking_reasons.append("layout_render_failed")
+    if readback and not draft_readability_audit.get("passed"):
+        blocking_reasons.append("draft_readability_failed")
+    if image_plan and not image_asset_audit.get("passed"):
+        blocking_reasons.append("image_asset_failed")
+    if not content_version_audit.get("passed"):
+        blocking_reasons.append("content_version_failed")
     if visual_gate and not visual_gate.get("passed"):
         blocking_reasons.append("image_policy_failed")
     if (final_gate.get("checks") or {}).get("batch_uniqueness_passed") is False or batch_chain.get("status") == "failed":
         blocking_reasons.append("batch_uniqueness_failed")
     if force_publish:
         blocking_reasons.append("force_publish_used")
-    if quality_chain and not quality_chain.get("passed"):
+    if quality_chain and quality_chain.get("status") == "failed":
         blocking_reasons.append("quality_chain_failed")
     if not has_content_artifacts:
         blocking_reasons = []
@@ -323,10 +373,17 @@ def build_factory_acceptance_report(workspace: Path, manifest: dict[str, Any], d
         "force_publish": force_publish,
         "blocking_reasons": blocking_reasons,
         "top_rework_actions": top_rework_actions,
+        "topic_heat_pack": topic_heat_pack,
         "topic_package": topic_package,
         "material_pack": material_pack,
+        "fact_source_map": fact_source_map,
+        "section_quality_map": section_quality_map,
         "viral_moment_map": viral_moment_map,
         "layout_render_audit": layout_render_audit,
+        "draft_readability_audit": draft_readability_audit,
+        "image_asset_audit": image_asset_audit,
+        "content_version_audit": content_version_audit,
+        "title_performance_report": title_performance_report,
     }
 
 

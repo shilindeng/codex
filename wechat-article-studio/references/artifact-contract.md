@@ -226,3 +226,16 @@
 - 所有 JSON 使用 UTF-8 和 `ensure_ascii=false`
 - 所有平台共享同一套工作目录产物
 - 发布器、provider、agent 适配器都不能改写产物契约
+
+## 2026-05 新增工厂验收产物
+
+- `topic-heat-pack.json`：热点热度包，记录上升热度、多来源覆盖、争议/读者相关性和重复风险。
+- `topic-viral-bridge.json`：选题到标题/开头的桥接包，保留相近爆款样本、标题表达骨架和评论情绪提示。
+- `fact-source-map.json`：事实和来源对应表，关键数字、时间、政策、产品能力、新闻事实必须能对上来源。
+- `section-quality-map.json`：章节质量表，核心章节必须有观点、事实或例子、分析推进。
+- `draft-readability-audit.json`：草稿真实观感检查，覆盖列表塌陷、长段压迫、首图位置、来源区可见、标签重复。
+- `image-asset-audit.json`：图片实物检查，覆盖文件存在、尺寸、占位图、同篇重复图。
+- `content-version-audit.json`：内容版本一致性检查，避免评分、验收、渲染、发布不是同一版正文。
+- `title-performance-report.json`：标题复盘报告，记录候选标题、最终标题、发布前评分和 24/72 小时表现。
+
+`factory-acceptance-report.json` 仍是最终口径。只要强制发布、仍有必须修改项、图片或草稿观感不过，就不能计为真合格成品。

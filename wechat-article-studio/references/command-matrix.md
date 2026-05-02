@@ -240,3 +240,13 @@
   - 在公众号渲染前整理成品 Markdown
   - 会统一处理轻引用、技术词、对比块、数据块和正文图片数量
   - `render / run / hosted-run / viral-run` 会自动调用，不需要手工额外执行
+
+## 2026-05 命令产物补充
+
+- `discover-topics`：额外输出 `topic-heat-pack.json`。
+- `select-topic`：额外输出 `topic-viral-bridge.json`，并把热度包和桥接包写入 `ideation.json`。
+- `reader-gate`：额外输出 `fact-source-map.json`、`section-quality-map.json`。
+- `visual-gate`：额外输出 `image-asset-audit.json`。
+- `delivery-report`：额外汇总事实来源、章节质量、草稿观感、图片实物、内容版本和标题复盘状态。
+- `learn-performance`：额外输出 `title-performance-report.json`。
+- `factory-audit`：兼容只有 `publish-result.json` / `latest-draft-report.json` 的老产物，但仍按新标准判断是否真合格。

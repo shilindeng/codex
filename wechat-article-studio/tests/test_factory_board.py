@@ -113,6 +113,22 @@ class FactoryBoardTests(unittest.TestCase):
             self.assertEqual(rework_item["completion_status"], "已发布但不合格")
             self.assertIn("title_report_missing", rework_item["blocking_reasons"])
 
+    def test_factory_board_recognizes_legacy_publish_result_without_delivery_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "legacy-published"
+            workspace.mkdir()
+            (workspace / "manifest.json").write_text(json.dumps({"selected_title": "旧产物", "article_path": "article.md"}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "article.md").write_text("---\ntitle: 旧产物\nsummary: 摘要\n---\n\n正文。", encoding="utf-8")
+            (workspace / "publish-result.json").write_text(json.dumps({"draft_media_id": "media-id", "verify_status": "passed"}, ensure_ascii=False), encoding="utf-8")
+            (workspace / "latest-draft-report.json").write_text(json.dumps({"verify_status": "passed"}, ensure_ascii=False), encoding="utf-8")
+
+            board = build_factory_board(root)
+            item = board["items"][0]
+            self.assertTrue(item["published"])
+            self.assertTrue(item["published_but_unqualified"])
+            self.assertEqual(board["metrics"]["published_unqualified_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

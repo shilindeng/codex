@@ -155,6 +155,10 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     latest_draft = read_json(workspace / _clean(manifest.get("latest_draft_report_path") or "latest-draft-report.json"), default={}) or {}
     publication_report = read_json(workspace / _clean(manifest.get("publication_report_path") or "publication-report.json"), default={}) or {}
     layout_plan = read_json(workspace / _clean(manifest.get("layout_plan_path") or "layout-plan.json"), default={}) or {}
+    fact_source_map = read_json(workspace / _clean(manifest.get("fact_source_map_path") or "fact-source-map.json"), default={}) or {}
+    section_quality_map = read_json(workspace / _clean(manifest.get("section_quality_map_path") or "section-quality-map.json"), default={}) or {}
+    draft_readability_audit = read_json(workspace / _clean(manifest.get("draft_readability_audit_path") or "draft-readability-audit.json"), default={}) or {}
+    image_asset_audit = read_json(workspace / _clean(manifest.get("image_asset_audit_path") or "image-asset-audit.json"), default={}) or {}
 
     layout_exists, layout_rel = _artifact_exists(workspace, manifest, "layout_plan_path", "layout-plan.json")
     layout_md_exists = (workspace / "layout-plan.md").exists()
@@ -164,12 +168,28 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
     title_section = _title_section(workspace, manifest, title)
     title_passed = title_section.get("status") == "passed"
 
-    score_passed = bool(score_report.get("passed")) if score_report else None
+    score_total = int(score_report.get("total_score") or 0) if score_report else 0
+    score_passed = bool(score_report.get("passed") and score_total >= 88) if score_report else None
     acceptance_passed = bool(acceptance_report.get("passed")) if acceptance_report else None
     reader_passed = bool(reader_gate.get("passed")) if reader_gate else None
     visual_passed = bool(visual_gate.get("passed")) if visual_gate else None
     final_passed = bool(final_gate.get("passed")) if final_gate else None
-    quality_passed = bool(title_passed and score_passed and acceptance_passed and reader_passed and visual_passed and final_passed)
+    fact_source_passed = bool(fact_source_map.get("passed")) if fact_source_map else None
+    section_quality_passed = bool(section_quality_map.get("passed")) if section_quality_map else None
+    draft_readability_passed = bool(draft_readability_audit.get("passed")) if draft_readability_audit else None
+    image_asset_passed = bool(image_asset_audit.get("passed")) if image_asset_audit else None
+    quality_passed = bool(
+        title_passed
+        and score_passed
+        and acceptance_passed
+        and reader_passed
+        and visual_passed
+        and final_passed
+        and (fact_source_passed is not False)
+        and (section_quality_passed is not False)
+        and (draft_readability_passed is not False)
+        and (image_asset_passed is not False)
+    )
     published = bool(publish_result.get("draft_media_id") or (publish_result.get("response") or {}).get("media_id"))
     readback_passed = _clean(latest_draft.get("verify_status") or publish_result.get("verify_status")) == "passed"
     forced = bool(_clean(manifest.get("force_publish_reason")))
@@ -180,6 +200,10 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         reader_passed,
         visual_passed,
         final_passed,
+        fact_source_passed,
+        section_quality_passed,
+        draft_readability_passed,
+        image_asset_passed,
         layout_exists and layout_md_exists if layout_exists or layout_md_exists else None,
         image_exists if image_exists else None,
         wechat_html_exists and publication_exists if wechat_html_exists or publication_exists else None,
@@ -204,10 +228,26 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         "reader_gate_passed": reader_passed,
         "visual_gate_passed": visual_passed,
         "final_gate_passed": final_passed,
+        "fact_source_passed": fact_source_passed,
+        "section_quality_passed": section_quality_passed,
+        "draft_readability_passed": draft_readability_passed,
+        "image_asset_passed": image_asset_passed,
         "layout_passed": layout_exists and layout_md_exists,
         "image_plan_present": image_exists,
         "render_passed": wechat_html_exists and publication_exists,
-        "failed_gates": sorted(set((["title_gate_passed"] if not title_passed else []) + _failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
+        "failed_gates": sorted(
+            set(
+                (["title_gate_passed"] if not title_passed else [])
+                + (["score_total_passed"] if score_report and not score_passed else [])
+                + _failed_gate_names(score_report)
+                + _failed_gate_names(acceptance_report)
+                + _failed_gate_names(final_gate)
+                + [f"fact_source_map:{item}" for item in _failed_gate_names(fact_source_map)]
+                + [f"section_quality_map:{item}" for item in _failed_gate_names(section_quality_map)]
+                + [f"draft_readability_audit:{item}" for item in _failed_gate_names(draft_readability_audit)]
+                + [f"image_asset_audit:{item}" for item in _failed_gate_names(image_asset_audit)]
+            )
+        ),
         "missing_artifacts": [
             name
             for ok, name in [
@@ -217,6 +257,10 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
                 (bool(reader_gate), "reader_gate.json"),
                 (bool(visual_gate), "visual_gate.json"),
                 (bool(final_gate), "final_gate.json"),
+                (fact_source_passed is not None, "fact-source-map.json"),
+                (section_quality_passed is not None, "section-quality-map.json"),
+                (draft_readability_passed is not None, "draft-readability-audit.json"),
+                (image_asset_passed is not None, "image-asset-audit.json"),
                 (layout_exists and layout_md_exists, "layout-plan.json/layout-plan.md"),
                 (image_exists, "image-plan.json"),
                 (wechat_html_exists and publication_exists, "publication.md/article.wechat.html"),
@@ -251,14 +295,43 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
         "quality": {
             "status": _status(quality_passed, missing=not bool(score_report or acceptance_report or final_gate)),
             "score": score_report.get("total_score"),
-            "threshold": score_report.get("threshold"),
+            "threshold": max(88, int(score_report.get("threshold") or 0)) if score_report else 88,
             "title_passed": title_passed,
             "score_passed": score_passed,
             "acceptance_passed": acceptance_passed,
             "reader_gate_passed": reader_passed,
             "visual_gate_passed": visual_passed,
             "final_gate_passed": final_passed,
-            "failed_gates": sorted(set((["title_gate_passed"] if not title_passed else []) + _failed_gate_names(score_report) + _failed_gate_names(acceptance_report) + _failed_gate_names(final_gate))),
+            "fact_source_passed": fact_source_passed,
+            "section_quality_passed": section_quality_passed,
+            "draft_readability_passed": draft_readability_passed,
+            "image_asset_passed": image_asset_passed,
+            "failed_gates": quality_chain["failed_gates"],
+        },
+        "facts": {
+            "status": _status(fact_source_passed, missing=not fact_source_map),
+            "critical_fact_count": fact_source_map.get("critical_fact_count"),
+            "mapped_fact_count": fact_source_map.get("mapped_fact_count"),
+            "unmapped_fact_count": fact_source_map.get("unmapped_fact_count"),
+            "failed_checks": list(fact_source_map.get("failed_checks") or []),
+        },
+        "sections": {
+            "status": _status(section_quality_passed, missing=not section_quality_map),
+            "core_section_count": section_quality_map.get("core_section_count"),
+            "failed_core_section_count": section_quality_map.get("failed_core_section_count"),
+            "failed_checks": list(section_quality_map.get("failed_checks") or []),
+        },
+        "draft_readability": {
+            "status": _status(draft_readability_passed, missing=not draft_readability_audit),
+            "collapsed_list_detected": draft_readability_audit.get("collapsed_list_detected"),
+            "long_paragraph_lengths": list(draft_readability_audit.get("long_paragraph_lengths") or []),
+            "failed_checks": list(draft_readability_audit.get("failed_checks") or []),
+        },
+        "image_assets": {
+            "status": _status(image_asset_passed, missing=not image_asset_audit),
+            "asset_count": image_asset_audit.get("asset_count"),
+            "duplicate_hashes": list(image_asset_audit.get("duplicate_hashes") or []),
+            "failed_checks": list(image_asset_audit.get("failed_checks") or []),
         },
         "layout": {
             "status": _status(layout_exists and layout_md_exists, missing=not layout_exists or not layout_md_exists),
@@ -304,6 +377,8 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
             publish_blockers.append("标题未通过完整性或打开率检查")
         if score_passed is False:
             publish_blockers.append("score-report.json 未通过")
+            if score_report and score_total < 88:
+                publish_blockers.append("score-report.json 总分低于 88")
         if acceptance_passed is False:
             publish_blockers.append("acceptance-report.json 未通过")
         if reader_passed is False:
@@ -312,6 +387,14 @@ def build_delivery_report(workspace: Path, manifest: dict[str, Any]) -> dict[str
             publish_blockers.extend(f"visual_gate.json：{item}" for item in _failed_gate_names(visual_gate)[:4])
         if final_passed is False:
             publish_blockers.extend(f"final_gate.json：{item}" for item in _failed_gate_names(final_gate)[:4])
+        if fact_source_passed is False:
+            publish_blockers.extend(f"fact-source-map.json：{item}" for item in _failed_gate_names(fact_source_map)[:4])
+        if section_quality_passed is False:
+            publish_blockers.extend(f"section-quality-map.json：{item}" for item in _failed_gate_names(section_quality_map)[:4])
+        if draft_readability_passed is False:
+            publish_blockers.extend(f"draft-readability-audit.json：{item}" for item in _failed_gate_names(draft_readability_audit)[:4])
+        if image_asset_passed is False:
+            publish_blockers.extend(f"image-asset-audit.json：{item}" for item in _failed_gate_names(image_asset_audit)[:4])
     if published and readback_passed and not quality_passed:
         warnings.append("草稿箱已发布并回读通过，但这还不是合格成品。")
     if not published and publish_blockers:
@@ -417,6 +500,10 @@ def markdown_delivery_report(payload: dict[str, Any]) -> str:
         "title": "标题",
         "article": "正文",
         "quality": "质量门",
+        "facts": "事实来源",
+        "sections": "章节质量",
+        "draft_readability": "草稿观感",
+        "image_assets": "图片实物",
         "layout": "排版",
         "images": "配图",
         "render": "渲染",

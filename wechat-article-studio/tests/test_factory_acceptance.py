@@ -1,4 +1,5 @@
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,12 @@ from core.workflow import write_delivery_report  # noqa: E402
 
 def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def write_fake_png(path: Path, width: int = 800, height: int = 450) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00"
+    path.write_bytes(header + (b"0" * 5000))
 
 
 def seed_passed_workspace(workspace: Path) -> dict:
@@ -39,6 +46,18 @@ summary: 设备更新政策正在把 AI 生产工具推到更多旧产线前面�
 """
     (workspace / "article.md").write_text(article, encoding="utf-8")
     (workspace / "publication.md").write_text(article, encoding="utf-8")
+    write_json(
+        workspace / "references.json",
+        {
+            "items": [
+                {
+                    "title": "AI equipment upgrade source",
+                    "url": "https://example.com/a",
+                    "summary": article,
+                }
+            ]
+        },
+    )
     (workspace / "article.wechat.html").write_text(
         "<section><img src='a.png'/><h2>现场</h2><p>正文</p><h2>对比</h2><table><tr><td>表</td></tr></table><h2>结尾</h2><p>参考来源</p></section>",
         encoding="utf-8",
@@ -73,7 +92,25 @@ summary: 设备更新政策正在把 AI 生产工具推到更多旧产线前面�
     )
     write_json(workspace / "layout-plan.json", {"hero_template": "scene"})
     (workspace / "layout-plan.md").write_text("# layout\n", encoding="utf-8")
-    write_json(workspace / "image-plan.json", {"provider": "codex", "planned_inline_count": 1, "items": [{"id": "cover-01", "type": "封面图"}]})
+    write_fake_png(workspace / "assets" / "images" / "cover.png")
+    write_json(
+        workspace / "image-plan.json",
+        {
+            "provider": "codex",
+            "planned_inline_count": 1,
+            "items": [
+                {
+                    "id": "cover-01",
+                    "type": "封面图",
+                    "asset_path": "assets/images/cover.png",
+                    "insert_strategy": "section_middle",
+                    "role": "explain",
+                    "text_policy": "short-zh",
+                    "required_text": ["升级窗口"],
+                }
+            ],
+        },
+    )
     write_json(workspace / "publish-result.json", {"draft_media_id": "media-id", "verify_status": "passed"})
     write_json(workspace / "latest-draft-report.json", {"verify_status": "passed", "verified_inline_count": 1})
     manifest = {
@@ -125,7 +162,19 @@ class FactoryAcceptanceTests(unittest.TestCase):
             payload = write_delivery_report(workspace, manifest)
             self.assertEqual(payload["factory_status"], "passed")
             self.assertTrue(payload["factory_ready"])
-            for name in ["factory-acceptance-report.json", "topic-package.json", "material-pack.json", "viral-moment-map.json", "layout-render-audit.json"]:
+            for name in [
+                "factory-acceptance-report.json",
+                "topic-heat-pack.json",
+                "topic-package.json",
+                "material-pack.json",
+                "fact-source-map.json",
+                "section-quality-map.json",
+                "viral-moment-map.json",
+                "layout-render-audit.json",
+                "draft-readability-audit.json",
+                "image-asset-audit.json",
+                "title-performance-report.json",
+            ]:
                 self.assertTrue((workspace / name).exists(), name)
 
     def test_factory_audit_summarizes_true_qualified_and_published_unqualified(self):

@@ -49,7 +49,8 @@ def _title_report_missing(delivery: dict[str, Any]) -> bool:
 def _factory_label(workspace: Path, manifest: dict[str, Any], delivery: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     existing = delivery.get("factory_acceptance") or read_json(workspace / "factory-acceptance-report.json", default={}) or {}
     factory = existing if existing else build_factory_acceptance_report(workspace, manifest, delivery)
-    if _published(delivery) and factory.get("status") != "passed":
+    published = _published(delivery) or bool(factory.get("published"))
+    if published and factory.get("status") != "passed":
         return "已发布但不合格", factory
     if factory.get("status") == "incomplete":
         return _status_from_payload(workspace, manifest, delivery), factory
@@ -72,11 +73,11 @@ def build_factory_board(root: Path) -> dict[str, Any]:
         delivery = read_json(workspace / str(manifest.get("delivery_report_path") or "final-delivery-report.json"), default={}) or {}
         factory_label, factory = _factory_label(workspace, manifest, delivery)
         status = str(manifest.get("factory_board_status") or "").strip() or factory_label
-        published = _published(delivery)
-        quality_passed = _quality_passed(delivery)
-        force_publish = bool(delivery.get("force_publish") or (delivery.get("publish_chain") or {}).get("force_publish"))
+        published = _published(delivery) or bool(factory.get("published"))
+        quality_passed = _quality_passed(delivery) or factory.get("status") == "passed"
+        force_publish = bool(delivery.get("force_publish") or (delivery.get("publish_chain") or {}).get("force_publish") or factory.get("force_publish"))
         title_report_missing = _title_report_missing(delivery)
-        published_but_unqualified = bool(factory.get("status") in {"force_publish_only", "published_but_unqualified"} or (published and not quality_passed))
+        published_but_unqualified = bool(factory.get("status") in {"force_publish_only", "published_but_unqualified"} or (published and factory.get("status") != "passed"))
         true_qualified = factory.get("status") == "passed"
         items.append(
             {
